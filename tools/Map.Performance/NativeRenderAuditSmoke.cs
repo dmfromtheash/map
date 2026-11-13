@@ -124,19 +124,15 @@ public sealed class RenderAuditApplication : Application
     }
 
     /// <summary>
-    /// Textured green land over the upper-left 768×512 with a painted patch, one river leaving
-    /// it into the sea, a lake, and an object layer that will hold stamps and a road.
+    /// The land of a new map over the upper-left 768×512, one river leaving it into the sea, a lake,
+    /// and an object layer that will hold stamps and a road. The material brush paints on it below.
     /// </summary>
     private MapDocument Scene()
     {
         var coverage = Enumerable.Repeat((byte)255, TileMap.TileSize * TileMap.TileSize).ToArray();
         var tiles = TileMap.Empty(1);
         for (var x = 0; x < 3; x++) for (var y = 0; y < 2; y++) tiles = tiles.With(new TileKey(x, y), coverage);
-        var paint = new byte[TileMap.TileSize * TileMap.TileSize * 4];
-        for (var y = 60; y < 200; y++) for (var x = 40; x < 220; x++)
-        { var o = (y * TileMap.TileSize + x) * 4; paint[o] = 184; paint[o + 1] = 120; paint[o + 2] = 70; paint[o + 3] = 255; }
-        var land = new LandLayer(LayerId.New(), "Земля", true, false, 1, tiles, CurrentLook.Land())
-        { PaintTiles = TileMap.Empty(4).With(new TileKey(1, 0), paint) };
+        var land = new LandLayer(LayerId.New(), "Земля", true, false, 1, tiles, CurrentLook.Land());
         _landId = land.Id;
         var river = new River
         {
@@ -148,13 +144,13 @@ public sealed class RenderAuditApplication : Application
             Name = "Озеро", Style = CurrentLook.River(),
             Channels = [RiverEditor.NewChannel([new VectorPoint(520, 90), new VectorPoint(640, 70), new VectorPoint(690, 150), new VectorPoint(600, 210), new VectorPoint(500, 170)], 20) with { Closed = true }],
         };
-        var road = RoadEditor.NewRoad([new(60, 560), new(380, 600), new(700, 540)], 14, RoadStyle.Country(),
+        var road = RoadEditor.NewRoad([new(60, 560), new(380, 600), new(700, 540)], 14, CurrentLook.Road(),
             "Старый тракт от переправы до дальних холмов за лесом", seed: 7);
         var objects = new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, []) { Rivers = [river, lake], Roads = [road] };
         _waterLayerId = objects.Id;
         return new MapDocument(DocumentId.New(), "Аудит отображения", DateTimeOffset.UnixEpoch,
-            new CanvasDefinition(1024, 768, "px", "#FF6E9FBF"),
-            [CurrentLook.Page("Море", "#FF6E9FBF"), land, objects]);
+            new CanvasDefinition(1024, 768, "px", CurrentLook.PageColor),
+            [CurrentLook.Page("Море"), land, objects]);
     }
 
     private void OpenEditor(MapDocument document, string? path = null)
@@ -170,6 +166,9 @@ public sealed class RenderAuditApplication : Application
 
     // Land far from every gesture of the run: the frame there must never change.
     private static readonly (double X, double Y)[] LandProbes = [(90, 430), (60, 300), (120, 480), (740, 100), (200, 330)];
+
+    // The page under the sea: new ground must not show it.
+    private static readonly SKColor PageSea = SKColor.Parse(CurrentLook.PageColor);
 
     private async Task Execute()
     {
@@ -189,7 +188,7 @@ public sealed class RenderAuditApplication : Application
         await Warm("land-tool");
         Press(600, 490); Move(620, 550); await Frame();
         var firstHeld = await Capture("land-stroke-first-held");
-        Check("land-stroke-first-held-shows-new-ground", PixelAt(firstHeld, 620, 550) != new SKColor(0x6E, 0x9F, 0xBF));
+        Check("land-stroke-first-held-shows-new-ground", PixelAt(firstHeld, 620, 550) != PageSea);
         Move(690, 580);
         await Frame();
         // A panel may still be settling its size after the tool switch; the held state is judged
@@ -204,7 +203,7 @@ public sealed class RenderAuditApplication : Application
         Note("stroke-held-scene-ms", _frame.Ms.ToString("0.0") + $" hits={_frame.Hits} misses={_frame.Misses} reason={_view.Canvas.LastStyledLandMiss}");
         Check("land-stroke-held-keeps-material-around", SameLand(idle, held, "land-stroke-held"));
         var newGround = PixelAt(held, 660, 568);
-        Check("land-stroke-held-new-ground-has-material", newGround != new SKColor(0x6E, 0x9F, 0xBF) && Distance(newGround, plainGreen) > 6);
+        Check("land-stroke-held-new-ground-has-material", newGround != PageSea &&Distance(newGround, plainGreen) > 6);
         Check("land-stroke-continues-after-first-frame", PixelAt(held, 690, 580) != PixelAt(firstHeld, 690, 580));
         Release(690, 580); await Frame();
         var released = await Capture("land-stroke-released");
@@ -212,7 +211,7 @@ public sealed class RenderAuditApplication : Application
         var landAfter = (LandLayer)_editor.Session.Document.FindLayer(_landId)!;
         Check("land-stroke-added-ground", TerrainOrder.CoverageAt(landAfter, 660, 568) > 127 && _editor.Session.UndoDepth == 1);
         var grownGround = PixelAt(released, 660, 568);
-        Check("land-stroke-released-new-ground-has-material", Distance(grownGround, plainGreen) > 6 && grownGround != new SKColor(0x6E, 0x9F, 0xBF));
+        Check("land-stroke-released-new-ground-has-material", Distance(grownGround, plainGreen) > 6 && grownGround != PageSea);
         Check("land-shape-preview-keeps-committed-material-colour", Distance(newGround, grownGround) <= 3);
         Note("land-shape-preview-vs-commit-colour-diff", Distance(newGround, grownGround).ToString());
 
@@ -224,7 +223,7 @@ public sealed class RenderAuditApplication : Application
             && PixelAt(cancelled, 320, 610) == PixelAt(released, 320, 610));
 
         // 2. Material brush: the held preview and the committed stroke agree.
-        _editor.SetLandPaintMode(true); _editor.ChooseLandMaterial("sand");
+        _editor.SetLandPaintMode(true); _editor.ChooseLandMaterial(MapFillTextures.OwnerIceWash);
         _editor.BrushSettings = _editor.BrushSettings with { Radius = 36, Softness = 0.6, Opacity = 1 };
         await Warm("paint-tool");
         Press(300, 380); Move(420, 400); await Frame();
@@ -387,11 +386,22 @@ public sealed class RenderAuditApplication : Application
         button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await Settle();
     }
 
-    private static SKColor AverageOf(Border swatch)
+    /// <summary>
+    /// The mean colour of the middle of a swatch as it is drawn. A material swatch paints itself (an inner control, not
+    /// an image background), so the control is rendered as the window would show it.
+    /// </summary>
+    private static SKColor AverageOf(Control swatch)
     {
-        if (swatch.Background is not ImageBrush { Source: Bitmap bitmap }) return SKColors.Transparent;
         using var stream = new MemoryStream();
-        bitmap.Save(stream); stream.Position = 0;
+        if (swatch is Border { Background: ImageBrush { Source: Bitmap bitmap } }) bitmap.Save(stream);
+        else
+        {
+            var size = new PixelSize(Math.Max(1, (int)swatch.Bounds.Width), Math.Max(1, (int)swatch.Bounds.Height));
+            using var drawn = new RenderTargetBitmap(size);
+            drawn.Render(swatch);
+            drawn.Save(stream);
+        }
+        stream.Position = 0;
         using var decoded = SKBitmap.Decode(stream);
         long r = 0, g = 0, b = 0, n = 0;
         for (var y = decoded.Height / 4; y < decoded.Height * 3 / 4; y += 4)
@@ -549,12 +559,12 @@ public sealed class RenderAuditApplication : Application
         // A new map's land lays the material at full strength, which hides the base colour; the
         // swatch formula is checked at 40 % over the land's own colour (one Undo step, undone below).
         _editor.SetActiveLandStyle(s => s with { FillTextureOpacity = 0.4 }); await SettlePanels();
-        var green = SKColor.Parse(CurrentLook.Land().FillColor); var red = new SKColor(0xB0, 0x30, 0x30);
+        var green = SKColor.Parse(CurrentLook.Land().FillColor); var red = SKColor.Parse(CurrentLook.MountainSlate);
         var stone = SwatchOf(Find<Button>("LandTexturePicker_owner-snow-drifts"));
         var greenStone = AverageOf(stone);
         Note("swatch-green-stone", $"{greenStone} expected {Mix(green, stoneMean, 0.4)} raw {stoneMean}");
         Check("swatch-shows-green-land-with-stone", Near(greenStone, Mix(green, stoneMean, 0.4), 14) && Distance(greenStone, Mix(green, stoneMean, 0.4)) < Distance(greenStone, stoneMean));
-        _editor.SetActiveLandStyle(s => s with { FillColor = "#FFB03030" }); await SettlePanels();
+        _editor.SetActiveLandStyle(s => s with { FillColor = CurrentLook.MountainSlate }); await SettlePanels();
         var redStone = AverageOf(SwatchOf(Find<Button>("LandTexturePicker_owner-snow-drifts")));
         Note("swatch-red-stone", $"{redStone} expected {Mix(red, stoneMean, 0.4)}");
         Check("swatch-follows-land-colour", Near(redStone, Mix(red, stoneMean, 0.4), 14));
@@ -577,7 +587,7 @@ public sealed class RenderAuditApplication : Application
         while (!desktop.Windows.Any(w => w.Name == "MaterialCatalogWindow") && watch.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(50);
         var catalog = desktop.Windows.Single(w => w.Name == "MaterialCatalogWindow"); await Settle();
         var card = catalog.GetVisualDescendants().OfType<Button>().First(b => b.Name == "MaterialCatalog_owner-snow-drifts");
-        var catalogStone = AverageOf(card.GetVisualDescendants().OfType<Border>().First(b => b.Background is ImageBrush));
+        var catalogStone = AverageOf(card.Content is StackPanel { Children: [Control picture, ..] } ? picture : card);
         Note("catalog-stone", catalogStone.ToString());
         Check("catalog-swatch-uses-land-colour", Near(catalogStone, Mix(green, stoneMean, 0.4), 14));
         using (var capture = new RenderTargetBitmap(new PixelSize(900, 650)))

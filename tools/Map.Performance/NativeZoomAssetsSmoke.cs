@@ -293,8 +293,8 @@ public sealed class ZoomAssetsApplication : Application
             Name = "Озеро", Style = CurrentLook.River(),
             Channels = [RiverEditor.NewChannel([new VectorPoint(1400, 700), new VectorPoint(1560, 680), new VectorPoint(1620, 800), new VectorPoint(1500, 880), new VectorPoint(1380, 820)], 20) with { Closed = true }],
         };
-        var road = RoadEditor.NewRoad([new(340, 900), new(700, 760), new(1100, 700), new(1500, 560)], 14, RoadStyle.Country(), "Тракт", seed: 7);
-        var path = RoadEditor.NewRoad([new(500, 300), new(760, 420), new(1040, 380)], 9, RoadStyle.Country(), "Тропа", seed: 11);
+        var road = RoadEditor.NewRoad([new(340, 900), new(700, 760), new(1100, 700), new(1500, 560)], 14, CurrentLook.Road(), "Тракт", seed: 7);
+        var path = RoadEditor.NewRoad([new(500, 300), new(760, 420), new(1040, 380)], 9, CurrentLook.Road(), "Тропа", seed: 11);
         var random = new Random(1919);
         var width = DefaultWidth(w);
         anchor = (960, 540);
@@ -308,8 +308,8 @@ public sealed class ZoomAssetsApplication : Application
         foreach (var o in objects) { var r = Reference(_library.FindIndex(a => a.Record.Sha256 == o.Stamp!.AssetSha256)); assets.TryAdd(r.Sha256, r); }
         var layer = new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, objects) { Rivers = [river, creek, lake], Roads = [road, path] };
         return new MapDocument(DocumentId.New(), "Умеренная · земля, реки, дороги, 40 ассетов", DateTimeOffset.UnixEpoch,
-            new CanvasDefinition(w, h, "px", "#FF6E9FBF"),
-            [CurrentLook.Page("Море", "#FF6E9FBF"), land, layer]).WithAssets([.. assets.Values]);
+            new CanvasDefinition(w, h, "px", CurrentLook.PageColor),
+            [CurrentLook.Page("Море"), land, layer]).WithAssets([.. assets.Values]);
     }
 
     /// <summary>
@@ -343,8 +343,8 @@ public sealed class ZoomAssetsApplication : Application
         var assets = _library.Select((_, i) => Reference(i)).ToArray();
         var layer = new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, objects) { Rivers = [river] };
         return new MapDocument(DocumentId.New(), $"Максимальная · земля {patches}×4096² · {count} ассетов", DateTimeOffset.UnixEpoch,
-            new CanvasDefinition(w, h, "px", "#FF6E9FBF"),
-            [CurrentLook.Page("Море", "#FF6E9FBF"), land, layer]).WithAssets(assets);
+            new CanvasDefinition(w, h, "px", CurrentLook.PageColor),
+            [CurrentLook.Page("Море"), land, layer]).WithAssets(assets);
     }
 
     private List<SceneObject> HugeObjects(int count, int w, int h, (double X, double Y) anchor, Random random)

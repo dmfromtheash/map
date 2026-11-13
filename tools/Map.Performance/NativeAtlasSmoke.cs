@@ -26,7 +26,7 @@ public sealed partial class RegionalApplication
         }
         var parent = PosterStandardFixture() with { Title = "Атлас · мир" };
         // R28b: a road across the future region, for «Согласование» below.
-        var road = Map.Core.Editing.RoadEditor.NewRoad([new(0, 200), new(640, 200)], 6, RoadStyle.Country(), "Тракт");
+        var road = Map.Core.Editing.RoadEditor.NewRoad([new(0, 200), new(640, 200)], 6, CurrentLook.Road(), "Тракт");
         var firstObjects = parent.Layers.OfType<ObjectLayer>().First();
         parent = parent.WithLayers([.. parent.Layers.Select(l => l.Id == firstObjects.Id ? firstObjects with { Roads = [road] } : l)]);
         var parentPath = Path.Combine(_workspace, "parent.mapproj");
@@ -155,7 +155,7 @@ public sealed partial class RegionalApplication
         // Back to the region without the copy; checked; then a path drawn there and saved - the road goes in, the path stays.
         MapProjectStore.Save(region, regionPath, new("r28b", DateTimeOffset.UtcNow), Map.Rendering.ThumbnailRenderer.RenderPng(region));
         await Press("ScaleSyncCheckButton", () => Summary().Contains("новых: 1", StringComparison.Ordinal), "План по исходной подкарте");
-        var path = Map.Core.Editing.RoadEditor.NewRoad([new(10, 10), new(60, 60)], 3, RoadStyle.Country(), "Тропа");
+        var path = Map.Core.Editing.RoadEditor.NewRoad([new(10, 10), new(60, 60)], 3, CurrentLook.Road(), "Тропа");
         var withPath = region.Layers.OfType<ObjectLayer>().FirstOrDefault() is { } host
             ? region.WithLayers([.. region.Layers.Select(l => l.Id == host.Id ? host with { Roads = [.. host.Roads, path] } : l)])
             : region.WithLayers([.. region.Layers, new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, []) { Roads = [path] }]);

@@ -143,7 +143,6 @@ public sealed class Stage20RoadWorkflowTests
         // A second road of another look that ends on the loop: one road, the branch keeps its look.
         editor.StartRoad();
         Click(router, 700, 500); Click(router, 600, 400);
-        editor.ApplyRoadPreset(RoadDrawing.PenRuts); // no road selected during a draft: the preset applies to the draft's target later
         var loopGeometry = RoadGeometry.Evaluate(editor.Roads[0]).Branches[loop.Branches[0].Id];
         var onLoop = RoadGeometry.PointAt(loopGeometry, 1, 0.5);
         Click(router, onLoop.X, onLoop.Y);

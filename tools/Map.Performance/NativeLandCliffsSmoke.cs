@@ -22,7 +22,7 @@ public sealed partial class NativeEditorScenarioApplication
     /// </summary>
     private async Task LandCliffsOnly()
     {
-        var sea = "#FF8FB0BA";
+        var sea = CurrentLook.PageColor;
         var island = CliffLand("Остров", 512, 360, 360, 250);
         var plateau = CliffLand("Плато", 470, 320, 160, 105);
         var document = new MapDocument(DocumentId.New(), "Ярусы земли", DateTimeOffset.UnixEpoch,

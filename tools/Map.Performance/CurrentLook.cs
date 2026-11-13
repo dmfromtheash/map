@@ -16,6 +16,9 @@ internal static class CurrentLook
     /// <summary>The river the editor draws (<see cref="RiverStyle.Natural"/>).</summary>
     public static RiverStyle River() => RiverStyle.Natural();
 
+    /// <summary>The road the editor draws (<see cref="RoadStyle.Painted"/>).</summary>
+    public static RoadStyle Road() => RoadStyle.Painted();
+
     /// <summary>
     /// The page of a new map with its sea, as the new-map dialog makes it. The sea is drawn from the shores, so a
     /// map without land and without land drawn in the smoke shows the plain page either way and keeps its own page.

@@ -79,7 +79,8 @@ internal static class DriveLibraryBatch
     };
 
     private static readonly JsonSerializerOptions Json = new() { PropertyNameCaseInsensitive = true, WriteIndented = true };
-    private const string Paper = "#FFEFE6D2";
+    // The page of a new map (DEC-078), not the old light paper.
+    private const string Paper = CurrentLook.PageColor;
 
     public static IReadOnlyList<DriveLibraryReport> Run(PerformanceOptions options)
     {

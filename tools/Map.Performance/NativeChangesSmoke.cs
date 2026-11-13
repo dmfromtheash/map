@@ -15,7 +15,7 @@ public sealed partial class NativeEditorScenarioApplication
     /// </summary>
     private async Task ChangesOnly()
     {
-        var page = "#FF8FB0BA";
+        var page = CurrentLook.PageColor;
         var island = CliffLand("Остров", 512, 384, 460, 320);
         Func<string, double, double, ObjectId, SceneObject> label = (text, x, y, id) =>
             new SceneObject(id, SceneObjectKind.Text, text, x, y, 160, 44, 0, "#FF20242B", "#FFFFFFFF", 0, true, false)

@@ -22,7 +22,7 @@ public sealed partial class NativeEditorScenarioApplication
     /// </summary>
     private async Task PlanetOnly()
     {
-        var page = "#FF8FB0BA";
+        var page = CurrentLook.PageColor;
         var west = CliffLand("Запад", 140, 300, 260, 220);
         var document = new MapDocument(DocumentId.New(), "Планета", DateTimeOffset.UnixEpoch, new CanvasDefinition(2048, 1024, "px", page),
             [CurrentLook.Page("Море", page), west, new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, [])]);

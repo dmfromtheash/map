@@ -19,7 +19,7 @@ public sealed partial class EditorView
     private Control? _roadNodeBlock, _roadBranchBlock, _roadStyleBlock, _roadSelectionBlock, _roadProfileBlock;
     private ToggleButton? _roadSharp, _roadOwnStyle;
     private TextBox? _roadName, _roadBranchName;
-    private System.Collections.Generic.IReadOnlyList<Button>? _roadModeButtons, _roadLevelButtons, _roadPresetButtons, _roadStartCapButtons, _roadEndCapButtons;
+    private System.Collections.Generic.IReadOnlyList<Button>? _roadModeButtons, _roadLevelButtons, _roadStartCapButtons, _roadEndCapButtons;
     private bool _syncingRoads;
     private Expander? _roadCreateCategory, _roadSelectCategory, _roadShapeCategory, _roadStyleCategory;
 
@@ -143,15 +143,6 @@ public sealed partial class EditorView
             },
         });
 
-        var (presets, presetButtons) = Ui.Segmented("RoadPreset",
-            [("Country", "Просёлочная", null), ("PenRuts", "Перо и колея", null), ("Painterly", "Мягкая живописная", null)],
-            key => _editor.ApplyRoadPreset(key switch
-            {
-                "PenRuts" => RoadDrawing.PenRuts,
-                "Painterly" => RoadDrawing.Painterly,
-                _ => RoadDrawing.Country,
-            }));
-        _roadPresetButtons = presetButtons;
         _roadOwnStyle = AppearanceToggle("RoadBranchOwnStyleToggle", "Свой стиль у этого участка", () => _editor.SelectedBranchHasOwnStyle, _editor.SetSelectedBranchOwnStyle);
         _roadStyleTargetText = new TextBlock { Name = "RoadStyleTarget", TextWrapping = TextWrapping.Wrap }.Classed("faint", "role-caption");
         var (startCaps, startCapButtons) = Ui.Segmented("RoadStartCap",
@@ -170,18 +161,15 @@ public sealed partial class EditorView
                 _roadName,
                 _roadStyleTargetText,
                 _roadOwnStyle,
-                Ui.Subgroup("Готовые стили", new Ui.ChoiceGrid
+                Ui.Subgroup("Ширина", new Ui.ChoiceGrid
                 {
-                    MaxColumns = 2, MinimumItemWidth = 100, Gap = 4, Children =
+                    MaxColumns = 3, MinimumItemWidth = 80, Gap = 4, Children =
                     {
-                        LookButton("RoadLookPainted", "Как горы", "Как горы владельца: контур пером, мазки, тень от света с северо-запада", () => _editor.ApplyRoadLook(RoadLookPreset.Painted)),
-                        LookButton("RoadLookTrail", "Тропа", "Узкая, без колеи, прерывистая кромка", () => _editor.ApplyRoadLook(RoadLookPreset.Trail)),
-                        LookButton("RoadLookCountryRoad", "Просёлок", "Обычная грунтовая дорога", () => _editor.ApplyRoadLook(RoadLookPreset.CountryRoad)),
-                        LookButton("RoadLookHighway", "Тракт", "Широкая, перо и колея", () => _editor.ApplyRoadLook(RoadLookPreset.Highway)),
-                        LookButton("RoadLookPainterly", "Живописный путь", "Мягкий живописный рисунок", () => _editor.ApplyRoadLook(RoadLookPreset.Painterly)),
+                        LookButton("RoadLookTrail", "Тропа", "Узкая: 0,55 обычной ширины", () => _editor.ApplyRoadLook(RoadLookPreset.Trail)),
+                        LookButton("RoadLookRoad", "Дорога", "Обычная ширина", () => _editor.ApplyRoadLook(RoadLookPreset.Road)),
+                        LookButton("RoadLookHighway", "Тракт", "Широкая: 1,5 обычной ширины", () => _editor.ApplyRoadLook(RoadLookPreset.Highway)),
                     },
                 }),
-                Ui.Subgroup("Способ рисунка", presets),
                 Ui.Subgroup("Полотно", new StackPanel
                 {
                     Spacing = 4, Children =
@@ -332,15 +320,6 @@ public sealed partial class EditorView
             _roadStyleTargetText!.Text = _editor.RoadStyleTargetsBranch
                 ? "Оформление ниже относится к выбранному участку; узел и остальные участки не меняются."
                 : "Оформление ниже относится ко всей дороге; участок со своим стилем сохраняет его.";
-            if (_roadPresetButtons is not null)
-            {
-                var shown = _editor.RoadDrawingShown;
-                for (var i = 0; i < _roadPresetButtons.Count; i++)
-                {
-                    var active = shown is { } d && (int)d == i;
-                    ((ToggleButton)_roadPresetButtons[i]).IsChecked = active; Ui.SetClass(_roadPresetButtons[i], "active", active);
-                }
-            }
             SyncCaps(_roadStartCapButtons, _editor.RoadStyleShown?.StartCap);
             SyncCaps(_roadEndCapButtons, _editor.RoadStyleShown?.EndCap);
             if (_roadName is not null && !_roadName.IsFocused) _roadName.Text = _editor.SelectedRoad?.Name ?? "";

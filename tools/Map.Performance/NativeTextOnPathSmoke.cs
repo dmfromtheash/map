@@ -118,7 +118,7 @@ public sealed class TextOnPathApplication : Application
             Name = "Серебрянка", Style = CurrentLook.River(),
             Channels = [RiverEditor.NewChannel([new VectorPoint(900, 120), new VectorPoint(620, 260), new VectorPoint(360, 300), new VectorPoint(80, 470)], 18)],
         };
-        var road = RoadEditor.NewRoad([new VectorPoint(120, 640), new VectorPoint(480, 600), new VectorPoint(900, 660)], 12, RoadStyle.Country(), "Королевский тракт");
+        var road = RoadEditor.NewRoad([new VectorPoint(120, 640), new VectorPoint(480, 600), new VectorPoint(900, 660)], 12, CurrentLook.Road(), "Королевский тракт");
         // An object of «Прочее» (not an asset): a straight trail in the ink of the owner's mountains.
         var trail = VectorGeometry.CreateLine(ObjectId.New(), "Тропа", [new VectorPoint(120, 170), new VectorPoint(240, 130)],
             new VectorStrokeStyle { Color = CurrentLook.MountainInk, Width = 4 });

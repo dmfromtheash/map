@@ -10,7 +10,7 @@ public sealed partial class NativeEditorScenarioApplication
     /// <summary>R33 through «Сектор»: a hex map dressed as space, a system typed into the window, a subsector loaded from T5 text. Captured.</summary>
     private async Task SectorOnly()
     {
-        var document = HexMapFactory.Create("Сектор Спинворд", DateTimeOffset.UnixEpoch, new MapCategoryId("hex"), HexOrientation.Flat, 46, 8, 10, "#FF8FB0BA");
+        var document = HexMapFactory.Create("Сектор Спинворд", DateTimeOffset.UnixEpoch, new MapCategoryId("hex"), HexOrientation.Flat, 46, 8, 10, CurrentLook.PageColor);
         _view.Canvas.DisposeRenderCaches(); OpenEditor(document); await Settle();
         await Click("WorldSectionButton"); await Click("StarSectorButton"); await Settle();
         var window = _view.GetType().GetField("_sectorWindow", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(_view) as Window

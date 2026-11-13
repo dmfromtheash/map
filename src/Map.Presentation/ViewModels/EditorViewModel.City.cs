@@ -40,7 +40,13 @@ public sealed partial class EditorViewModel
         Func<double, double, bool>? isLand = land.Count == 0 ? null : (x, y) => land.Any(l => TerrainOrder.CoverageAt(l, x, y) >= 128);
         var plan = CityBuilder.Generate(document.Canvas.Width / 2.0, document.Canvas.Height / 2.0, CitySettings with { Radius = Math.Min(CitySettings.Radius, size * .42), IsLand = isLand });
         var layer = document.Layers.OfType<ObjectLayer>().FirstOrDefault(l => l.Name == "Город");
-        var after = (layer ?? new ObjectLayer(LayerId.New(), "Город", true, false, 1, [])) with { Objects = [.. plan.Objects], Roads = [.. plan.Streets] };
+        var before = layer ?? new ObjectLayer(LayerId.New(), "Город", true, false, 1, []);
+        var after = before with
+        {
+            Objects = [.. plan.Objects], Roads = [.. plan.Streets],
+            // The harbour is the generator's own lake: a rebuilt city replaces it and keeps every other river.
+            Rivers = [.. before.Rivers.Where(r => r.Name != CityPlan.HarbourName), .. plan.Harbour],
+        };
         var keyNotes = plan.Key.Select(CityBuilder.KeyNote).ToArray();
         var marked = document.Notes.Any(n => n.Origin == NoteOrigin.CityKey);
         var notes = document.Notes.Where(n => !IsKeyNote(n, marked)).Concat(keyNotes).ToArray();

@@ -41,7 +41,8 @@ public sealed class CityBuilderTests
         var plan = CityBuilder.Generate(1000, 1000, new CitySettings { Seed = 3, Radius = 700, Radials = 4, EntryDirections = [0, Math.PI / 2], Port = true });
         var first = plan.Streets[0].Nodes[^1];
         Assert.True(first.X > 1500 && Math.Abs(first.Y - 1000) < 120, "the first main street goes east, along the incoming road");
-        Assert.Contains(plan.Objects, o => o.Name == "Гавань");
+        // The harbour is a lake in the current water since 2026-11-13, not a flat shape.
+        Assert.Contains(plan.Harbour, r => r.Name == CityPlan.HarbourName && r.Style == RiverStyle.Natural());
         Assert.Contains(plan.Key, k => k.Kind == "Порт");
         var map = CityBuilder.NewCityMap("Ильград", 2400, new CitySettings { Seed = 1 }, new MapCategoryId("city"), DateTimeOffset.UnixEpoch);
         Assert.Equal("city", map.Category.Value);

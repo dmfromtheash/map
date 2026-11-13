@@ -1027,11 +1027,6 @@ public sealed partial class EditorViewModel
         CommitRoad(RoadEditor.SetBranchStyle(road, branch.Id, own ? road.Style : null), own ? "Свой стиль участка" : "Стиль участка как у дороги");
     }
 
-    /// <summary>One of the three presets, applied to the shown style: the way of drawing changes, not only the colours.</summary>
-    public void ApplyRoadPreset(RoadDrawing drawing) =>
-        SetRoadStyle(s => RoadStyle.Preset(drawing) with { Opacity = s.Opacity, TextureId = s.TextureId, TextureOpacity = s.TextureOpacity, TextureScale = s.TextureScale },
-            drawing switch { RoadDrawing.PenRuts => "Дорога: перо и колея", RoadDrawing.Painterly => "Дорога: мягкая живописная", _ => "Дорога: просёлочная" });
-
     public string? RoadSurfaceColor => RoadStyleShown?.SurfaceColor;
     public string? RoadToneColor => RoadStyleShown?.ToneColor;
     public string? RoadShoulderColor => RoadStyleShown?.ShoulderColor;

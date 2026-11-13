@@ -246,7 +246,7 @@ public sealed class NativeEditorWorkflowApplication : Application
         // The raster becomes a brush material below, so it is the owner's opaque snow texture, not a mountain.
         OwnerMountainFixtures.WriteTexture(rasterPath);
         const string svg = "<svg xmlns='http://www.w3.org/2000/svg' width='40' height='28' viewBox='0 0 40 28'>"
-            + "<path d='M2 26 L20 2 L38 26 Z' fill='#779955' stroke='#223311' stroke-width='2'/></svg>";
+            + "<path d='M2 26 L20 2 L38 26 Z' fill='#52748B' stroke='#182640' stroke-width='2'/></svg>";
         File.WriteAllText(svgPath, svg);
         var raster = catalog.Import(rasterPath, new AssetImportOptions(), DateTimeOffset.UnixEpoch);
         var safeSvg = catalog.Import(svgPath, new AssetImportOptions(), DateTimeOffset.UnixEpoch);
@@ -318,10 +318,11 @@ public sealed class NativeEditorWorkflowApplication : Application
             LandShapeKind.Ellipse, new WorldBounds(80, 70, 360, 260));
         var landStyle = editor.SetActiveLandStyle(style => style with
         {
-            FillColor = "#FF779955", OutlineColor = "#FF223311", OutlineWidth = 5,
+            // The style changes to other colours of the owner's mountains, not to an old green land.
+            FillColor = CurrentLook.MountainIce, OutlineColor = CurrentLook.MountainInk, OutlineWidth = 5,
             InnerShadowOpacity = .2, OuterShadowOpacity = .35,
             ShadowOffsetX = 6, ShadowOffsetY = 8, ShadowBlur = 10,
-            RippleColor = "#665577AA", RippleWidth = 3, RippleSpacing = 14, RippleCount = 4,
+            RippleColor = "#6652748B", RippleWidth = 3, RippleSpacing = 14, RippleCount = 4,
         });
         var landMove = editor.MoveActiveLandArea(
             new WorldBounds(80, 70, 360, 260), 16, 16, snapToGrid: false);

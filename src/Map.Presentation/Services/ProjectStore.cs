@@ -25,10 +25,11 @@ public sealed class ProjectStore(RecoveryJournal journal) : IProjectStore
     public ProjectMigrationResult MigrateCopy(string sourcePath, string destinationPath) =>
         MapProjectStore.MigrateCopy(sourcePath, destinationPath);
 
-    public OpenedProject Open(string path)
-    {
-        return MapProjectStore.Open(path);
-    }
+    /// <summary>An older map opens in the current look (owner, 2026-11-13); its geometry stays as saved.</summary>
+    public OpenedProject Open(string path) => Current(MapProjectStore.Open(path));
+
+    private static OpenedProject Current(OpenedProject opened) =>
+        opened with { Document = CurrentLookUpgrade.Apply(opened.Document) };
 
     public void Save(MapDocument document, string path, SaveMetadata metadata, byte[] previewPng)
     {
@@ -44,7 +45,7 @@ public sealed class ProjectStore(RecoveryJournal journal) : IProjectStore
 
     public IReadOnlyList<RecoveryCandidate> FindRecoveryCandidates() => RecoveryCandidates.Find(journal);
 
-    public OpenedProject RestoreRecovery(RecoveryCandidate candidate) => RecoveryCandidates.Restore(candidate);
+    public OpenedProject RestoreRecovery(RecoveryCandidate candidate) => Current(RecoveryCandidates.Restore(candidate));
 
     public void DiscardRecovery(RecoveryCandidate candidate) => RecoveryCandidates.Discard(journal, candidate);
 }

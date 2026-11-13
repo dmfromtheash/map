@@ -56,7 +56,9 @@ public sealed class RoadCrossingsPersistenceTests
     private static MapDocument Crossing(bool ford)
     {
         var river = new River { Name = "Река", Style = RiverStyle.Illustrated(), Channels = [RiverEditor.NewChannel([new(200, 0), new(200, 400)], 30)] };
-        var road = RoadEditor.NewRoad([new(0, 200), new(400, 200)], 20);
+        // The record's own default look (no painted pass), so the schema measured is the crossings' alone; a new road
+        // is painted since 2026-11-13 and needs v23 by itself.
+        var road = RoadEditor.NewRoad([new(0, 200), new(400, 200)], 20, new RoadStyle());
         if (ford) road = RoadEditor.SetCrossingKind(road, road.Branches[0].Id, river.Channels[0].Id, 0, RoadCrossingKind.Ford);
         var layer = new ObjectLayer(LayerId.New(), "Дороги", true, false, 1, []) { Rivers = [river], Roads = [road] };
         return new MapDocument(DocumentId.New(), "crossing", DateTimeOffset.UnixEpoch,

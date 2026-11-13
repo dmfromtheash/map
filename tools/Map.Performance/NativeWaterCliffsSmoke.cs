@@ -42,7 +42,7 @@ public sealed partial class NativeEditorScenarioApplication
 
     private async Task WaterCliffsOnly()
     {
-        var sea = "#FF8FB0BA";
+        var sea = CurrentLook.PageColor;
         var island = CliffLand("Остров", 512, 330, 330, 220) with { Level = 1 };
         var river = new River
         {

@@ -9,24 +9,28 @@ public sealed record MapStylePack(
     string Id, string Title, MapStyle Style, LandCliffStyle Cliff, RiverStyle River, RoadStyle Road, SeaStyle Sea,
     string NameColor, string NameOutline, double NameOutlineWidth)
 {
-    /// <summary>The four packs the owner approved on 2026-11-10 (DEC-094).</summary>
+    /// <summary>
+    /// The four packs the owner approved on 2026-11-10 (DEC-094). Since 2026-11-13 (owner: «только новое и в пакетах»)
+    /// every pack keeps the current river («Живая»; «Акварель» - «Живописная») and the painted road: the style of the
+    /// drawing repaints them in its medium, the older road and river drawings are gone.
+    /// </summary>
     public static IReadOnlyList<MapStylePack> Presets { get; } =
     [
-        Make("ink", "Тушь", MapStylePreset.InkWetBrush, "ink-sepia", CliffScree.TwoBenches, RiverStyle.Illustrated(pen: true),
-            RoadDrawing.PenRuts, SeaManner.PenLines, "#FF1E1B18", "#00000000", 0),
-        Make("parchment", "Пергамент", MapStylePreset.EngravingAquatint, "grey-engraving", CliffScree.WallAndBench, RiverStyle.Illustrated(pen: true),
-            RoadDrawing.Country, SeaManner.Engraved, "#FF5B3A1E", "#00000000", 0),
+        Make("ink", "Тушь", MapStylePreset.InkWetBrush, "ink-sepia", CliffScree.TwoBenches, RiverStyle.Natural(),
+            SeaManner.PenLines, "#FF1E1B18", "#00000000", 0),
+        Make("parchment", "Пергамент", MapStylePreset.EngravingAquatint, "grey-engraving", CliffScree.WallAndBench, RiverStyle.Natural(),
+            SeaManner.Engraved, "#FF5B3A1E", "#00000000", 0),
         Make("watercolor", "Акварель", MapStylePreset.WatercolorBigShapes, "ice", CliffScree.None, RiverStyle.Painted(),
-            RoadDrawing.Painterly, SeaManner.WatercolorHalo, "#FF3E5566", "#00000000", 0),
+            SeaManner.WatercolorHalo, "#FF3E5566", "#00000000", 0),
         Make("atlas", "Атлас", MapStylePreset.OldMapBlaeu, "atlas", CliffScree.TwoBenches, RiverStyle.Natural(),
-            RoadDrawing.Country, SeaManner.BandsAndLines, "#FF6B2A1A", "#FFFFFFFF", 3),
+            SeaManner.BandsAndLines, "#FF6B2A1A", "#FFFFFFFF", 3),
     ];
 
     private static MapStylePack Make(string id, string title, MapStylePreset style, string cliffLook, CliffScree scree, RiverStyle river,
-        RoadDrawing road, SeaManner sea, string nameColor, string nameOutline, double outlineWidth) =>
+        SeaManner sea, string nameColor, string nameOutline, double outlineWidth) =>
         new(id, title, MapStyle.For(style) with { Enabled = true },
             LandCliffStyle.Looks.First(look => look.Id == cliffLook).Style with { Scree = scree },
-            river, RoadStyle.Preset(road), SeaStyle.For(sea), nameColor, nameOutline, outlineWidth);
+            river, RoadStyle.Painted(), SeaStyle.For(sea), nameColor, nameOutline, outlineWidth);
 
     public static MapStylePack? Find(string id) => Presets.FirstOrDefault(pack => pack.Id == id);
 
@@ -44,8 +48,9 @@ public sealed record MapStylePack(
         var cliff = lands.OrderByDescending(l => l.Level).FirstOrDefault(l => l.Level > (lands.Count > 0 ? lands.Min(x => x.Level) : 0))?.EdgeStyle.Cliff
             ?? LandCliffStyle.OwnerMountains;
         var objects = document.Layers.OfType<ObjectLayer>().ToList();
-        var river = objects.SelectMany(l => l.Rivers).FirstOrDefault()?.Style ?? RiverStyle.Natural();
-        var road = objects.SelectMany(l => l.Roads).FirstOrDefault()?.Style ?? RoadStyle.Painted();
+        // An own pack saved before 2026-11-13 may hold an older drawing: it comes back in the current one.
+        var river = CurrentLookUpgrade.Upgrade(objects.SelectMany(l => l.Rivers).FirstOrDefault()?.Style ?? RiverStyle.Natural());
+        var road = CurrentLookUpgrade.Upgrade(objects.SelectMany(l => l.Roads).FirstOrDefault()?.Style ?? RoadStyle.Painted());
         var name = objects.SelectMany(l => l.Objects).FirstOrDefault(o => o.Text is not null)?.Text;
         var sea = document.Layers.OfType<BaseColorLayer>().FirstOrDefault(p => p.Sea is not null)?.Sea ?? SeaStyle.NewMapDefault;
         return new MapStylePack(id, title, document.Style ?? new MapStyle(), cliff, river, road, sea,

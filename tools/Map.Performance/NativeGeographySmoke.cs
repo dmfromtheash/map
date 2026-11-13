@@ -19,10 +19,10 @@ public sealed partial class NativeEditorScenarioApplication
     /// </summary>
     private async Task GeographyOnly()
     {
-        var page = "#FF8FB0BA";
+        var page = CurrentLook.PageColor;
         var island = CliffLand("Остров", 512, 384, 440, 300);
         var plateau = CliffLand("Плато", 600, 330, 140, 110) with { Level = 1 };
-        var uphill = new River { Name = "Вверх", Channels = [RiverEditor.NewChannel([new(300, 330), new(600, 330)], 6)] };
+        var uphill = new River { Name = "Вверх", Style = CurrentLook.River(), Channels = [RiverEditor.NewChannel([new(300, 330), new(600, 330)], 6)] };
         var objects = new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, []) { Rivers = [uphill] };
         var document = new MapDocument(DocumentId.New(), "География", DateTimeOffset.UnixEpoch,
             new CanvasDefinition(1024, 768, "px", page),

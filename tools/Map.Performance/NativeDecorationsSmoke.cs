@@ -119,7 +119,7 @@ public sealed class DecorationsApplication : Application
             Name = "Серебрянка", Style = CurrentLook.River(),
             Channels = [RiverEditor.NewChannel([new VectorPoint(900, 120), new VectorPoint(620, 260), new VectorPoint(360, 300), new VectorPoint(80, 470)], 18)],
         };
-        var road = RoadEditor.NewRoad([new VectorPoint(120, 640), new VectorPoint(480, 600), new VectorPoint(900, 660)], 12, RoadStyle.Country(), "Королевский тракт");
+        var road = RoadEditor.NewRoad([new VectorPoint(120, 640), new VectorPoint(480, 600), new VectorPoint(900, 660)], 12, CurrentLook.Road(), "Королевский тракт");
         var layer = new ObjectLayer(Objects, "Долина", true, false, 1, []) { Rivers = [river], Roads = [road] };
         return new MapDocument(DocumentId.New(), "Долина Серебрянки", DateTimeOffset.UnixEpoch,
             new CanvasDefinition(1024, 768, "px", CurrentLook.PageColor),

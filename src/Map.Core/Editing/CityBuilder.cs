@@ -32,7 +32,14 @@ public sealed record CityBuilding(int Number, string Kind, double X, double Y);
 /// <summary>What the city generator made (R34/R35).</summary>
 public sealed record CityPlan(
     IReadOnlyList<Road> Streets, IReadOnlyList<IReadOnlyList<VectorPoint>> Blocks, IReadOnlyList<SceneObject> Objects,
-    IReadOnlyList<CityBuilding> Key, int Houses);
+    IReadOnlyList<CityBuilding> Key, int Houses)
+{
+    /// <summary>The harbour of a port without a coast: a lake «Гавань» in the current water (owner, 2026-11-13: only the new look).</summary>
+    public IReadOnlyList<River> Harbour { get; init; } = [];
+
+    /// <summary>The name the harbour lake carries, so a rebuilt city replaces its own harbour only.</summary>
+    public const string HarbourName = "Гавань";
+}
 
 /// <summary>
 /// R34/R35: a town from a point - main streets out from the square (along the roads coming in, if
@@ -97,7 +104,7 @@ public static class CityBuilder
             }
             lines.Add([.. points]);
             foreach (var piece in OnLand(points).Take(1))
-                streets.Add(RoadEditor.NewRoad(piece, 14, RoadStyle.Country(), $"Улица {StreetName(index)}", settings.Seed + index));
+                streets.Add(RoadEditor.NewRoad(piece, 14, RoadStyle.Painted(), $"Улица {StreetName(index)}", settings.Seed + index));
         }
         for (var ring = 1; ring <= settings.Rings; ring++)
         {
@@ -113,7 +120,7 @@ public static class CityBuilder
             lines.Add([.. points]);
             var pieceIndex = 0;
             foreach (var piece in OnLand(points))
-                streets.Add(RoadEditor.NewRoad(piece, ring == settings.Rings ? 11 : 9, RoadStyle.Country(), ring == settings.Rings ? "Кольцевая" : $"{ring}-я Кольцевая", settings.Seed + 100 + ring + (pieceIndex++ * 1000)));
+                streets.Add(RoadEditor.NewRoad(piece, ring == settings.Rings ? 11 : 9, RoadStyle.Painted(), ring == settings.Rings ? "Кольцевая" : $"{ring}-я Кольцевая", settings.Seed + 100 + ring + (pieceIndex++ * 1000)));
         }
         // The square's edge and the city's edge close the faces.
         var squareRing = Circle(cx, cy, square, 24);
@@ -131,6 +138,7 @@ public static class CityBuilder
                 && Land(p.InteriorPoint.X, p.InteriorPoint.Y))
             .OrderBy(p => Math.Pow(p.Centroid.X - cx, 2) + Math.Pow(p.Centroid.Y - cy, 2)).ToList();
 
+        var harbour = new List<River>();
         var objects = new List<SceneObject>
         {
             VectorGeometry.CreateFreeShape(ObjectId.New(), "Площадь", squareRing[..^1], new ShapeFillStyle { Color = "#FFD9CBA8" }, new VectorStrokeStyle { Color = "#FF8C7A5C", Width = 2 }),
@@ -260,7 +268,7 @@ public static class CityBuilder
             }
             water.Add(new VectorPoint(cx + (wx * radius * 2.2) - (wy * radius * 1.2), cy + (wy * radius * 2.2) + (wx * radius * 1.2)));
             water.Add(new VectorPoint(cx + (wx * radius * 2.2) + (wy * radius * 1.2), cy + (wy * radius * 2.2) - (wx * radius * 1.2)));
-            objects.Insert(0, VectorGeometry.CreateFreeShape(ObjectId.New(), "Гавань", water, new ShapeFillStyle { Color = "#FF7FA3B0" }, new VectorStrokeStyle { Color = "#FF4E6E7A", Width = 2 }));
+            harbour.Add(new River { Name = CityPlan.HarbourName, Channels = [RiverEditor.NewLake(water, CityPlan.HarbourName)], Style = RiverStyle.Natural() });
             for (var p = -2; p <= 2; p++)
             {
                 var a = side + (p * .09);
@@ -284,13 +292,15 @@ public static class CityBuilder
         }
         objects.Add(Label(settings.Name, cx, cy - (square * .2), LabelPreset.City, 5));
 
-        return new CityPlan(streets, [.. blocks.Select(b => (IReadOnlyList<VectorPoint>)[.. b.ExteriorRing.Coordinates.Select(c => new VectorPoint(c.X, c.Y))])], objects, key, houses);
+        return new CityPlan(streets, [.. blocks.Select(b => (IReadOnlyList<VectorPoint>)[.. b.ExteriorRing.Coordinates.Select(c => new VectorPoint(c.X, c.Y))])], objects, key, houses)
+        { Harbour = harbour };
     }
 
     /// <summary>
-    /// The city as a new map: paper, its streets and buildings, a note per building of the key. With
-    /// <paramref name="coast"/> (R35) the paper is the sea of <paramref name="seaColor"/>, the land lies on it
-    /// and the town keeps to the land.
+    /// The city as a new map in the look of a new map (owner, 2026-11-13: only the new look): the page and sea of a new
+    /// map, the owner's snow land under the town, its streets and buildings, a note per building of the key. With
+    /// <paramref name="coast"/> (R35) the land is that coast, the sea of <paramref name="seaColor"/> lies around it and the
+    /// town keeps to the land.
     /// </summary>
     public static MapDocument NewCityMap(string title, int size, CitySettings settings, MapCategoryId category, DateTimeOffset createdUtc,
         LandLayer? coast = null, string? seaColor = null)
@@ -298,13 +308,27 @@ public static class CityBuilder
         if (coast is not null)
             settings = settings with { IsLand = (x, y) => TerrainOrder.CoverageAt(coast, x, y) >= 128 };
         var plan = Generate(size / 2.0, size / 2.0, settings with { Radius = Math.Min(settings.Radius, size * .42) });
-        var objects = new ObjectLayer(LayerId.New(), "Город", true, false, 1, plan.Objects) { Roads = [.. plan.Streets] };
+        var objects = new ObjectLayer(LayerId.New(), "Город", true, false, 1, plan.Objects) { Roads = [.. plan.Streets], Rivers = [.. plan.Harbour] };
         var notes = plan.Key.Select(KeyNote).ToArray();
-        var ground = coast is null ? "#FFEDE3CC" : seaColor ?? "#FF8FB0BA";
-        List<MapLayer> layers = [new BaseColorLayer(LayerId.New(), coast is null ? "Бумага" : "Море", true, false, 1, ground)];
-        if (coast is not null) layers.Add(coast);
+        var ground = coast is null ? NewPageColor : seaColor ?? NewPageColor;
+        List<MapLayer> layers = [new BaseColorLayer(LayerId.New(), coast is null ? "Цвет фона" : "Море", true, false, 1, ground) { Sea = SeaStyle.NewMapDefault }];
+        layers.Add(coast ?? LandEverywhere(size));
         layers.Add(objects);
         return new MapDocument(DocumentId.New(), title, createdUtc, new CanvasDefinition(size, size, "px", ground), layers, notes: notes, category: category);
+    }
+
+    /// <summary>The page colour of a new map (the first choice of the new-map dialog).</summary>
+    private const string NewPageColor = "#FF1E2430";
+
+    /// <summary>The land of a new map over the whole square city map: the town lies on the owner's snow.</summary>
+    private static LandLayer LandEverywhere(int size)
+    {
+        var full = Enumerable.Repeat((byte)255, TileMap.TileSize * TileMap.TileSize).ToArray();
+        var tiles = TileMap.Empty(1);
+        for (var x = 0; x * TileMap.TileSize < size; x++)
+            for (var y = 0; y * TileMap.TileSize < size; y++)
+                tiles = tiles.With(new TileKey(x, y), full);
+        return new LandLayer(LayerId.New(), "Земля", true, false, 1, tiles, LandEdgeStyle.SoftWatercolor());
     }
 
     /// <summary>The note of one building of the key, marked as the generator's (R35b) so a rebuild replaces only these.</summary>

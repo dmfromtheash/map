@@ -140,8 +140,8 @@ public sealed partial class NativeEditorScenarioApplication
             Channels = [lake, main, tributary, right, branch, delta] };
         river.Validate();
         return new MapDocument(DocumentId.New(), "Живые реки", DateTimeOffset.UnixEpoch,
-            new CanvasDefinition(1024, 768, "px", "#FF74A7A1"),
-            [CurrentLook.Page("Море", "#FF74A7A1"), earth,
+            new CanvasDefinition(1024, 768, "px", CurrentLook.PageColor),
+            [CurrentLook.Page("Море"), earth,
                 new ObjectLayer(LayerId.New(), "Реки и озеро", true, false, 1, []) { Rivers = [river] }]);
     }
 }

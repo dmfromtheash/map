@@ -11,7 +11,7 @@ public sealed partial class NativeEditorScenarioApplication
     /// <summary>R40 through «Книга и язык»: the window opens with its two parts; the atlas book of the map is written. Captured.</summary>
     private async Task BookOnly()
     {
-        var page = "#FF8FB0BA";
+        var page = CurrentLook.PageColor;
         var island = CliffLand("Остров", 512, 384, 460, 320);
         var label = new SceneObject(ObjectId.New(), SceneObjectKind.Text, "Ильград", 440, 360, 160, 44, 0, "#FF20242B", "#FFFFFFFF", 0, true, false)
         { Text = LabelPresets.Apply(new TextStyle { Content = "Ильград", Alignment = TextAlignment.Center }, LabelPreset.City) };

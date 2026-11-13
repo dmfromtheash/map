@@ -32,8 +32,8 @@ public sealed partial class NativeEditorScenarioApplication
         var reviewCatalogRoot = Environment.GetEnvironmentVariable("MAP_LAND_REVIEW_CATALOG");
         await using var reviewCatalog = string.IsNullOrWhiteSpace(reviewCatalogRoot) ? null : new AssetCatalog(reviewCatalogRoot);
         var document = new MapDocument(DocumentId.New(), "Акварель · подножие гор — земля и кисти", DateTimeOffset.UnixEpoch,
-            new CanvasDefinition(1024, 768, "px", "#FF7C9CA4"),
-            [CurrentLook.Page("Вода", "#FF7C9CA4")]);
+            new CanvasDefinition(1024, 768, "px", CurrentLook.PageColor),
+            [CurrentLook.Page("Вода", CurrentLook.PageColor)]);
         _view.Canvas.DisposeRenderCaches(); OpenEditor(document, assetCatalog: reviewCatalog);
         _editor.AddLandLayer(); await Settle();
         var land = (LandLayer)_editor.ActiveLayer!;
@@ -60,14 +60,14 @@ public sealed partial class NativeEditorScenarioApplication
         var catalogPath = Path.ChangeExtension(Options.OutputPath, ".catalog.png");
         using (var capture = new RenderTargetBitmap(new PixelSize(900, 650)))
         { capture.Render(catalog); using var file = File.Create(catalogPath); capture.Save(file, PngBitmapEncoderOptions.Default); }
-        catalog.GetVisualDescendants().OfType<ListBox>().Single(x => x.Name == "MaterialCatalogGroups").SelectedItem = "Акварель";
-        catalog.GetVisualDescendants().OfType<TextBox>().Single(x => x.Name == "MaterialCatalogSearch").Text = "подножие";
+        // Only the owner's own grounds (2026-11-13: no retired «Акварель · подножие» in the checks): the group of his
+        // snow and ice, the search «наст» narrows it to the crusted snow.
+        catalog.GetVisualDescendants().OfType<ListBox>().Single(x => x.Name == "MaterialCatalogGroups").SelectedItem = "Снег и лёд";
+        catalog.GetVisualDescendants().OfType<TextBox>().Single(x => x.Name == "MaterialCatalogSearch").Text = "наст";
         await Settle();
         var cards = catalog.GetVisualDescendants().OfType<Button>().Where(x => x.Name?.StartsWith("MaterialCatalog_") == true).ToArray();
-        // The owner's library grew since 2026-10-09 (ice and snow textures of 2026-10-18 also answer
-        // «подножие»); the search must narrow the group to the matching cards and keep the snow one.
-        var filtered = cards.Length >= 1 && cards.Length < 6 && cards.Any(c => c.Name == "MaterialCatalog_" + MapFillTextures.OwnerSnow);
-        Require(filtered, $"Material search did not filter the category to foothill: {cards.Length} cards: {string.Join(", ", cards.Select(c => c.Name))}");
+        var filtered = cards.Length >= 1 && cards.Length < 4 && cards.Any(c => c.Name == "MaterialCatalog_" + MapFillTextures.OwnerSnow);
+        Require(filtered, $"Material search did not narrow «Снег и лёд» to «наст»: {cards.Length} cards: {string.Join(", ", cards.Select(c => c.Name))}");
         cards[0].RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await Settle();
         _report.Checks["catalog-filter-and-choose"] = _editor.LandMaterialId == MapFillTextures.OwnerSnow && _editor.LandPaintMode;
 
@@ -148,8 +148,15 @@ public sealed partial class NativeEditorScenarioApplication
             if (stampHash is not null) _report.Checks["asset-export-no-missing-image"] = stats.MissingAssets == 0 && stats.StampInstances == 1;
             using var pixels = new SKBitmap(new SKImageInfo(1024, 768));
             surface.ReadPixels(pixels.Info, pixels.GetPixels(), pixels.RowBytes, 0, 0);
+            // Off the coast the frame is exactly the frame of the same map without any paint: the sea of a new map draws
+            // its own strokes by the shore, the paint never reaches them.
+            using var bare = SKSurface.Create(new SKImageInfo(1024, 768));
+            var unpainted = reopened with { Layers = [.. reopened.Layers.Select(l => l is LandLayer g ? g with { PaintTiles = TileMap.Empty(g.PaintTiles.BytesPerPixel) } : l)] };
+            SceneRenderer.Render(bare.Canvas, unpainted, new RenderOptions { IsExport = true, Stamps = reopenedImages });
+            using var bareBitmap = new SKBitmap(new SKImageInfo(1024, 768));
+            bare.ReadPixels(bareBitmap.Info, bareBitmap.GetPixels(), bareBitmap.RowBytes, 0, 0);
             _report.Checks["paint-clipped-at-coast"] = TerrainOrder.CoverageAt(savedLand, 30, 340) == 0
-                && pixels.GetPixel(30, 340) == SKColor.Parse("#7C9CA4")
+                && pixels.GetPixel(30, 340) == bareBitmap.GetPixel(30, 340)
                 && TerrainOrder.CoverageAt(savedLand, 300, 340) > 0;
             using var image = surface.Snapshot(); using var data = image.Encode(SKEncodedImageFormat.Png, 100);
             using var output = File.Create(exportPath); data.SaveTo(output);

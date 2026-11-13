@@ -32,7 +32,7 @@ public static class RoadEditor
         ArgumentNullException.ThrowIfNull(points);
         var nodes = points.Select(p => new RoadNode(Guid.NewGuid(), p.X, p.Y)).ToImmutableArray();
         var branch = new RoadBranch { Name = "Участок 1", Vertices = [.. nodes.Select(n => new RoadVertex(n.Id, width))] };
-        var road = new Road { Name = name, Nodes = nodes, Branches = [branch], Style = style ?? new RoadStyle() };
+        var road = new Road { Name = name, Nodes = nodes, Branches = [branch], Style = style ?? RoadStyle.Painted() };
         return road with { Seed = seed ?? road.Id.GetHashCode() };
     }
 

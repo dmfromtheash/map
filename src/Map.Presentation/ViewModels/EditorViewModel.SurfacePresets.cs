@@ -6,8 +6,11 @@ namespace Map.Presentation.ViewModels;
 /// removed by the owner on 2026-10-30 (DEC-079); saved rivers in them still open and draw.</summary>
 public enum RiverLookPreset { Painted, Natural }
 
-/// <summary>Named looks of a road: way of drawing and width together.</summary>
-public enum RoadLookPreset { Trail, CountryRoad, Highway, Painterly, Painted }
+/// <summary>
+/// Widths of the painted road. The older drawings (country road, pen and ruts, soft painterly) were removed by the owner
+/// on 2026-11-13 («только новое»); saved roads in them open in the painted road (<see cref="CurrentLookUpgrade"/>).
+/// </summary>
+public enum RoadLookPreset { Trail, Road, Highway }
 
 public sealed partial class EditorViewModel
 {
@@ -33,18 +36,16 @@ public sealed partial class EditorViewModel
         CommitRiver(river with { Style = style, WidthScale = scale }, name);
     }
 
-    /// <summary>A complete road look: drawing preset plus a width that fits it, one undo entry.</summary>
+    /// <summary>The painted road at a width that fits its kind, one undo entry.</summary>
     public void ApplyRoadLook(RoadLookPreset preset)
     {
         if (SelectedRoad is not { } road) return;
         var keep = road.Style;
         var (style, scale, name) = preset switch
         {
-            RoadLookPreset.Trail => (RoadStyle.Country() with { EdgeBreak = 0.5, RutOpacity = 0, ShoulderOpacity = 0.3 }, 0.55, "Дорога: тропа"),
-            RoadLookPreset.Highway => (RoadStyle.PenRuts(), 1.5, "Дорога: тракт"),
-            RoadLookPreset.Painterly => (RoadStyle.Painterly(), 1.2, "Дорога: живописный путь"),
-            RoadLookPreset.Painted => (RoadStyle.Painted(), 1.0, "Дорога: как горы владельца"),
-            _ => (RoadStyle.Country(), 1.0, "Дорога: просёлок"),
+            RoadLookPreset.Trail => (RoadStyle.Painted(), 0.55, "Дорога: тропа"),
+            RoadLookPreset.Highway => (RoadStyle.Painted(), 1.5, "Дорога: тракт"),
+            _ => (RoadStyle.Painted(), 1.0, "Дорога: обычная"),
         };
         style = style with
         {

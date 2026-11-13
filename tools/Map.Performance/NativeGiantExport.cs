@@ -198,7 +198,7 @@ internal static class NativeGiantExport
             Name = "Серебрянка", Style = CurrentLook.River(),
             Channels = [RiverEditor.NewChannel([new(c - 30_000, c - 30_000), new(c - 12_000, c - 9_000), new(c - 2_000, c + 6_000), new(c + 14_000, c + 20_000), new(c + 46_000, c + 30_000), new(c + 60_000, c + 31_000)], 420)],
         };
-        var road = RoadEditor.NewRoad([new(c - 40_000, c + 12_000), new(c - 15_000, c + 3_000), new(c + 5_000, c + 9_000), new(c + 30_000, c - 4_000)], 160, RoadStyle.Country(), "Королевский тракт");
+        var road = RoadEditor.NewRoad([new(c - 40_000, c + 12_000), new(c - 15_000, c + 3_000), new(c + 5_000, c + 9_000), new(c + 30_000, c - 4_000)], 160, CurrentLook.Road(), "Королевский тракт");
         // River and road details are seeded from their ids: fixed ids make every run draw the same
         // pixels, so two runs (or this map in a test) can be compared byte for byte.
         var ids = new Random(20261030);
@@ -225,8 +225,8 @@ internal static class NativeGiantExport
         var art = new ObjectLayer(new LayerId(Id()), "Горы", true, false, 1, objects);
         var labels = new ObjectLayer(new LayerId(Id()), "Подписи", true, false, 1, []);
         var document = new MapDocument(new DocumentId(Id()), "Самая большая карта", DateTimeOffset.UnixEpoch,
-            new CanvasDefinition(Size, Size, "px", "#FF6F9CB4"),
-            [CurrentLook.Page("Море", "#FF6F9CB4", new LayerId(Id())), land, high, water, art, labels]);
+            new CanvasDefinition(Size, Size, "px", CurrentLook.PageColor),
+            [CurrentLook.Page("Море", CurrentLook.PageColor, new LayerId(Id())), land, high, water, art, labels]);
 
         SceneObject Label(string content, LabelPreset preset, double size, TextPathBinding? path, double x = 0, double y = 0, double w = 1, double h = 1) =>
             new(new ObjectId(Id()), SceneObjectKind.Text, content, x, y, w, h, 0, "#FF20242B", "#FFFFFFFF", 0, true, false)

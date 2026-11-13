@@ -58,7 +58,7 @@ public sealed partial class NativeEditorScenarioApplication
             // the map through the production canvas router.
             await Click("LandToolModePaint");
             await Click("LandPaintActionTexture");
-            _editor.ChooseLandMaterial(cycle % 2 == 0 ? "regional-ochre" : "regional-forest");
+            _editor.ChooseLandMaterial(cycle % 2 == 0 ? MapFillTextures.OwnerIceWash : MapFillTextures.OwnerSnowSoft);
             Find<Avalonia.Controls.Slider>("LandPaintSizeSlider").Value = 160;
             Find<Avalonia.Controls.Slider>("LandPaintSoftnessSlider").Value = 60;
             for (var i = 0; i < 8; i++)

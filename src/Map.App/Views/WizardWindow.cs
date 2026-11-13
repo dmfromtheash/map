@@ -531,7 +531,8 @@ public sealed partial class WizardWindow : Window
               + $"от {NewMapWizardViewModel.MinHexSize} до {NewMapWizardViewModel.MaxHexSize} пикселей.";
     }
 
-    private bool StartingPointsAvailable => _catalog is not null && RegionalArtPack.IsAvailable;
+    /// <summary>The regional starts «Регион» and «Долина» were removed by the owner on 2026-11-13 (old look, «только новое»).</summary>
+    private static bool StartingPointsAvailable => false;
 
     private Control BuildStartingPoint()
     {

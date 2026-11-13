@@ -18,7 +18,7 @@ public sealed partial class NativeEditorScenarioApplication
     /// </summary>
     private async Task EntitiesOnly()
     {
-        var page = "#FF8FB0BA";
+        var page = CurrentLook.PageColor;
         var island = CliffLand("Остров", 512, 384, 440, 300);
         var label = new SceneObject(ObjectId.New(), SceneObjectKind.Text, "Ильград", 440, 360, 150, 44, 0, "#FF20242B", "#FFFFFFFF", 0, true, false)
         { Text = LabelPresets.Apply(new TextStyle { Content = "Ильград", Alignment = TextAlignment.Center }, LabelPreset.City) };

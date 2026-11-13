@@ -15,33 +15,16 @@ public static class RegionalMapFactory
     /// <summary>Bright yellow-green grass, painted in soft washes.</summary>
     public const string GrassColor = "#FF8FB04E";
 
-    // Watercolour grass with a quiet dark shore line; the sea side keeps a few calm surf lines.
-    public static LandEdgeStyle LandStyle => new()
-    {
-        FillColor = GrassColor, OutlineColor = "#FF3B4A2E", OutlineWidth = 1.3,
-        InnerShadowOpacity = .15, OuterShadowOpacity = .1, ShadowBlur = 8,
-        RippleColor = "#70E6F2EE", RippleCount = 3, RippleSpacing = 8, RippleWidth = 1.1,
-        FillTextureId = "watercolour-grass", FillTextureOpacity = .95, FillTextureScale = 420,
-    };
+    // Owner, 2026-11-13: «только новое» - the regional starts are gone and every regional map draws in the current look:
+    // the owner's snow land, the painted road, the «Живая» river and the sea of a new map.
+    public static LandEdgeStyle LandStyle => LandEdgeStyle.SoftWatercolor();
 
-    // A trodden earth path: warm body, long darker ruts, a firm dark edge and grey stones.
-    public static RoadStyle RoadStyle => Map.Core.Documents.RoadStyle.Country() with
-    { SurfaceColor = "#FFAD9573", ToneColor = "#FF97805F", ToneVariation = .5, EdgeColor = "#FF3E3228",
-        EdgeWidth = 1.5, EdgeOpacity = .92, EdgeBreak = .04, RutColor = "#FF7C6448", RutOpacity = .6,
-        DetailOpacity = .95, EdgeRoughness = .18, ShoulderColor = "#FF7E8A4A", ShoulderOpacity = .22 };
+    public static RoadStyle RoadStyle => Map.Core.Documents.RoadStyle.Painted();
 
-    // Painted river: deep water in the middle, a light foam rim at the banks, a muddy brown
-    // bank strip with streaks and a dark ink edge on both sides.
-    public static RiverStyle WaterStyle => RiverStyle.Illustrated() with
-    { WaterColor = RiverColor, BankColor = "#FF514E3D", BankWidth = 1.1,
-        BankReliefWidth = 10, BankReliefColor = "#FF9C8973", BankHatchOpacity = .26,
-        BankShadowOpacity = .12, BankShadowBlur = 2, EdgeRoughness = .68,
-        HighlightColor = "#FFD8ECE3", HighlightOpacity = .38, ShallowWidth = 9, ShallowColor = "#FFB4DACE",
-        MouthFade = 36, TextureId = "watercolour-water", TextureOpacity = .85, TextureScale = 360 };
+    public static RiverStyle WaterStyle => RiverStyle.Natural() with { MouthFade = 36 };
 
-    /// <summary>The open sea: the page colour with the same painted water as the rivers.</summary>
-    public static BaseColorLayer Sea(BaseColorLayer layer) =>
-        layer with { Color = "#FF3E767E", TextureId = "watercolour-water", TextureOpacity = .85, TextureScale = 360 };
+    /// <summary>The open sea of a new map.</summary>
+    public static BaseColorLayer Sea(BaseColorLayer layer) => layer with { Sea = SeaStyle.NewMapDefault };
 
     /// <summary>Pale meadow matching the foot of the mountain drawings, and its tile size in world units.</summary>
     public const string FoothillTextureId = "watercolour-foothill";

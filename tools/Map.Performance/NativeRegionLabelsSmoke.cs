@@ -18,7 +18,7 @@ public sealed partial class NativeEditorScenarioApplication
     /// </summary>
     private async Task RegionLabelsOnly()
     {
-        var page = "#FF8FB0BA";
+        var page = CurrentLook.PageColor;
         var island = CliffLand("Остров", 512, 384, 460, 320);
         var valley = VectorGeometry.CreateFreeShape(ObjectId.New(), "Долина",
             [new(170, 300), new(520, 250), new(840, 330), new(820, 470), new(500, 430), new(190, 480)]);

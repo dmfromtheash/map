@@ -117,7 +117,7 @@ public sealed class AreaRulesApplication : Application
         var asset = OwnerMountainFixtures.Embedded(1);
         var sha = asset.Sha256;
         var river = new River { Name = "Серебрянка", Style = CurrentLook.River(), Channels = [RiverEditor.NewChannel([new VectorPoint(0, 300), new VectorPoint(1024, 320)], 40)] };
-        var road = RoadEditor.NewRoad([new VectorPoint(0, 560), new VectorPoint(1024, 540)], 14, RoadStyle.Country(), "Тракт");
+        var road = RoadEditor.NewRoad([new VectorPoint(0, 560), new VectorPoint(1024, 540)], 14, CurrentLook.Road(), "Тракт");
         var layer = new ObjectLayer(Objects, "Долина", true, false, 1, []) { Rivers = [river], Roads = [road] };
         var area = new PlacementArea
         {

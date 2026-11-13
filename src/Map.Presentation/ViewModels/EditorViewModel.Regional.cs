@@ -9,7 +9,8 @@ public enum RegionalPlacementMode { Forest, Ridge, Settlement }
 
 public sealed partial class EditorViewModel
 {
-    public bool CanImportRegionalPack => _assetCatalog is not null && RegionalArtPack.IsAvailable;
+    /// <summary>The regional pack (old look) was removed by the owner on 2026-11-13.</summary>
+    public bool CanImportRegionalPack => false;
     public async Task<bool> ImportRegionalPackAsync()
     {
         if (_assetCatalog is null) return false;

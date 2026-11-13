@@ -260,22 +260,13 @@ public sealed class NativeLargestMapStressApplication : Application
         var records = assets.Select(asset => asset!).ToArray();
 
         editor.SelectLayer(editor.Session.Document.BaseColor.Id);
-        editor.SetBaseColor("#FF3C5870");
+        editor.SetBaseColor(CurrentLook.PageColor);
         var landLayers = editor.Session.Document.Layers.OfType<LandLayer>().ToArray();
+        // Both layers keep the land of a new map; only the coast ripples differ, as the stress has always drawn them.
         editor.SelectLayer(landLayers[0].Id);
-        editor.SetActiveLandStyle(style => style with
-        {
-            FillColor = "#FF6F8F52",
-            OutlineColor = "#FF31452A",
-            RippleCount = 2,
-        });
+        editor.SetActiveLandStyle(style => style with { RippleCount = 2 });
         editor.SelectLayer(landLayers[1].Id);
-        editor.SetActiveLandStyle(style => style with
-        {
-            FillColor = "#FFA47C4A",
-            OutlineColor = "#FF5D4028",
-            RippleCount = 0,
-        });
+        editor.SetActiveLandStyle(style => style with { RippleCount = 0 });
 
         var landTargetTiles = LandTileTarget(options.Profile, options.ObjectCount);
         var landPatchCount = landTargetTiles / TilesPerLandPatch;
@@ -617,9 +608,9 @@ public sealed class NativeLargestMapStressApplication : Application
         var objects = new ObjectLayer(LayerId.New(), "Ассеты", true, false, 1, []);
         return new MapDocument(
             DocumentId.New(), "Largest map stress", DateTimeOffset.UnixEpoch,
-            new CanvasDefinition(CanvasSize, CanvasSize, "px", "#FF304A60"),
+            new CanvasDefinition(CanvasSize, CanvasSize, "px", CurrentLook.PageColor),
             [
-                CurrentLook.Page("Фон", "#FF304A60"),
+                CurrentLook.Page("Фон"),
                 green,
                 dry,
                 objects,

@@ -19,7 +19,7 @@ public sealed partial class NativeEditorScenarioApplication
     /// </summary>
     private async Task ContinentOnly()
     {
-        var page = "#FF8FB0BA";
+        var page = CurrentLook.PageColor;
         var continent = CliffLand("Материк", 512, 384, 440, 300);
         var water = new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, []);
         var document = new MapDocument(DocumentId.New(), "Материк", DateTimeOffset.UnixEpoch,

@@ -45,10 +45,10 @@ public sealed partial class NativeEditorScenarioApplication
         {
             GeometryTiles = TileMap.Empty(1).With(new TileKey(0, 0), [.. Enumerable.Range(0, 256 * 256).Select(i => (byte)((i % 256) + (Math.Sin(i / 256 / 20.0) * 18) < 200 ? 255 : 0))]),
         };
-        var region = new MapDocument(DocumentId.New(), "Берег", DateTimeOffset.UnixEpoch, new CanvasDefinition(1024, 1024, "px", "#FF8FB0BA"),
-            [CurrentLook.Page("Море", "#FF8FB0BA"), land]);
+        var region = new MapDocument(DocumentId.New(), "Берег", DateTimeOffset.UnixEpoch, new CanvasDefinition(1024, 1024, "px", CurrentLook.PageColor),
+            [CurrentLook.Page("Море"), land]);
         var coast = ScaleSync.Coast(region, new AtlasTransform(60, 20, 200, 200, 2400, 2400), 2400, 2400);
-        var town = CityBuilder.NewCityMap("Пристань", 2400, new CitySettings { Name = "Пристань", Seed = 5, Port = true }, new MapCategoryId("city"), DateTimeOffset.UnixEpoch, coast, "#FF8FB0BA");
+        var town = CityBuilder.NewCityMap("Пристань", 2400, new CitySettings { Name = "Пристань", Seed = 5, Port = true }, new MapCategoryId("city"), DateTimeOffset.UnixEpoch, coast, CurrentLook.PageColor);
         _view.Canvas.DisposeRenderCaches(); OpenEditor(town); await Settle();
         _view.Canvas.FitToCanvas(); await Task.Delay(600); await Settle();
         var townObjects = town.Layers.OfType<ObjectLayer>().Single().Objects;

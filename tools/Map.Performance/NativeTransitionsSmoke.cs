@@ -16,7 +16,7 @@ public sealed partial class NativeEditorScenarioApplication
     /// </summary>
     private async Task TransitionsOnly()
     {
-        var page = "#FF8FB0BA";
+        var page = CurrentLook.PageColor;
         var island = CliffLand("Остров", 512, 384, 460, 320);
         var document = new MapDocument(DocumentId.New(), "Мир", DateTimeOffset.UnixEpoch, new CanvasDefinition(1024, 768, "px", page),
             [CurrentLook.Page("Море", page), island, new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, [])]);

@@ -13,9 +13,7 @@ if (Get-Process Map.App -ErrorAction SilentlyContinue) { throw 'Map is running; 
 dotnet publish "$root\src\Map.App\Map.App.csproj" -c Release -r win-x64 --self-contained false `
     -p:PublishReadyToRun=true -o $target -nologo -v q
 if ($LASTEXITCODE -ne 0) { throw "publish failed: $LASTEXITCODE" }
-# The regional pack is not in the repository; it lives beside the Release build and is copied as is.
-$atlas = "$root\src\Map.App\bin\Release\net10.0\win-x64\RegionalAtlas"
-if (Test-Path $atlas) { robocopy $atlas "$target\RegionalAtlas" /E /NFL /NDL /NJH /NJS | Out-Null }
+# The old regional pack «Тихий атлас» was removed by the owner on 2026-11-13 (old look); it is no longer copied.
 # The desktop shortcut names the build it starts (its tooltip) and takes the icon from the program.
 $link = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Map — конструктор карт.lnk'
 if (Test-Path $link) {
