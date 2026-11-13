@@ -71,7 +71,8 @@ internal static class FormMapDiskCache
 
     internal static void Save(string key, IReadOnlyList<SKImage> images)
     {
-        var folder = Folder!;
+        // The folder may be switched off between the key and the save (tests turn the cache off while others render).
+        if (Folder is not { } folder) return;
         var path = Path.Combine(folder, key);
         var temp = path + "." + Environment.CurrentManagedThreadId + ".tmp";
         try

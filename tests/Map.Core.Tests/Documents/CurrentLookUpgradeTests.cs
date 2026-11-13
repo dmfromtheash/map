@@ -57,6 +57,25 @@ public sealed class CurrentLookUpgradeTests
     }
 
     [Fact]
+    public void An_inherited_copy_nobody_edited_stays_in_sync_and_an_edited_one_stays_protected()
+    {
+        var road = RoadEditor.NewRoad([new VectorPoint(0, 10), new VectorPoint(100, 10)], 6, RoadStyle.Country(), "Тракт");
+        var copy = road with { Inherited = new InheritedFrom(Guid.NewGuid(), road.Id, ScaleSync.Fingerprint(road)) };
+        var edited = copy with { Name = "Свой тракт" };
+        static Road Upgraded(Road road) => CurrentLookUpgrade.Apply(new MapDocument(DocumentId.New(), "Регион", DateTimeOffset.UnixEpoch,
+            new CanvasDefinition(128, 128, "px", "#FF1E2430"),
+            [new BaseColorLayer(LayerId.New(), "Цвет фона", true, false, 1, "#FF1E2430"), new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, []) { Roads = [road] }]))
+            .Layers.OfType<ObjectLayer>().Single().Roads.Single();
+        // The untouched copy: new look, and its fingerprint still says «not edited by hand».
+        var kept = Upgraded(copy);
+        Assert.True(CurrentLookUpgrade.IsCurrent(kept.Style));
+        Assert.Equal(ScaleSync.Fingerprint(kept), kept.Inherited!.Fingerprint);
+        // The copy edited by hand keeps its old fingerprint: the sync still sees the edit.
+        var own = Upgraded(edited);
+        Assert.NotEqual(ScaleSync.Fingerprint(own), own.Inherited!.Fingerprint);
+    }
+
+    [Fact]
     public void A_map_in_the_current_look_is_left_untouched()
     {
         var current = CurrentLookUpgrade.Apply(OldMap());

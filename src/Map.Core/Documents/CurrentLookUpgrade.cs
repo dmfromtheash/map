@@ -61,12 +61,12 @@ public static class CurrentLookUpgrade
                 ObjectLayer objects when objects.Rivers.Any(r => !IsCurrent(r.Style))
                     || objects.Roads.Any(r => !IsCurrent(r.Style) || r.Branches.Any(b => b.Style is { } own && !IsCurrent(own))) => objects with
                 {
-                    Rivers = [.. objects.Rivers.Select(river => river with { Style = Upgrade(river.Style) })],
-                    Roads = [.. objects.Roads.Select(road => road with
+                    Rivers = [.. objects.Rivers.Select(river => KeepCopy(river, river with { Style = Upgrade(river.Style) }))],
+                    Roads = [.. objects.Roads.Select(road => KeepCopy(road, road with
                     {
                         Style = Upgrade(road.Style),
                         Branches = [.. road.Branches.Select(branch => branch.Style is { } own ? branch with { Style = Upgrade(own) } : branch)],
-                    })],
+                    }))],
                 },
                 _ => layer,
             };
@@ -75,4 +75,17 @@ public static class CurrentLookUpgrade
         }).ToArray();
         return changed ? document with { Layers = layers } : document;
     }
+
+    // A copy inherited from a parent map (R28b) that nobody edited keeps being one: its fingerprint covers the look, so
+    // the new look is written into it - otherwise the atlas sync would take the new look for a hand edit and stop
+    // updating the copy. A copy edited by hand stays protected as before.
+    private static Road KeepCopy(Road before, Road after) =>
+        before.Inherited is { } source && source.Fingerprint == Editing.ScaleSync.Fingerprint(before)
+            ? after with { Inherited = source with { Fingerprint = Editing.ScaleSync.Fingerprint(after) } }
+            : after;
+
+    private static River KeepCopy(River before, River after) =>
+        before.Inherited is { } source && source.Fingerprint == Editing.ScaleSync.Fingerprint(before)
+            ? after with { Inherited = source with { Fingerprint = Editing.ScaleSync.Fingerprint(after) } }
+            : after;
 }
