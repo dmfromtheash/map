@@ -107,6 +107,13 @@ public sealed partial class MapCanvasControl : Control
         private long _disposedObjectImages;
         private readonly System.Collections.Generic.Dictionary<int, HexChunkCache> _hexChunks = [];
         private readonly System.Collections.Generic.Dictionary<int, (IStampImageSource? Source, long Revision)> _sourceVersions = [];
+        private readonly System.Collections.Generic.Dictionary<int, CameraFrameCache> _cameraFrames = [];
+        public CameraFrameCache CameraFrames()
+        {
+            var thread = Environment.CurrentManagedThreadId;
+            if (!_cameraFrames.TryGetValue(thread, out var cache)) _cameraFrames[thread] = cache = new();
+            return cache;
+        }
 
         /// <summary>Kept hex chunk pictures of the current render thread.</summary>
         public HexChunkCache Hex()
@@ -125,6 +132,7 @@ public sealed partial class MapCanvasControl : Control
                 stale.Refinement.Dispose(); stale.Tiles.Dispose(); stale.Objects.Dispose(); stale.Land.Dispose();
                 stale.Styled.Dispose(); stale.Terrain.Dispose(); stale.Atlases.Dispose(); stale.Preview.Dispose(); stale.Layers.Dispose();
                 _disposedObjectImages += stale.Objects.Disposals;
+                if (_cameraFrames.Remove(thread, out var camera)) camera.Dispose();
             }
             _sourceVersions[thread] = version;
             if (!_contexts.TryGetValue(thread, out var context))
@@ -156,6 +164,8 @@ public sealed partial class MapCanvasControl : Control
             {
                 foreach (var hex in _hexChunks.Values) hex.Dispose();
                 _hexChunks.Clear();
+                foreach (var camera in _cameraFrames.Values) camera.Dispose();
+                _cameraFrames.Clear();
                 foreach (var context in _contexts.Values)
                 {
                     context.Refinement.Dispose(); context.Tiles.Dispose(); context.Objects.Dispose(); context.Land.Dispose(); context.Styled.Dispose(); context.Terrain.Dispose(); context.Atlases.Dispose(); context.Preview.Dispose(); context.Layers.Dispose();
@@ -624,6 +634,8 @@ public sealed partial class MapCanvasControl : Control
             new Rect(0, 0, Bounds.Width, Bounds.Height), _editor, _renderResources,
             _renderStats, PerformanceMode,
             _input is { ActiveGesture: not CanvasInputGesture.None and not CanvasInputGesture.Marquee },
+            _input is { ActiveGesture: CanvasInputGesture.Pan } || CameraMoving,
+            () => CameraMoving,
             // The terrain is drawn from its kept image only while the view itself moves (a pan,
             // or wheel notches within the last CameraSettle) or the geometry of water or a road
             // is being dragged. A stroke, an armed asset, a selection or an object drag leaves
@@ -752,7 +764,7 @@ public sealed partial class MapCanvasControl : Control
 
     private sealed class SceneDrawOperation(
         Rect bounds, EditorViewModel editor, CanvasRenderResources resources, RenderStats renderStats,
-        CanvasPerformanceMode performanceMode, bool fastPreview, bool fastTerrain, Action requestRefinedFrame, Action<SKSurface, SKCanvas> captureFrame,
+        CanvasPerformanceMode performanceMode, bool fastPreview, bool cameraMoving, Func<bool> cameraMotionNow, bool fastTerrain, Action requestRefinedFrame, Action<SKSurface, SKCanvas> captureFrame,
         Action<SKCanvas, float, float>? drawBadge,
         Action<RenderLodTier, double, Map.Core.Documents.MapDocument, bool, long, long, long, long, bool> frameRendered,
         Map.Rendering.BrushCursorPreview? brushCursor, bool hexAmbient, Action requestAmbientFrame) : ICustomDrawOperation
@@ -833,7 +845,32 @@ public sealed partial class MapCanvasControl : Control
             var styledMissesBefore = styledLandCache.Misses;
             var terrainHitsBefore = terrainCache.Hits;
             var terrainMissesBefore = terrainCache.Misses;
-            SceneRenderer.Render(canvas, renderDocument, new Map.Rendering.RenderOptions
+            var cameraFrames = resources.CameraFrames();
+            cameraFrames.SetIdentity(renderDocument, lease.GrContext?.Handle ?? IntPtr.Zero,
+                editor.HexPresentation, editor.HexLevelShown, editor.HexGhostLevel, editor.FogVeilToDraw, editor.CompareMarks,
+                editor.CanvasBoundaryOverlay, editor.MaskEditLayerId, editor.CliffMaskLayerId);
+            var cameraEligible = Environment.GetEnvironmentVariable("MAP_PERF_CAMERA_FRAMES") != "0"
+                && lease.GrContext is not null && lease.SkSurface is not null
+                && !hasLiveObjectPreview && editor.StrokePreview is null && !editor.CanvasWorkflowOpen
+                && editor.Session.SelectedObjectId is null && editor.Session.SelectedObjectIds.Count == 0
+                && editor.MarqueeWorld is null && editor.LandShapePreview is null && brushCursor is null
+                && editor.FogStrokePreview is null && !editor.HasHexGesture && editor.HexCursorShown is null
+                && renderDocument.Planet is not { Enabled: true, SeamlessMeridian: true };
+            if (!cameraEligible) cameraFrames.Clear();
+            var page = new SKRect(0, 0, renderDocument.Canvas.Width, renderDocument.Canvas.Height);
+            // An idle draw operation can still be queued when the next input changes the
+            // shared viewport. Do not start a cold exact render of that new, moving view.
+            var movingNow = cameraMoving || cameraMotionNow();
+            var reusedCamera = cameraEligible && movingNow && cameraFrames.TryDraw(canvas,
+                new SKRect((float)X, (float)Y, (float)bottomRight.X, (float)bottomRight.Y), page);
+            if (reusedCamera)
+            {
+                renderStats.Reset();
+                renderStats.CameraFramesReused = 1;
+                // It is a moving preview, never a completed exact frame for captures or idle work.
+                renderStats.DetailTilesPending = 1;
+            }
+            else SceneRenderer.Render(canvas, renderDocument, new Map.Rendering.RenderOptions
             {
                 GpuContext = lease.GrContext,
                 SelectedObjectId = editor.CanvasWorkflowOpen ? null : editor.Session.SelectedObjectId,
@@ -903,6 +940,11 @@ public sealed partial class MapCanvasControl : Control
                 Stats = renderStats,
                 BoundaryOverlay = editor.CanvasBoundaryOverlay,
             });
+            if (!reusedCamera && cameraEligible && !movingNow && !fastTerrain && !fastPreview
+                && renderStats.MissingAssets == 0 && renderStats.DetailTilesPending == 0
+                && renderStats.TerrainRefinementsPending == 0 && renderStats.HexChunksPending == 0
+                && editor.StampImages?.ImageRequestsPending != true)
+                cameraFrames.Capture(lease.SkSurface!, canvas, page);
             sceneStopwatch.Stop();
             // R39 «Бесшовный меридиан»: past a side edge of a planet the other side of the world
             // shows, faint and read-only, so a coast crossing the seam can be matched.

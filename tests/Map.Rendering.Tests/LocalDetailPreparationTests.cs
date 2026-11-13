@@ -199,8 +199,10 @@ public sealed class LocalDetailPreparationTests
         public bool PrepareOverview(IEnumerable<string> assets, Action ready) { Prepared.AddRange(assets); return true; }
         public SKColor? TryGetOverviewColor(string sha256) { Colors.Add(sha256); return SceneRenderer.StampOverviewColor(image); }
     }
-    [Fact]
-    public void A_local_giant_view_does_not_decode_distant_stamps_and_settles_to_the_same_pixels()
+    [Theory]
+    [InlineData(512, 8)]
+    [InlineData(2048, 0)]
+    public void A_local_giant_view_does_not_decode_distant_stamps_and_settles_to_the_same_pixels(int extent, double budget)
     {
         var root = new DirectoryInfo(AppContext.BaseDirectory);
         while (root is not null && !File.Exists(Path.Combine(root.FullName, "Map.slnx"))) root = root.Parent;
@@ -223,7 +225,7 @@ public sealed class LocalDetailPreparationTests
         using var progressive = new ObjectOverviewCache();
         SKBitmap Draw(ObjectOverviewCache cache, bool refine, RenderStats stats)
         {
-            using var surface = SKSurface.Create(new SKImageInfo(512, 512))!;
+            using var surface = SKSurface.Create(new SKImageInfo(extent, extent))!;
             surface.Canvas.Translate((float)-origin, (float)-origin);
             cache.BeginFrame();
             try
@@ -231,7 +233,8 @@ public sealed class LocalDetailPreparationTests
                 SceneRenderer.Render(surface.Canvas, document, new RenderOptions
                 {
                     Stamps = source, ObjectCache = cache, Stats = stats, ViewScale = 1,
-                    VisibleWorld = new(origin, origin, origin + 511, origin + 511),
+                    VisibleWorld = new(origin, origin, origin + extent - 1, origin + extent - 1),
+                    DetailTileBudgetMilliseconds = budget,
                     RequestRefinedFrame = refine ? () => { } : null,
                 });
                 using var snapshot = surface.Snapshot();
@@ -241,17 +244,19 @@ public sealed class LocalDetailPreparationTests
         }
         using var expected = Draw(exact, false, new());
         var completed = false;
+        var deferred = 0;
         for (var frame = 0; frame < 30; frame++)
         {
             var stats = new RenderStats();
             using var actual = Draw(progressive, true, stats);
             Assert.Equal(0, source.DistantFetches);
-            if (stats.DetailTilesPending != 0) continue;
+            if (stats.DetailTilesPending != 0) { deferred++; continue; }
             Assert.Equal(expected.Bytes, actual.Bytes);
             completed = true;
             break;
         }
         Assert.True(completed, "Local exact tiles must finish.");
+        if (budget == 0) Assert.True(deferred > 0, "The fallback seed must also yield between tiles.");
         Assert.True(source.SizeRequests > 0, "Dense eligibility must use dimensions without fetching distant pixels.");
     }
 

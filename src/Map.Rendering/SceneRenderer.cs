@@ -495,6 +495,9 @@ public sealed class RenderOptions
 
     public RenderLodTier LodTier { get; init; } = RenderLodTier.Exact;
 
+    /// <summary>Editor preparation budget between indivisible detail tiles, including fallback seeds.</summary>
+    public double DetailTileBudgetMilliseconds { get; init; } = 8;
+
     public IStampImageSource? Stamps { get; init; }
 
     public StrokePreview? Preview { get => _liveSuppressed ? null : _preview; init => _preview = value; }
@@ -3413,7 +3416,7 @@ public static partial class SceneRenderer
             && o.Stamp is { Blur: 0, ShadowOpacity: 0, ClipMaskEnabled: false, Blend: "Normal" };
     }
 
-    private static void DrawDetailedStampTiles(SKCanvas canvas, MapDocument document, ObjectLayer layer, WorldBounds view,
+    private static bool DrawDetailedStampTiles(SKCanvas canvas, MapDocument document, ObjectLayer layer, WorldBounds view,
         RenderOptions options, int? prepareBucket = null)
     {
         options.ObjectCache!.BindGpuContext(options.GpuContext?.Handle ?? IntPtr.Zero);
@@ -3429,7 +3432,7 @@ public static partial class SceneRenderer
         // the settled frame builds the exact bucket. Like the terrain: same objects, only scaled.
         if (prepareBucket is null && options.FastTerrain)
         {
-            if (TryDrawKeptTiles(canvas, layer, view, bucket, revisions, cache, options)) return;
+            if (TryDrawKeptTiles(canvas, layer, view, bucket, revisions, cache, options)) return true;
             // Twelve buckets either way: a wheel zoom from a whole-map view to 160 % crosses eight,
             // and the bucket the zoom started from is the one that is complete.
             for (var delta = 1; delta <= 12; delta++)
@@ -3438,7 +3441,7 @@ public static partial class SceneRenderer
                     || TryDrawKeptTiles(canvas, layer, view, bucket + delta, revisions, cache, options))
                 {
                     if (options.Stats is { } keptStats) keptStats.TilesReused++;
-                    return;
+                    return true;
                 }
             }
         }
@@ -3457,7 +3460,7 @@ public static partial class SceneRenderer
                 DrawOverviewObjects(canvas, document, layer, view, options, fallbackScale: Math.Min(.02, options.ViewScale));
             if (options.Stats is { } pending) pending.DetailTilesPending++;
             options.RequestRefinedFrame?.Invoke();
-            return;
+            return false;
         }
         if (canRefine && fallbackBucket is null)
         {
@@ -3476,13 +3479,22 @@ public static partial class SceneRenderer
                     DrawOverviewObjects(canvas, document, layer, view, options, fallbackScale: Math.Min(.02, options.ViewScale));
                     if (options.Stats is { } pending) pending.DetailTilesPending++;
                     options.RequestRefinedFrame?.Invoke();
-                    return;
+                    return false;
                 }
-                DrawDetailedStampTiles(canvas, document, layer, preparationView, options, overviewBucket);
+                if (!DrawDetailedStampTiles(canvas, document, layer, preparationView, options, overviewBucket))
+                {
+                    // Preparing a fallback used to bypass the frame budget and build the whole
+                    // view synchronously. Keep the established overview until its seed is ready.
+                    DrawOverviewObjects(canvas, document, layer, view, options, fallbackScale: Math.Min(.02, options.ViewScale));
+                    if (options.Stats is { } pending) pending.DetailTilesPending++;
+                    options.RequestRefinedFrame?.Invoke();
+                    return false;
+                }
                 fallbackBucket = overviewBucket;
             }
         }
-        var budgetTiles = canRefine && cache.BeginDetailView(layer.Id, DetailZoomKey(layer, bucket), view, worldSize, 514L * 514 * 4);
+        var budgetTiles = (canRefine || prepareBucket is not null && !options.IsExport && options.RequestRefinedFrame is not null)
+            && cache.BeginDetailView(layer.Id, DetailZoomKey(layer, bucket), view, worldSize, 514L * 514 * 4);
         var budgetStarted = System.Diagnostics.Stopwatch.GetTimestamp();
         var builtThisFrame = 0;
         var deferredTiles = 0;
@@ -3492,10 +3504,17 @@ public static partial class SceneRenderer
             var bounds = new WorldBounds(x * worldSize, y * worldSize, (x + 1) * worldSize, (y + 1) * worldSize);
             var revision = revisions.Version(x, y, bucket, Expand(bounds, 1 / scale));
             var exactKept = cache.TryGet(layer.Id, x, y, DetailZoomKey(layer, bucket), revision, out _);
+            var budgetSpent = budgetTiles && builtThisFrame > 0
+                && System.Diagnostics.Stopwatch.GetElapsedTime(budgetStarted).TotalMilliseconds >= options.DetailTileBudgetMilliseconds;
+            if (!exactKept && prepareBucket is not null && budgetSpent)
+            {
+                deferredTiles++;
+                continue;
+            }
             // A tile also waits while the images it samples at this zoom are still being decoded
             // off the render thread; the neighbouring level stands in for it meanwhile.
             if (!exactKept && fallbackBucket is { } fallback
-                && (budgetTiles && builtThisFrame > 0 && System.Diagnostics.Stopwatch.GetElapsedTime(budgetStarted).TotalMilliseconds > DetailBudgetMilliseconds
+                && (budgetSpent
                     || !StampImagesReady(layer, bounds, scale, options)))
             {
                 canvas.Save();
@@ -3589,13 +3608,11 @@ public static partial class SceneRenderer
         if (canRefine && deferredTiles == 0) cache.CompleteDetailView(layer.Id);
         if (options.Stats is { } finalStats)
         { finalStats.ObjectCacheHits += cache.Hits - hits; finalStats.ObjectCacheMisses += cache.Misses - misses; }
+        return deferredTiles == 0;
     }
 
     /// <summary>The cache slot of exact object tiles: a depth-sorted layer (R10) keeps its own tiles.</summary>
     private static int DetailZoomKey(ObjectLayer layer, int bucket) => (layer.Effects.DepthSort ? 40000 : 10000) + bucket;
-
-    /// <summary>Milliseconds of exact object tiles one settled frame builds before deferring the rest.</summary>
-    private const double DetailBudgetMilliseconds = 24;
 
     private static WorldBounds AlignedDetailView(WorldBounds view, double tileSize) => new(
         Math.Floor(view.Left / tileSize) * tileSize, Math.Floor(view.Top / tileSize) * tileSize,
@@ -5779,7 +5796,14 @@ public static partial class SceneRenderer
         var plan = OverviewPlans.GetValue(layer, static current => new ObjectOverviewPlan(current));
         // A document may retain references after objects were removed. Preparing their colors
         // can decode a whole library while this layer contains only a few stamps.
-        var assets = document.Assets.Where(asset => plan.UsesAsset(asset.Sha256)).ToArray();
+        // A deferred local detail seed only needs colors in its visible region. Asking a
+        // legacy image source for every distant color can itself decode the whole library.
+        var localAssets = fallbackScale is { } localScale
+            ? ObjectSpatialIndex.For(layer).Query(Expand(view, 1 / Math.Max(.001, localScale)))
+                .Where(item => item.Stamp is not null).Select(item => item.Stamp!.AssetSha256).ToHashSet(StringComparer.Ordinal)
+            : null;
+        var assets = document.Assets.Where(asset => plan.UsesAsset(asset.Sha256)
+            && (localAssets is null || localAssets.Contains(asset.Sha256))).ToArray();
         if (options.RequestRefinedFrame is { } ready && options.Stamps is { } source
             && !source.PrepareOverview(assets.Select(asset => asset.Sha256), ready)
             && options.Stats is { } pendingStats) pendingStats.DetailTilesPending++;

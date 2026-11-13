@@ -54,7 +54,7 @@ public sealed partial class ZoomAssetsApplication
             new CanvasDefinition(w, h, "px", CurrentLook.PageColor), layers).WithAssets(refs);
         if (kind == "light") document = document with { Lighting = new MapLighting { TimeOfDay = .7,
             Sources = [new MapLightSource(Guid.NewGuid(), anchor.X, anchor.Y, "#FFFFBB66", 500, 1, false)] } };
-        _report.Observation = "Visible native editor at (0,0); production canvas; frame = render-thread scene completion, not monitor scan-out. GPU flush is separately measured when MAP_MEASURE_GPU_FLUSH=1.";
+        _report.Observation = "Visible native editor on the selected test display; production canvas; frame = render-thread scene completion, not monitor scan-out. GPU flush is separately measured when MAP_MEASURE_GPU_FLUSH=1.";
         _report.Environment["mode"] = "ЖИВОЙ: visible native editor; real canvas GPU completion; not monitor scan-out";
         _report.Environment["library"] = root;
         _report.Environment["distinct-images"] = Math.Min(count, records.Length).ToString();

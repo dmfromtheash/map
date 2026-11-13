@@ -145,8 +145,16 @@ internal static class NativeZoomAssetsSmoke
         var thread = new Thread(() =>
         {
             ZoomAssetsApplication.Options = options; ZoomAssetsApplication.Completion = completion;
-            try { AppBuilder.Configure<ZoomAssetsApplication>().UsePlatformDetect().WithInterFont()
-                .StartWithClassicDesktopLifetime([], ShutdownMode.OnExplicitShutdown); }
+            try
+            {
+                var builder = AppBuilder.Configure<ZoomAssetsApplication>().UsePlatformDetect().WithInterFont();
+                // Match the production diagnostic switch: otherwise the report measures the
+                // default compositor even when the caller explicitly requested a comparison.
+                if (Enum.TryParse<Avalonia.Win32CompositionMode>(System.Environment.GetEnvironmentVariable("MAP_WIN32_COMPOSITION"),
+                    ignoreCase: true, out var composition))
+                    builder = builder.With(new Avalonia.Win32PlatformOptions { CompositionMode = [composition] });
+                builder.StartWithClassicDesktopLifetime([], ShutdownMode.OnExplicitShutdown);
+            }
             catch (Exception ex) { completion.TrySetException(ex); }
         }) { IsBackground = true };
         thread.SetApartmentState(ApartmentState.STA); thread.Start();
@@ -183,6 +191,11 @@ public sealed partial class ZoomAssetsApplication : Application
         var desktop = (IClassicDesktopStyleApplicationLifetime)ApplicationLifetime!;
         _workspace = Path.Combine(System.Environment.GetEnvironmentVariable("MAP_PERF_PROFILE_ROOT") ?? Path.GetDirectoryName(Options.OutputPath)!, "zoom-assets-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(_workspace);
+        if (Options.Profile == "native-million-assets" && System.Environment.GetEnvironmentVariable("MAP_PERF_DISABLE_DERIVED") != "1"
+            && string.IsNullOrWhiteSpace(System.Environment.GetEnvironmentVariable("MAP_PERF_DERIVED_ROOT")))
+            System.Environment.SetEnvironmentVariable("MAP_PERF_DERIVED_ROOT", Path.Combine(_workspace, "cache", "derived"));
+        if (Options.Profile == "native-million-assets" && System.Environment.GetEnvironmentVariable("MAP_PERF_DISABLE_DERIVED") == "1")
+            System.Environment.SetEnvironmentVariable("MAP_PERF_DERIVED_ROOT", null);
         System.Environment.SetEnvironmentVariable("MAP_UI_TEST_MODE", "1");
         System.Environment.SetEnvironmentVariable("MAP_UI_TEST_PROFILE_ROOT", Path.Combine(_workspace, "profile"));
         _catalog = new AssetCatalog(Path.Combine(_workspace, "catalog"));
@@ -464,6 +477,8 @@ public sealed partial class ZoomAssetsApplication : Application
     private async Task Execute()
     {
         _report.Environment["gc-latency"] = System.Runtime.GCSettings.LatencyMode.ToString();
+        _report.Environment["camera-frames"] = (System.Environment.GetEnvironmentVariable("MAP_PERF_CAMERA_FRAMES") != "0").ToString();
+        _report.Environment["composition-requested"] = System.Environment.GetEnvironmentVariable("MAP_WIN32_COMPOSITION") ?? "platform-default";
         if (Options.Profile == "native-million-assets") { await ExecuteMillion(); return; }
         _report.Environment["os"] = System.Environment.OSVersion.VersionString;
         _report.Environment["cpu-threads"] = System.Environment.ProcessorCount.ToString();
