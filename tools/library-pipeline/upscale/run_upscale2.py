@@ -104,6 +104,16 @@ def error_record(rel, exc):
     return {'rel': rel, 'ok': False, 'msg': 'ERR ' + str(exc)[:400]}
 
 
+MIN_GPU_SIDE = int(os.environ.get('MAP_MIN_GPU_SIDE', '16'))
+
+
+def append_line(path, line):
+    with path.open('a', encoding='utf-8') as stream:
+        stream.write(line + '\n')
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
 def prepare_gpu(root, rels, bdir):
     """Only this single producer thread ever launches a GPU command."""
     bdir = Path(bdir)
@@ -112,7 +122,15 @@ def prepare_gpu(root, rels, bdir):
     ready, errors = [], []
     for i, rel in enumerate(rels):
         try:
-            recipe.prepare_rgb(recipe.load_rgba(Path(root) / relative_path(rel)), bdir / 'in' / f'{i}.png')
+            src = recipe.load_rgba(Path(root) / relative_path(rel))
+            # 13.11: a picture 8 px wide hangs the PC's NVIDIA GPU inside Real-ESRGAN (nvlddmkm 153 / LiveKernelEvent 141,
+            # reproduced 2/2; 14 px passed). The Mac upscales such pictures correctly, so the PC leaves them unrecorded
+            # for the Mac node, which works through the list from its end.
+            if min(src.size) < MIN_GPU_SIDE:
+                # The Mac feeder sends lists/mac_priority.txt first (owner 13.11: «то, что не сделает ПК, сразу на Мак»).
+                append_line(LIB / 'lists/mac_priority.txt', rel)
+                continue
+            recipe.prepare_rgb(src, bdir / 'in' / f'{i}.png')
             ready.append((i, rel))
         except Exception as exc:
             errors.append(error_record(rel, exc))

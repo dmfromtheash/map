@@ -23,6 +23,38 @@ MAN_PC = LIB / 'upscaled/manifest.jsonl'
 MAN_MAC = LIB / 'upscaled/manifest-mac.jsonl'
 FAIL_MAC = LIB / 'upscaled/failed-mac.jsonl'
 LOCK = LIB / 'work/mac_feeder.lock'
+# Files the PC leaves to the Mac (pictures under 16 px hang its NVIDIA GPU, 13.11); sent before the normal queue.
+PRIORITY = LIB / 'lists/mac_priority.txt'
+PC_LOCK = LIB / 'work/upscale2.lock'
+SENT = set()  # priority files already handed to the Mac by this feeder
+
+
+def priority_files(done):
+    if not PRIORITY.exists():
+        return []
+    result, seen = [], set()
+    for line in PRIORITY.open(encoding='utf-8-sig'):
+        rel = line.strip()
+        k = key(rel)
+        if rel and k not in done and k not in SENT and k not in seen and (REFS / rel).is_file():
+            seen.add(k)
+            result.append(rel)
+    return result
+
+
+def pc_upscale_running():
+    import msvcrt
+    if not PC_LOCK.exists():
+        return False
+    try:
+        with PC_LOCK.open('a+b') as stream:
+            stream.seek(0)
+            msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+            stream.seek(0)
+            msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+        return False
+    except OSError:
+        return True
 
 
 def key(rel):
@@ -165,7 +197,9 @@ def main():
             log(f'retry later: {exc!r}'[:300])
             time.sleep(30)
             continue
-        if not queue and not in_flight:
+        # The PC may still hand over files it cannot do: wait for it before finishing.
+        if not queue and not in_flight and not pc_upscale_running() \
+                and not priority_files(ok_set(MAN_PC) | ok_set(MAN_MAC)):
             break
         time.sleep(10)
     log(f'finished: ok {total_ok} bad {total_bad}')
@@ -180,9 +214,11 @@ def step(a, queue, in_flight, total_ok, total_bad, t0):
             in_flight.discard(job_id)
             rate = (total_ok + total_bad) / max(time.time() - t0, 1) * 3600
             log(f'{job_id}: ok {ok} bad {bad}; total ok {total_ok} bad {total_bad}; {rate:.0f} files/h')
-        while queue and len(in_flight) < a.ahead:
+        while len(in_flight) < a.ahead:
             pc_done = ok_set(MAN_PC)
-            batch = []
+            batch = priority_files(pc_done | ok_set(MAN_MAC))[:a.job]
+            if batch:
+                log(f'priority from PC: {len(batch)}')
             while queue and len(batch) < a.job:
                 r = queue.pop(0)
                 if key(r) in pc_done:
@@ -192,15 +228,17 @@ def step(a, queue, in_flight, total_ok, total_bad, t0):
                 if not (REFS / r).is_file():  # removed after the queue was built (13.11: exact duplicates deleted)
                     log(f'skip missing source: {r}')
                     continue
-                batch.append(r)
+                if key(r) not in SENT:
+                    batch.append(r)
             if not batch:
                 break
             job_id = f'j{time.time_ns() // 1_000_000}'
             try:
                 upload(job_id, batch)
             except Exception:
-                queue[:0] = batch  # nothing was marked READY; send these again later
-                raise
+                queue[:0] = [r for r in batch if key(r) not in {key(p) for p in priority_files(set())}]
+                raise  # nothing was marked READY; priority files are read again from their list
+            SENT.update(key(r) for r in batch)
             in_flight.add(job_id)
             log(f'{job_id}: sent {len(batch)}; left {len(queue)}')
     return queue, total_ok, total_bad
