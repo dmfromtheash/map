@@ -16,11 +16,12 @@
 | `upscale/` | `finish_asset.py` (рецепт: две модели 60/40, контур из оригинала, зерно, `verify`) | ПК, Mac | `H:\MapLibrary\pipeline\`, `~/MapWork/upscale/` |
 | | `run_upscale2.py`, `progress.py`, `rerun_outliers.py`, `test_pipeline.py` (Sol-1) | ПК | `H:\MapLibrary\sol\sol1\` |
 | | `start_upscale.cmd`, `audit_blocks.py` (блоки 8×8), `sheet.py` (лист «исходник / результат») | ПК | `H:\MapLibrary\pipeline\` |
-| `mac/` | `mac_feeder.py`, `start_mac_feeder.cmd` (подача заданий по ssh, сверка SHA и размера) | ПК | `H:\MapLibrary\pipeline\` |
+| `mac/` | `mac_feeder.py`, `start_mac_feeder.cmd` (подача заданий по ssh, сверка SHA и размера; `lists/mac_priority.txt` — первыми); `small_rerun.py` (Mac, рецепт «сверка цвета» `cycle_rgb`, DEC-108) + `small_runner.py` (ПК, задания мелких превью, обработчик Mac должен быть остановлен) | ПК, Mac | `H:\MapLibrary\pipeline\`, `~/MapWork/upscale/` |
 | | `mac_worker.py`, `jobs.sh` (обработчик заданий) | Mac | `~/MapWork/upscale/` (+ копия `mac_worker.py` в `pipeline\`) |
 | | `env.sh`, `setup.sh` (пространство `~/MapWork`) | Mac | `~/MapWork/` |
 | | `bench.py` (замер GPU-вариантов Real-ESRGAN, запускает Claude) | Mac | `H:\MapLibrary\pipeline\mac\` |
-| `plan/` | `plan.py` → `plan/sets.json`; `apply_fixes.py` (правки `plan/fixes/*.json`); `make_lists.py` (`lists/all.txt`); `quality.py` (отчёт качества); `look_sheets.py` (листы для просмотра групп) | ПК | `H:\MapLibrary\pipeline\` |
+| `plan/` | `plan.py` → `plan/sets.json`; `apply_fixes.py` (правки `plan/fixes/*.json`); `make_lists.py` (`lists/all.txt`); `quality.py` (отчёт качества); `look_sheets.py` (листы для просмотра групп); `pour_all.ps1` (заливка всех готовых сотен сборщиком без окна, журнал `H:\MapLibrary\pour.log`); `refs2_groups.py` (вход разметки refs2) | ПК | `H:\MapLibrary\pipeline\` |
+| `fps/` | проверки ветки Astra: `auto_check.ps1`, `mac_tests.sh`, `pc_review_tests.ps1`, `pc_live.ps1` (README там) | ПК, Mac | из репозитория |
 | `live-check/` | `live_batch2.ps1` + `LiveBatchNative.cs` + `shot_target.ps1` + `uia.ps1` + `click.ps1`, `README.md` (Sol-7) | ПК | `H:\MapLibrary\sol\sol7\` |
 | | `start_test_map.ps1` (тестовая Map в изолированном профиле, печатает PID) | ПК | `H:\MapLibrary\pipeline\` |
 | `live-check/user/` | `run-profile.ps1`, `make-contact-sheets.ps1` (прогоны `Map.Performance` и листы снимков) | USER | `D:\MapChecks\` |
