@@ -100,10 +100,10 @@ public sealed class FillTextureEmbedCommand : IEditCommand
 
     public MapDocument Revert(MapDocument document)
     {
-        var drop = _assets.Select(asset => asset.Sha256).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var without = document.Assets.Any(asset => drop.Contains(asset.Sha256))
-            ? document.WithAssets([.. document.Assets.Where(asset => !drop.Contains(asset.Sha256))])
-            : document;
-        return _inner.Revert(without);
+        var reverted = _inner.Revert(document);
+        var drop = _assets.Where(asset => AssetUsageIndex.Count(reverted, asset.Sha256) == 0)
+            .Select(asset => asset.Sha256).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return drop.Count == 0 ? reverted
+            : reverted.WithAssets([.. reverted.Assets.Where(asset => !drop.Contains(asset.Sha256))]);
     }
 }

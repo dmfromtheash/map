@@ -264,6 +264,8 @@ public sealed record MapDocument
             throw new ArgumentException(
                 "Checkpoint ids are unique within a document.", nameof(checkpoints));
         }
+        // Prepare at load/public construction, before the snapshot becomes editable.
+        foreach (var layer in Layers.OfType<ObjectLayer>()) _ = AssetUsageIndex.For(layer);
     }
 
     public DocumentId Id { get; init; }

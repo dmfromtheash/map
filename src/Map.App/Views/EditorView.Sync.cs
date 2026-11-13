@@ -111,6 +111,10 @@ public sealed partial class EditorView
     private readonly object _uiSyncGate = new();
     private bool _uiSyncQueued;
     private bool _sceneSyncPending;
+    private SelectionRefreshDelta _pendingSelectionDelta = SelectionRefreshDelta.Empty;
+    private SelectionRefreshDelta _lastUiSelection = SelectionRefreshDelta.Empty;
+    private long _uiQueuedAt;
+    private HashSet<string>? _selectionFollowChanges;
 
     private void OnEditorChanged(object? sender, PropertyChangedEventArgs e)
     {
@@ -119,9 +123,14 @@ public sealed partial class EditorView
         if (e.PropertyName is nameof(EditorViewModel.PendingPlacement) or nameof(EditorViewModel.PlacementPreviewObjects)) return;
         lock (_uiSyncGate)
         {
+            // Follow/reveal already rebuilds its changed section. Fold its notifications into
+            // this flush so it cannot post a second selection refresh for the same operation.
+            if (_selectionFollowChanges is { } following && Dispatcher.UIThread.CheckAccess())
+            { following.Add(e.PropertyName ?? ""); return; }
             _pendingUiProperties.Add(e.PropertyName ?? "");
             if (_uiSyncQueued) return;
             _uiSyncQueued = true;
+            _uiQueuedAt = System.Diagnostics.Stopwatch.GetTimestamp();
         }
         Dispatcher.UIThread.Post(FlushEditorUi, DispatcherPriority.Render);
     }
@@ -130,6 +139,8 @@ public sealed partial class EditorView
     {
         HashSet<string> changed;
         bool scene;
+        SelectionRefreshDelta selectionDelta;
+        long queuedAt;
         lock (_uiSyncGate)
         {
             changed = [.. _pendingUiProperties];
@@ -137,9 +148,13 @@ public sealed partial class EditorView
             _uiSyncQueued = false;
             scene = _sceneSyncPending;
             _sceneSyncPending = false;
+            selectionDelta = _pendingSelectionDelta;
+            _pendingSelectionDelta = SelectionRefreshDelta.Empty;
+            queuedAt = _uiQueuedAt;
         }
         // Diagnostics only (native profiles): how long each panel sync took on the UI thread.
         var timings = EditorViewModel.CollectEditTimings ? _editor.LastEditTimings : null;
+        timings?.Add(("ui:queue-wait", System.Diagnostics.Stopwatch.GetElapsedTime(queuedAt).TotalMilliseconds));
         void Timed(string step, Action action)
         {
             if (timings is null) { action(); return; }
@@ -147,59 +162,48 @@ public sealed partial class EditorView
             action();
             timings.Add(("ui:" + step, System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds));
         }
-        // An edit that leaves the tool, the selection and the creation modes as they were (a placed
-        // stamp, a released stroke, undo) only changes what the panels list. Those panels cost
-        // 15-40 ms together and ran right before the next frame, so every click dropped frames;
-        // they now follow a moment later, one at a time, between input and render work.
+        // Inspector/selection state shares one flush. Panel construction is cooperative work
+        // at Background priority, with latest work replacing obsolete queued revisions.
         var structure = UiStructureKey();
-        var deferPanels = scene && structure == _lastUiStructure;
+        var structureChanged = structure != _lastUiStructure;
         _lastUiStructure = structure;
         Timed("status", SyncStatus);
-        if (deferPanels)
+        if (scene || structureChanged)
         {
             DeferPanels(DeferredPanel.Path | DeferredPanel.Area | DeferredPanel.River | DeferredPanel.Road
-                | DeferredPanel.Side | DeferredPanel.Context);
-        }
-        else
-        {
-            Timed("path-panel", SyncEditablePathPanel);
-            Timed("area-panel", SyncEditableAreaPanel);
-            Timed("river-panel", SyncRiverPanel);
-            Timed("road-panel", SyncRoadPanel);
-            _deferredPanels &= ~(DeferredPanel.Path | DeferredPanel.Area | DeferredPanel.River | DeferredPanel.Road);
-            if (scene)
-            {
-                Timed("side-panels", SyncSidePanels);
-                _deferredPanels &= ~DeferredPanel.Side;
-            }
+                | DeferredPanel.Context | (scene ? DeferredPanel.Side : DeferredPanel.None));
         }
         // Water, roads and land are selections too: the section that lists them opens, its
         // property block refreshes, and the rows show the selected state.
         if (changed.Overlaps([nameof(EditorViewModel.WaterSelectionIds), nameof(EditorViewModel.RoadSelectionIds),
             nameof(EditorViewModel.SelectedLand), nameof(EditorViewModel.SelectionCount)]))
         {
-            Timed("follow-selection", FollowSelectionToSection);
-            Timed("object-list-selection", SyncObjectListSelection);
+            var current = SelectionRefreshDelta.Capture(_editor);
+            selectionDelta = selectionDelta.Merge(_lastUiSelection).Merge(current);
+            _lastUiSelection = current;
+            _selectionFollowChanges = changed;
+            try { Timed("follow-selection", FollowSelectionToSection); }
+            finally { _selectionFollowChanges = null; }
+            Timed("object-list-selection", () => SyncObjectListSelection(selectionDelta));
             Timed("section-footer", SyncSectionFooter);
         }
         if (changed.Overlaps([nameof(EditorViewModel.XText), nameof(EditorViewModel.YText),
             nameof(EditorViewModel.WidthText), nameof(EditorViewModel.HeightText),
             nameof(EditorViewModel.RotationText), nameof(EditorViewModel.HasEditableSelection)])) Timed("inspector", SyncInspector);
-        if (!deferPanels && (scene || changed.Overlaps([nameof(EditorViewModel.ActiveTool), nameof(EditorViewModel.SelectionKind),
+        if (scene || changed.Overlaps([nameof(EditorViewModel.ActiveTool), nameof(EditorViewModel.SelectionKind),
             nameof(EditorViewModel.SelectionCount), nameof(EditorViewModel.SelectedGroupId),
             nameof(EditorViewModel.ActiveLayer), nameof(EditorViewModel.HasPendingPlacement),
-            nameof(EditorViewModel.PlacementAutoSelect), nameof(EditorViewModel.StampPlacementMode)])))
+            nameof(EditorViewModel.PlacementAutoSelect), nameof(EditorViewModel.StampPlacementMode)]))
         {
-            Timed("context-area", SyncContextArea);
-            Timed("gesture-readout", SyncStampGestureReadout);
-            Timed("layer-level", SyncLayerAndLevel);
-            _deferredPanels &= ~DeferredPanel.Context;
+            DeferPanels(DeferredPanel.Context);
         }
         if (changed.Overlaps([nameof(EditorViewModel.StampToolSettings), nameof(EditorViewModel.CurrentVariant),
             nameof(EditorViewModel.CompactRecentSets), nameof(EditorViewModel.CompactFavoriteSets)]))
         {
             Timed("appearance-sections", SyncAppearanceSections);
             Timed("stamp-tool-panel", SyncStampToolPanel);
+            if (changed.Contains(nameof(EditorViewModel.CurrentVariant)))
+                PanelWork.Replace("selected-set", SmallJobs(SyncSelectedSet));
         }
         if (changed.Any(p => p.StartsWith("Canvas", StringComparison.Ordinal) || p.StartsWith("Region", StringComparison.Ordinal)))
             Timed("canvas-workflow", SyncCanvasWorkflow);
@@ -225,39 +229,21 @@ public sealed partial class EditorView
         _editor.SelectedEditablePath?.Id, _editor.IsCreatingEditablePath,
         _editor.SelectedEditableArea?.Id, _editor.IsCreatingEditableArea);
 
-    private DispatcherTimer? _deferredPanelTimer;
-
     /// <summary>
-    /// Queues the listed panels for a refresh once the edits pause for a moment. A slider drag or a
-    /// burst of placements edits the document 60 times a second; refreshing the context and side
-    /// panels after every one of those edits (15-20 ms of UI thread each on the owner's test map)
-    /// held a cliff slider at about 40 FPS. The panels show the result of the last edit as soon
-    /// as the stream of edits stops.
+    /// Coalesces panel requests without the former 250 ms pause. Work runs between input/render
+    /// callbacks; row-producing panels and selection containers use the shared slice queue.
     /// </summary>
     private void DeferPanels(DeferredPanel panels)
     {
         _deferredPanels |= panels;
         if (_deferredPanelQueued) return;
-        if (_deferredPanelTimer is null)
-        {
-            // 250 ms: placement clicks come about every 130 ms; with 50 000 objects the side and
-            // surface panels cost 20-25 ms per refresh, which landed between every two clicks.
-            _deferredPanelTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(250) };
-            _deferredPanelTimer.Tick += (_, _) =>
-            {
-                _deferredPanelTimer.Stop();
-                if (_deferredPanelQueued) return;
-                _deferredPanelQueued = true;
-                Dispatcher.UIThread.Post(RunDeferredPanel, DispatcherPriority.Background);
-            };
-        }
-        _deferredPanelTimer.Stop();
-        _deferredPanelTimer.Start();
+        _deferredPanelQueued = true;
+        Dispatcher.UIThread.Post(RunDeferredPanel, DispatcherPriority.Background);
     }
 
     /// <summary>
-    /// Refreshes one deferred panel and queues the next, so no single dispatcher job holds the
-    /// UI thread for more than a few milliseconds; input and frames go first (Background priority).
+    /// Dispatches a small panel or starts its row iterator. A single callback cannot be preempted;
+    /// ui:deferred and ui:work-slice diagnostics expose any operation that exceeds the budget.
     /// </summary>
     private void RunDeferredPanel()
     {
@@ -276,9 +262,7 @@ public sealed partial class EditorView
         switch (next)
         {
             case DeferredPanel.Context:
-                SyncContextArea();
-                SyncStampGestureReadout();
-                SyncLayerAndLevel();
+                PanelWork.Replace("context", SmallJobs(SyncContextArea, SyncStampGestureReadout, SyncLayerAndLevel));
                 break;
             case DeferredPanel.Side: SyncSidePanels(); break;
             case DeferredPanel.Path: SyncEditablePathPanel(); break;
@@ -294,6 +278,22 @@ public sealed partial class EditorView
             Dispatcher.UIThread.Post(RunDeferredPanel, DispatcherPriority.Background);
         }
     }
+
+    private UiWorkQueue? _panelWork;
+    private UiWorkQueue PanelWork
+    {
+        get
+        {
+            if (_panelWork is not null) return _panelWork;
+            _panelWork = new(action => Dispatcher.UIThread.Post(action, DispatcherPriority.Background));
+            _panelWork.SliceCompleted += (ms, _) =>
+            {
+                if (EditorViewModel.CollectEditTimings) _editor.LastEditTimings.Add(("ui:work-slice", ms));
+            };
+            return _panelWork;
+        }
+    }
+    private static IEnumerable<Action> SmallJobs(params Action[] actions) => actions;
 
     private void SyncCanvasWorkflow()
     {
@@ -1283,9 +1283,13 @@ public sealed partial class EditorView
     /// and rebuilt control by control on every edit.
     /// </summary>
     private readonly Dictionary<LayerId, (string Signature, Border Row)> _layerRows = [];
+    private MapDocument? _lastSidePanelDocument;
 
     private void SyncSidePanels()
     {
+        var document = _editor.Session.Document;
+        var previous = _lastSidePanelDocument;
+        _lastSidePanelDocument = document;
         var sidePanelsStarted = System.Diagnostics.Stopwatch.GetTimestamp();
         var rows = new List<Border>(_editor.Layers.Count);
         var seen = new HashSet<LayerId>();
@@ -1394,17 +1398,23 @@ public sealed partial class EditorView
         var timings = EditorViewModel.CollectEditTimings ? _editor.LastEditTimings : null;
         void Timed(string step, Action action)
         {
-            if (timings is null) { action(); return; }
-            var started = System.Diagnostics.Stopwatch.GetTimestamp();
-            action();
-            timings.Add(("ui:side/" + step, System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds));
+            PanelWork.Replace("side/" + step, SmallJobs(() =>
+            {
+                var started = System.Diagnostics.Stopwatch.GetTimestamp();
+                action();
+                timings?.Add(("ui:side/" + step, System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds));
+            }));
         }
         if (timings is not null) timings.Add(("ui:side/layer-rows", System.Diagnostics.Stopwatch.GetElapsedTime(sidePanelsStarted).TotalMilliseconds));
         Timed("layer-blocks", SyncLayerBlocks);
         Timed("object-list", SyncObjectList);
-        Timed("asset-list", SyncAssetList);
-        Timed("note-list", SyncNoteList);
-        Timed("entity-list", SyncEntities);
+        // Object edits do not change the catalog's collections, notes or entity cards. Keep
+        // those controls and pending row iterators; only the gallery query needs recency/usage.
+        if (previous is null || !ReferenceEquals(previous.Assets, document.Assets) || _editor.LibraryUsedInMapOnly)
+            Timed("asset-list", SyncAssetList);
+        else Timed("library-grid", SyncLibraryGrid);
+        if (previous is null || !ReferenceEquals(previous.Notes, document.Notes)) Timed("note-list", SyncNoteList);
+        if (previous is null || previous.Entities != document.Entities) Timed("entity-list", SyncEntities);
         Timed("fog", SyncFog);
         Timed("compare", SyncCompareBlock);
         Timed("transitions", SyncTransitions);
@@ -1413,7 +1423,8 @@ public sealed partial class EditorView
         Timed("planet", SyncPlanet);
         Timed("book", SyncBook);
         Timed("sector", SyncSector);
-        Timed("checkpoint-list", SyncCheckpointList);
+        if (previous is null || !ReferenceEquals(previous.Checkpoints, document.Checkpoints))
+            Timed("checkpoint-list", SyncCheckpointList);
         Timed("canvas-workflow", SyncCanvasWorkflow);
         Timed("layer-level", SyncLayerAndLevel);
     }
@@ -1810,32 +1821,51 @@ public sealed partial class EditorView
     /// Selection-only notifications touch only realized containers. The ItemsSource and its
     /// tens of thousands of logical rows stay intact.
     /// </summary>
-    private void SyncObjectListSelection()
+    private void SyncObjectListSelection() => SyncObjectListSelection(null);
+
+    private SelectionRefreshDelta _queuedRowSelectionDelta = SelectionRefreshDelta.Empty;
+    private bool _allSelectionRowsPending;
+    private int _selectionRowsVersion;
+
+    private void SyncObjectListSelection(SelectionRefreshDelta? delta)
     {
         RefreshObjectSelectionSet();
+        if (delta is null) _allSelectionRowsPending = true;
+        else _queuedRowSelectionDelta = _queuedRowSelectionDelta.Merge(delta);
+        var version = ++_selectionRowsVersion;
         if (_objectList.ItemsSource is not IReadOnlyList<ObjectTreeRow> rows)
         {
+            PanelWork.Replace("selection-rows", []);
+            _queuedRowSelectionDelta = SelectionRefreshDelta.Empty;
+            _allSelectionRowsPending = false;
             return;
         }
 
-        foreach (var container in _objectList.GetRealizedContainers())
+        var affected = _allSelectionRowsPending ? null : _queuedRowSelectionDelta;
+        var containers = _objectList.GetRealizedContainers().ToArray();
+        PanelWork.Replace("selection-rows", SelectionRows());
+        IEnumerable<Action> SelectionRows()
         {
-            var index = _objectList.IndexFromContainer(container);
-            if (index < 0 || index >= rows.Count)
+            foreach (var container in containers)
             {
-                continue;
+                var index = _objectList.IndexFromContainer(container);
+                if (index < 0 || index >= rows.Count || affected is not null && !affected.Affects(rows[index])) continue;
+                var row = rows[index];
+                yield return () =>
+                {
+                    if (!ReferenceEquals(rows, _objectList.ItemsSource)
+                        || _objectList.IndexFromContainer(container) != index) return;
+                    var selected = IsObjectTreeRowSelected(row);
+                    if (container is ListBoxItem item) item.IsSelected = selected;
+                    container.GetVisualDescendants().OfType<RecyclingObjectTreeRow>()
+                        .FirstOrDefault()?.RefreshSelection();
+                };
             }
-
-            var selected = IsObjectTreeRowSelected(rows[index]);
-            if (container is ListBoxItem item)
+            if (version == _selectionRowsVersion)
             {
-                item.IsSelected = selected;
+                _queuedRowSelectionDelta = SelectionRefreshDelta.Empty;
+                _allSelectionRowsPending = false;
             }
-
-            container.GetVisualDescendants()
-                .OfType<RecyclingObjectTreeRow>()
-                .FirstOrDefault()
-                ?.RefreshSelection();
         }
     }
 
@@ -1931,24 +1961,24 @@ public sealed partial class EditorView
         _ => MapIcons.ObjectPlaceholder,
     };
 
-    private void SyncAssetList()
+    private void SyncAssetList() => PanelWork.Replace("library", LibraryJobs());
+
+    private IEnumerable<Action> LibraryJobs()
     {
-        _syncingLibrary = true;
-        try
+        foreach (var action in (Action[])[SyncLibraryDiagnostic, SyncLibraryFilterState,
+                     SyncCollectionTree, SyncBreadcrumbs, SyncLibraryGrid, SyncSelectedSet,
+                     SyncStampGestureReadout, SyncStampToolPanel, SyncRoleShelves])
         {
-            SyncLibraryDiagnostic();
-            SyncLibraryFilterState();
-            SyncCollectionTree();
-            SyncBreadcrumbs();
-            SyncLibraryGrid();
-            SyncSelectedSet();
-            SyncStampGestureReadout();
-            SyncStampToolPanel();
-            SyncRoleShelves();
-        }
-        finally
-        {
-            _syncingLibrary = false;
+            yield return () =>
+            {
+                _syncingLibrary = true;
+                var started = System.Diagnostics.Stopwatch.GetTimestamp();
+                try { action(); }
+                finally { _syncingLibrary = false; }
+                if (EditorViewModel.CollectEditTimings)
+                    _editor.LastEditTimings.Add(("ui:library/" + action.Method.Name,
+                        System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds));
+            };
         }
 
         // Choosing a card brings twelve more files into view that the visible-range report never
@@ -2349,7 +2379,9 @@ public sealed partial class EditorView
         return button;
     }
 
-    private void SyncNoteList()
+    private void SyncNoteList() => PanelWork.Replace("note-rows", NoteRows());
+
+    private IEnumerable<Action> NoteRows()
     {
         if (_noteSelectionEditor is not null)
             _noteSelectionEditor.IsVisible = _selectedNoteId is { } selected
@@ -2367,11 +2399,13 @@ public sealed partial class EditorView
                 query.Length == 0
                     ? "Добавьте заметку в центре экрана или привяжите её к выделенному объекту."
                     : "Измените запрос или очистите поле поиска."));
-            return;
+            yield break;
         }
 
         foreach (var note in notes)
         {
+            yield return () =>
+            {
             var states = new List<(string, string)>();
             if (note.IsDetached(_editor.Session.Document))
             {
@@ -2397,6 +2431,7 @@ public sealed partial class EditorView
 
             Ui.SetSelected(row, note.Id == _selectedNoteId);
             _noteList.Children.Add(row);
+            };
         }
     }
 
@@ -2406,7 +2441,9 @@ public sealed partial class EditorView
         Name = "CheckpointCountText", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0),
     }.Classed("faint", "role-caption");
 
-    private void SyncCheckpointList()
+    private void SyncCheckpointList() => PanelWork.Replace("checkpoint-rows", CheckpointRows());
+
+    private IEnumerable<Action> CheckpointRows()
     {
         var count = _editor.Checkpoints.Count;
         _checkpointCountText.Text = $"{count} из {MapCheckpointLimits.MaxCount}";
@@ -2427,11 +2464,13 @@ public sealed partial class EditorView
                 MapIcons.Save,
                 "Версий пока нет",
                 "Нажмите «Создать версию», чтобы сохранить текущее состояние и миниатюру."));
-            return;
+            yield break;
         }
 
         foreach (var checkpoint in _editor.Checkpoints.Reverse())
         {
+            yield return () =>
+            {
             var captured = checkpoint;
             var preview = _checkpointPreviews.Image(checkpoint);
             Control previewControl = preview is null
@@ -2546,6 +2585,7 @@ public sealed partial class EditorView
                 $"Версия {checkpoint.Name}, создана "
                     + checkpoint.CreatedUtc.ToLocalTime().ToString("g", CultureInfo.CurrentCulture));
             _checkpointList.Children.Add(card);
+            };
         }
     }
 }

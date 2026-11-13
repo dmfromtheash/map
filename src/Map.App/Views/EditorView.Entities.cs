@@ -126,14 +126,21 @@ public sealed partial class EditorView
             if (found.Count == 0)
                 list.Children.Add(Ui.EmptyState("NoEntitiesText", MapIcons.Notes, _editor.Entities.Length == 0 ? "Карточек пока нет" : "Ничего не найдено",
                     _editor.Entities.Length == 0 ? "Выделите город, реку или подпись и нажмите «Новая карточка»." : "Измените запрос или поищите по атласу."));
-            foreach (var entity in found)
+            PanelWork.Replace("entity-rows", EntityRows());
+            IEnumerable<Action> EntityRows()
             {
+              foreach (var entity in found)
+              {
+                yield return () =>
+                {
                 var captured = entity;
                 var row = Ui.ListRow("Entity_" + entity.Id.ToString("N"), KindIcon(entity.Kind), entity.Name,
                     MapEntities.KindTitle(entity.Kind) + (entity.PlayerVisible ? " · игрокам" : ""), [],
                     () => { _selectedEntityId = captured.Id; SyncEntities(); }, entity.Name);
                 Ui.SetSelected(row, entity.Id == _selectedEntityId);
                 list.Children.Add(row);
+                };
+              }
             }
             var selected = _editor.Entities.FirstOrDefault(e => e.Id == _selectedEntityId);
             card.IsVisible = selected is not null;

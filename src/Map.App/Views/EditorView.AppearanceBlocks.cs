@@ -321,22 +321,25 @@ public sealed partial class EditorView
         };
     }
 
-    /// <summary>Runs every registered value sync with user-input handlers muted.</summary>
-    private void SyncAppearanceSections()
-    {
-        _syncingAppearance = true;
-        try
-        {
-            foreach (var sync in _appearanceSyncs)
-            {
-                sync();
-            }
+    /// <summary>Refreshes values cooperatively, muting input only while each value is assigned.</summary>
+    private void SyncAppearanceSections() => PanelWork.Replace("appearance-values", AppearanceJobs());
 
-            SyncTextureSwatches();
-        }
-        finally
+    private IEnumerable<Action> AppearanceJobs()
+    {
+        foreach (var sync in _appearanceSyncs)
         {
-            _syncingAppearance = false;
+            yield return () =>
+            {
+                _syncingAppearance = true;
+                try { sync(); }
+                finally { _syncingAppearance = false; }
+            };
         }
+        yield return () =>
+        {
+            _syncingAppearance = true;
+            try { SyncTextureSwatches(); }
+            finally { _syncingAppearance = false; }
+        };
     }
 }

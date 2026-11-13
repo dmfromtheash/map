@@ -11,7 +11,12 @@ dotnet build tools/Map.EditLatency -c Release -p:RuntimeIdentifier=osx-arm64
 DOTNET_TieredCompilation=0 dotnet tools/Map.EditLatency/bin/Release/net10.0/osx-arm64/Map.EditLatency.dll <output-directory> <count> <suite>
 ```
 
-Counts: `100`, `100000`, `1000000`. Suites: `actions`, `indexes`, `fixes`.
+On Windows, use `dotnet build tools/Map.EditLatency -c Release` and the resulting
+`bin/Release/net10.0/win-x64/Map.EditLatency.exe` with the same arguments.
+
+Counts: `100`, `100000`, `1000000`. Suites: `actions`, `indexes`, `fixes`, `ui`.
+The `ui` suite creates the production editor controls with a dispatcher but no native
+window or rendered canvas. Its timings are **not live GPU/FPS evidence**.
 The optional fourth argument is the repository root containing the fixture.
 The output directory must be a disposable work directory: the harness creates catalogs
 under its `tmp/` subdirectory. JSONL goes to stdout. No input files are modified.

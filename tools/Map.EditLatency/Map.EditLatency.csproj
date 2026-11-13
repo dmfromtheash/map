@@ -8,6 +8,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/Map.Presentation/Map.Presentation.csproj" />
+    <ProjectReference Include="../../src/Map.App/Map.App.csproj" />
     <Compile Include="../../tests/Map.Presentation.Tests/Support/Fakes.cs" Link="Fakes.cs" />
   </ItemGroup>
 </Project>

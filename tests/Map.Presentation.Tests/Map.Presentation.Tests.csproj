@@ -33,6 +33,7 @@
 
   <ItemGroup>
     <Compile Include="..\Shared\FixedWorkingMemory.cs" Link="Shared\FixedWorkingMemory.cs" />
+    <Compile Include="../../tools/Map.EditLatency/UiProbe.cs" Link="Support/UiProbe.cs" />
     <EmbeddedResource Include="Fixtures\hex-json-2534315.json" />
   </ItemGroup>
 

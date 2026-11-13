@@ -179,9 +179,10 @@ public enum EditorChangeReason
     SidePanelData = 1 << 5,
 }
 
-public sealed class EditorSceneInvalidatedEventArgs(EditorChangeReason reasons) : EventArgs
+public sealed class EditorSceneInvalidatedEventArgs(EditorChangeReason reasons, SelectionRefreshDelta? selection = null) : EventArgs
 {
     public EditorChangeReason Reasons { get; } = reasons;
+    public SelectionRefreshDelta? Selection { get; } = selection;
 
     public bool Has(EditorChangeReason reason) => (Reasons & reason) != 0;
 }
@@ -486,8 +487,18 @@ public sealed partial class EditorViewModel : ViewModelBase
     /// </summary>
     public event EventHandler<EditorSceneInvalidatedEventArgs>? SceneInvalidated;
 
-    private void InvalidateScene(EditorChangeReason reasons) =>
-        SceneInvalidated?.Invoke(this, new EditorSceneInvalidatedEventArgs(reasons));
+    private SelectionRefreshDelta _lastNotifiedSelection = SelectionRefreshDelta.Empty;
+    private void InvalidateScene(EditorChangeReason reasons)
+    {
+        SelectionRefreshDelta? delta = null;
+        if ((reasons & EditorChangeReason.Selection) != 0)
+        {
+            var current = SelectionRefreshDelta.Capture(this);
+            delta = _lastNotifiedSelection.Merge(current);
+            _lastNotifiedSelection = current;
+        }
+        SceneInvalidated?.Invoke(this, new EditorSceneInvalidatedEventArgs(reasons, delta));
+    }
 
     // ---------------------------------------------------------------- status
 

@@ -54,14 +54,7 @@ public sealed class VectorAssetStyleCommand(
     public MapDocument Revert(MapDocument document)
     {
         var reverted = DocumentEditor.ReplaceObject(document, before);
-        var used = reverted.Layers.OfType<ObjectLayer>().SelectMany(layer => layer.Objects).Any(item =>
-            item.Stamp?.AssetSha256 == asset.Sha256
-            || item.Stamp?.MaskAssetSha256 == asset.Sha256
-            || item.Line?.Stroke.AssetSha256 == asset.Sha256
-            || item.Shape?.Stroke.AssetSha256 == asset.Sha256
-            || item.Shape?.Fill.TextureAssetSha256 == asset.Sha256
-            || item.Room?.CapAssetSha256 == asset.Sha256);
-        return _introduced && !used
+        return _introduced && AssetUsageIndex.Count(reverted, asset.Sha256) == 0
             ? reverted.WithAssets([.. reverted.Assets.Where(item => item.Sha256 != asset.Sha256)])
             : reverted;
     }

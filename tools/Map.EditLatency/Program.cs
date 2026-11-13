@@ -8,7 +8,8 @@ using Map.Core.Editing;
 using Map.Presentation.Tests.Support;
 using Map.Presentation.ViewModels;
 
-// No UI, raster decode or renderer runs in the timed actions. Same harness for both revisions.
+// CPU editing paths. The ui suite builds production controls offscreen, without rendering.
+// Use the same harness with both revisions.
 var root = Path.GetFullPath(args[0]);
 var count = int.Parse(args[1]);
 var suite = args.Length > 2 ? args[2] : "actions";
@@ -21,6 +22,7 @@ catalog.ImportSet([Path.Combine(source, "tests", "fixtures", "assets", "owner-mo
     "Гора", new(), DateTimeOffset.UnixEpoch);
 await catalog.FlushMetadataAsync();
 var record = catalog.Records[0];
+var resolver = new CountingContentResolver(new CatalogAssetContentResolver(catalog));
 var refs = Enumerable.Range(0, 100).Select(i => new MapAssetReference(
     i == 0 ? record.Sha256 : i.ToString("x64"), "Ассет " + i, "image/png", ".png",
     ProjectAssetStorage.Linked, DateTimeOffset.UnixEpoch, "cpu-probe", "user-owned",
@@ -68,10 +70,12 @@ void Measure(string name, int iteration, Action action, EditorViewModel? editor 
     var allocations = GC.GetAllocatedBytesForCurrentThread();
     var collections = new[] { GC.CollectionCount(0), GC.CollectionCount(1), GC.CollectionCount(2) };
     var start = Stopwatch.GetTimestamp();
+    var reads = resolver.Reads;
     action();
     var ms = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
     var bytes = GC.GetAllocatedBytesForCurrentThread() - allocations;
     if (measured) Console.WriteLine(JsonSerializer.Serialize(new { type = "sample", count, suite, name, iteration, ms, bytes,
+        resolverReads = resolver.Reads - reads,
         gc = new[] { GC.CollectionCount(0) - collections[0], GC.CollectionCount(1) - collections[1], GC.CollectionCount(2) - collections[2] },
         steps = details?.Select(s => new { step = s.Step, ms = s.Ms }).ToArray() }));
 }
@@ -102,7 +106,81 @@ warmRouter.Release(2000, 2000);
 warmEditor.Undo();
 GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
 
-if (suite == "fixes")
+if (suite == "ui")
+{
+    UiProbe.Initialize();
+    // No window or canvas render: production EditorView controls and Dispatcher work only.
+    var doc = Build();
+    var editor = Editor(doc);
+    var view = UiProbe.Create(editor);
+    UiProbe.Drain();
+    var layer = Layer(doc);
+    for (var i = 0; i <= 5; i++)
+    {
+        Measure("ui-selection", i, () => {
+            editor.SelectObject(layer.Objects[count - 1 - i % Math.Min(2, count)].Id);
+            UiProbe.Drain();
+        }, editor);
+        Check(editor.SelectionCount == 1, "UI selection");
+        Measure("ui-selection-burst", i, () => {
+            editor.SelectObject(layer.Objects[^1].Id);
+            editor.SelectObject(layer.Objects[^2].Id);
+            editor.SelectObject(layer.Objects[^1].Id);
+            UiProbe.Drain();
+        }, editor);
+    }
+    editor.SelectAssetSet(catalog.Sets[0].Id);
+    if (editor.GetType().GetMethod("PreparePlacementAssetsAsync")?.Invoke(editor, [false]) is Task preparation)
+        preparation.GetAwaiter().GetResult();
+    UiProbe.Drain(view);
+    for (var i = 0; i <= 5; i++)
+    {
+        Measure("ui-place-and-panels", i, () => {
+            Check(editor.PlaceCurrentVariantAt(70000, 70000), "UI placement refused");
+            UiProbe.Drain(view);
+        }, editor);
+        Measure("ui-undo-and-panels", i, () => { editor.Undo(); UiProbe.Drain(view); }, editor);
+        Check(Layer(editor.Session.Document).Objects.Count == count, "UI undo count");
+    }
+    UiProbe.Dispose(view);
+    SynchronizationContext.SetSynchronizationContext(null);
+    GC.KeepAlive(view);
+}
+else if (suite == "prepared-file")
+{
+    var doc = Build().WithAssets(refs.Skip(1).ToArray());
+    for (var i = 0; i <= 5; i++)
+    {
+        // New-reference snapshots cannot inherit a root that was only built on their child.
+        // Prepare the shared source explicitly for warm samples; retain cold iteration zero.
+        if (i == 1) Measure("prepare-source-revision", i, () => { _ = DocumentRevisionIndex.For(doc); });
+        var editor = new EditorViewModel(doc, null, false,
+            new FakeProjectStore(), new FakeRecentMaps(), new FakeFilePicker(), new FakePrompts(), new FakeLog(),
+            assetCatalog: catalog, assetResolver: resolver, availableFontFamilies: ["Arial"]);
+        Measure("prepare-file", i, () => editor.SelectAssetSet(catalog.Sets[0].Id), editor);
+        Measure("prepared-file-click", i, () => Check(editor.PlaceCurrentVariantAt(70000, 70000), "file placement"), editor);
+        Check(editor.Session.Document.Assets.Any(asset => asset.Sha256 == record.Sha256), "file reference");
+    }
+}
+else if (suite == "references")
+{
+    var doc = Build();
+    var layer = Layer(doc);
+    var novel = new MapAssetReference(new string('f', 64), "Новый ассет", "image/png", ".png",
+        ProjectAssetStorage.Linked, DateTimeOffset.UnixEpoch, "cpu-probe", "user-owned", catalogId: new string('f', 64));
+    _ = DocumentRevisionIndex.For(doc);
+    for (var i = 0; i <= 5; i++)
+    {
+        var command = new PlaceAssetObjectsCommand(layer.Id, novel,
+            [warmObjects[0] with { Id = ObjectId.New(), Stamp = new StampStyle(novel.Sha256) }]);
+        var changed = command.Apply(doc);
+        Measure("undo-new-reference", i, () => {
+            var reverted = command.Revert(changed);
+            Check(reverted.Assets.Count == refs.Length && Layer(reverted).Objects.Count == count, "reference rollback");
+        });
+    }
+}
+else if (suite == "fixes")
 {
     var doc = Build();
     var layer = Layer(doc);

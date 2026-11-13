@@ -2503,6 +2503,7 @@ public sealed partial class EditorViewModel
             Timed("raise " + name, () => Raise(name));
         }
         Timed("session-state", RaiseSessionState);
+        InvalidateScene(EditorChangeReason.Selection);
         Timed("scene-changed", () => SceneChanged?.Invoke(this, EventArgs.Empty));
     }
 }

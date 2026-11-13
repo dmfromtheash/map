@@ -20,6 +20,7 @@ public static class ObjectLayerChanges
         var retain = depth <= 64;
         Changes.Add(target, new Link(new(source), retain ? source : null, retain ? depth : 0, removed, added, orderCompacted));
         Editing.BoundObjectIndex.Register(source, target, removed, added);
+        AssetUsageIndex.Register(source, target, removed, added);
     }
 
     public static bool TryGet(ObjectLayer layer, out ObjectLayerChange change)

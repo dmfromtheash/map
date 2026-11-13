@@ -256,9 +256,7 @@ public sealed class PlaceAssetObjectsCommand : IEditCommand
 
         // Only references this command actually introduced, and only those no surviving stamp
         // still points at, are withdrawn. Anything else would break another object's content.
-        var stillUsed = CompositionTransfer.UsedAssetHashes(
-            withoutObjects.Layers.OfType<ObjectLayer>().SelectMany(layer => layer.Objects));
-        var withdraw = _introduced.Where(sha => !stillUsed.Contains(sha))
+        var withdraw = _introduced.Where(sha => AssetUsageIndex.Count(withoutObjects, sha) == 0)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         return withdraw.Count == 0
             ? withoutObjects
@@ -342,9 +340,7 @@ public sealed class PasteObjectsCommand : IEditCommand
 
         // Same rule as a placement: only references this paste introduced, and only those no
         // surviving object still points at, are withdrawn.
-        var stillUsed = CompositionTransfer.UsedAssetHashes(
-            withoutObjects.Layers.OfType<ObjectLayer>().SelectMany(layer => layer.Objects));
-        var withdraw = _introduced.Where(sha => !stillUsed.Contains(sha))
+        var withdraw = _introduced.Where(sha => AssetUsageIndex.Count(withoutObjects, sha) == 0)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         return withdraw.Count == 0
             ? withoutObjects
@@ -444,9 +440,7 @@ public sealed class ReplaceStampAssetCommand : IEditCommand
     {
         var reverted = DocumentEditor.ReplaceObject(document, _before);
         if (_introduced.Count == 0) return reverted;
-        var stillUsed = CompositionTransfer.UsedAssetHashes(
-            reverted.Layers.OfType<ObjectLayer>().SelectMany(layer => layer.Objects));
-        var withdraw = _introduced.Where(hash => !stillUsed.Contains(hash))
+        var withdraw = _introduced.Where(hash => AssetUsageIndex.Count(reverted, hash) == 0)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         return withdraw.Count == 0 ? reverted : reverted.WithAssets(
             [.. reverted.Assets.Where(asset => !withdraw.Contains(asset.Sha256))]);
@@ -493,9 +487,7 @@ public sealed class UpdateStampStyleWithAssetCommand : IEditCommand
     {
         var reverted = DocumentEditor.ReplaceObject(document, _before);
         if (!_introduced) return reverted;
-        var used = CompositionTransfer.UsedAssetHashes(
-            reverted.Layers.OfType<ObjectLayer>().SelectMany(layer => layer.Objects));
-        return used.Contains(_asset.Sha256)
+        return AssetUsageIndex.Count(reverted, _asset.Sha256) > 0
             ? reverted
             : reverted.WithAssets([.. reverted.Assets.Where(item =>
                 !string.Equals(item.Sha256, _asset.Sha256, StringComparison.OrdinalIgnoreCase))]);
