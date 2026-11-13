@@ -18,8 +18,10 @@
 ## Референсы → тестовая библиотека (DEC-103/104, в работе)
 - Диск **Samsung T7 = `H:`** (корень не трогать), данные в `H:\MapLibrary` (`upscaled/`, `plan/`, `plan/fixes/`, `checks/`,
   каталоги + `map-library.json`). **Код — `tools/library-pipeline/`** (README; на H:/Mac/USER — копии, `Compare-Deployed.ps1`).
-- **Апскейл ОСТАНОВЛЕН владельцем 12.11 22:40** на 12 323/39 081 (31,5 %: ПК 8 471, Mac 3 852); порядок
-  запуска — `docs/ai/SESSION_PROMPT.md`. Узлы:
+- **13.11 ~13:10: 24 7xx/38 990 (~63 %).** Mac работает. **ПК-апскейл ОСТАНОВЛЕН**: видеокарта RTX сбрасывается
+  (nvlddmkm 153, 23 раза за день; не перегрев — TDR). Владелец ставит `TdrDelay`/`TdrDdiDelay`=20 (реестр, админ) и
+  перезагружает ПК; после — проверить ключ, запустить подачу на Mac, пробу ПК на 20 файлах, затем полный апскейл
+  (паузы `MAP_GPU_COOLDOWN=15`, ПК учитывает сделанное Mac). Порядок запуска — `docs/ai/SESSION_PROMPT.md`. Узлы:
   - ПК: `pipeline\start_upscale.cmd` → `sol\sol1\run_upscale2.py`, лог `upscale.log`, журнал `upscaled/manifest.jsonl`.
   - Mac: `pipeline\start_mac_feeder.cmd` (ПК, лог `mac_feeder.log`) → `~/MapWork/upscale/mac_worker.py`
     (лог `worker.log`), журнал `upscaled/manifest-mac.jsonl`, брак `failed-mac.jsonl`.
