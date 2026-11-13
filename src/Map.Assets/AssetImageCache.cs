@@ -223,6 +223,27 @@ public sealed class AssetImageCache : IDisposable
 
     public bool Contains(string key) => _entries.ContainsKey(key);
 
+    /// <summary>Takes ownership of already verified, derived raster pixels. They have their own
+    /// LRU lifetime, so evicting a large decoded source need not discard a small sampled image.</summary>
+    public SKImage? AdoptPixels(string key, SKImage image)
+    {
+        if (_entries.TryGetValue(key, out var existing))
+        {
+            image.Dispose();
+            existing.LastUsed = ++_clock;
+            Hits++;
+            return existing.Image;
+        }
+        var bytes = checked((long)image.Width * image.Height * 4);
+        if (bytes > _decodedByteCapacity) { image.Dispose(); return null; }
+        TrimForIncoming(bytes);
+        _entries[key] = new Entry { Image = image, DecodedBytes = bytes, ResidentBytes = bytes, LastUsed = ++_clock };
+        DecodedBytes += bytes;
+        ResidentBytes += bytes;
+        Misses++;
+        return image;
+    }
+
     /// <summary>
     /// Takes an image decoded elsewhere (off the render thread, by <see cref="DecodeOwned"/>) from
     /// these exact bytes. Admission and eviction are those of <see cref="GetEncoded"/>; an image

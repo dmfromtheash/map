@@ -29,9 +29,9 @@ internal static class StampCacheProbe
             [CurrentLook.Page(), new ObjectLayer(LayerId.New(), "Objects", true, false, 1, objects)]);
         var passes = new List<object>();
         string? expected = null;
-        foreach (var capacity in new[] { 64, 4096 })
+        foreach (var (capacity, retainSamples) in new[] { (64, false), (4096, false), (4096, true) })
         {
-            using var source = new CatalogStampImageSource(catalog, () => document, () => null, capacity);
+            using var source = new CatalogStampImageSource(catalog, () => document, () => null, capacity, retainSamples: retainSamples);
             using var surface = SKSurface.Create(new SKImageInfo(1024, 768))!;
             for (var pass = 0; pass < 3; pass++)
             {
@@ -45,7 +45,7 @@ internal static class StampCacheProbe
                 using var bitmap = SKBitmap.FromImage(snapshot);
                 var hash = Convert.ToHexStringLower(SHA256.HashData(bitmap.Bytes));
                 expected ??= hash;
-                var row = new { capacity, pass, ms = watch.Elapsed.TotalMilliseconds,
+                var row = new { capacity, retainSamples, pass, ms = watch.Elapsed.TotalMilliseconds,
                     misses = after.Misses - before.Misses, evictions = after.Evictions - before.Evictions,
                     after.Entries, after.ResidentBytes, hash, samePixels = hash == expected };
                 passes.Add(row);

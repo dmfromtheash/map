@@ -12,6 +12,8 @@ public interface IStampImageSource
 {
     /// <summary>The image for the content hash, or null when the asset is missing/not resolved.</summary>
     SKImage? TryGetImage(string sha256);
+    (int Width, int Height)? TryGetImageSize(string sha256) => TryGetImage(sha256) is { } image ? (image.Width, image.Height) : null;
+    SKColor? TryGetOverviewColor(string sha256) => TryGetImage(sha256) is { } image ? SceneRenderer.StampOverviewColor(image) : null;
     SKImage? TryGetImageForPixelSize(string sha256, double width, double height) => TryGetImage(sha256);
     /// <summary>
     /// True when every image these stamps sample at their pixel sizes is already decoded. Otherwise
@@ -3583,13 +3585,14 @@ public static partial class SceneRenderer
         RenderOptions options, StampBatchScratch? scratch = null)
     {
         var first = objects[start];
-        if (!Compatible(first) || options.Stamps?.TryGetImage(first.Stamp!.AssetSha256) is not { } image) return 0;
+        if (!Compatible(first) || options.Stamps is not { } stamps
+            || stamps.TryGetImageSize(first.Stamp!.AssetSha256) is not { } size) return 0;
         var canvasMatrix = canvas.TotalMatrix;
         var pixelScale = Math.Sqrt(canvasMatrix.ScaleX * canvasMatrix.ScaleX + canvasMatrix.SkewY * canvasMatrix.SkewY);
         // Skia's raster atlas shader omits mipmap sampling. Keep the independent DrawImage
         // evaluator for minified CPU stamps; the native GPU atlas honours the sampling contract.
         if (options.GpuContext is null
-            && (first.Width * pixelScale < image.Width || first.Height * pixelScale < image.Height)) return 0;
+            && (first.Width * pixelScale < size.Width || first.Height * pixelScale < size.Height)) return 0;
         var count = 0;
         while (start + count < objects.Count && count < 8192)
         {
@@ -3598,18 +3601,17 @@ public static partial class SceneRenderer
                 // A batch has one sampled image. Mixing dimensions chooses the largest
                 // member's mip for earlier stamps, changing their pixels on an append/rebuild.
                 || item.Width != first.Width || item.Height != first.Height
-                || Math.Abs(item.Width / image.Width - item.Height / image.Height) > 0.000001) break;
+                || Math.Abs(item.Width / size.Width - item.Height / size.Height) > 0.000001) break;
             count++;
         }
         // On the native GPU use the same sampling/transform evaluator for one stamp and a
         // consecutive run. Otherwise an appended cache tile changes its pixels when the same
         // stamps are later rebuilt as an atlas batch (notably at fractional detail scales).
         if (count == 0 || (count == 1 && options.GpuContext is null)) return 0;
-        if (options.Stamps is { } stamps)
-        {
-            image = stamps.TryGetImageForPixelSize(first.Stamp!.AssetSha256,
-                DetailPixels(first.Width, pixelScale, options), DetailPixels(first.Height, pixelScale, options)) ?? image;
-        }
+        var image = stamps.TryGetImageForPixelSize(first.Stamp!.AssetSha256,
+            DetailPixels(first.Width, pixelScale, options), DetailPixels(first.Height, pixelScale, options))
+            ?? stamps.TryGetImage(first.Stamp!.AssetSha256);
+        if (image is null) return 0;
         // Odd-sized source images round their mip width and height independently. DrawAtlas
         // has only a uniform scale; DrawImage preserves the exact rectangle in this case.
         if (Math.Abs(first.Width / image.Width - first.Height / image.Height) > 0.000001) return 0;
@@ -4053,9 +4055,10 @@ public static partial class SceneRenderer
             if (stamp.GroundShadow is { IsValid: true, Opacity: > 0 }) anyShadow = true;
             var key = (stamp.AssetSha256, item.Width, item.Height);
             if (sources.ContainsKey(key)) continue;
-            if (stamps.TryGetImage(stamp.AssetSha256) is not { } original) return false;
             var image = stamps.TryGetImageForPixelSize(stamp.AssetSha256,
-                DetailPixels(item.Width, scale, options), DetailPixels(item.Height, scale, options)) ?? original;
+                DetailPixels(item.Width, scale, options), DetailPixels(item.Height, scale, options))
+                ?? stamps.TryGetImage(stamp.AssetSha256);
+            if (image is null) return false;
             if (image.Width > DenseAtlasMaxSide - 8 || image.Height > DenseAtlasMaxSide - 8) return false;
             sources.Add(key, image);
         }
@@ -5039,7 +5042,13 @@ public static partial class SceneRenderer
         SKCanvas canvas, SceneObject sceneObject, StampStyle stamp, SKRect rect,
         byte objectAlpha, StampForegroundSurface? stampForeground, RenderOptions options)
     {
-        var image = options.Stamps?.TryGetImage(stamp.AssetSha256);
+        var samplingMatrix = canvas.TotalMatrix;
+        var pixelScale = Math.Sqrt(samplingMatrix.ScaleX * samplingMatrix.ScaleX + samplingMatrix.SkewY * samplingMatrix.SkewY);
+        var needsWorkingImage = stamp.ClipMaskEnabled || stamp.ShadowOpacity > 0;
+        var image = needsWorkingImage ? options.Stamps?.TryGetImage(stamp.AssetSha256)
+            : options.Stamps?.TryGetImageForPixelSize(stamp.AssetSha256,
+                DetailPixels(rect.Width, pixelScale, options), DetailPixels(rect.Height, pixelScale, options))
+                ?? options.Stamps?.TryGetImage(stamp.AssetSha256);
         if (image is null)
         {
             // A linked asset that is not on this machine must be visible, not silently absent.
@@ -5106,10 +5115,9 @@ public static partial class SceneRenderer
         if (mask is null)
         {
             // Clip Mask off (and unresolved legacy/missing mask) keeps the exact pre-Stage-15 path.
-            var matrix = canvas.TotalMatrix;
-            var viewScale = Math.Sqrt(matrix.ScaleX * matrix.ScaleX + matrix.SkewY * matrix.SkewY);
-            image = options.Stamps?.TryGetImageForPixelSize(stamp.AssetSha256,
-                DetailPixels(rect.Width, viewScale, options), DetailPixels(rect.Height, viewScale, options)) ?? image;
+            if (needsWorkingImage)
+                image = options.Stamps?.TryGetImageForPixelSize(stamp.AssetSha256,
+                    DetailPixels(rect.Width, pixelScale, options), DetailPixels(rect.Height, pixelScale, options)) ?? image;
             DrawStampImage(canvas, image, rect, stamp, paint, options);
         }
         else
@@ -5654,6 +5662,9 @@ public static partial class SceneRenderer
 
     private sealed record LandCoverageState(bool FullyCovered);
 
+    /// <summary>The unchanged overview tint evaluator, also used by content-keyed image sources.</summary>
+    public static SKColor StampOverviewColor(SKImage image) => StampOcclusion.Color(image);
+
     private static void DrawOverviewObjects(
         SKCanvas canvas,
         MapDocument document,
@@ -5667,8 +5678,7 @@ public static partial class SceneRenderer
         var colorSignature = new HashCode();
         foreach (var asset in document.Assets)
         {
-            if (options.Stamps?.TryGetImage(asset.Sha256) is not { } image) continue;
-            var color = StampOcclusion.Color(image);
+            if (options.Stamps?.TryGetOverviewColor(asset.Sha256) is not { } color) continue;
             colors[asset.Sha256] = color;
             colorSignature.Add(asset.Sha256); colorSignature.Add(color);
         }
