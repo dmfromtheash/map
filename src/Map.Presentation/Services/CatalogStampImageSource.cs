@@ -10,11 +10,18 @@ namespace Map.Presentation.Services;
 /// render thread; style preparation, the pictures of «Вид» and the panels take images through a <see cref="Lease"/>.
 /// </summary>
 public sealed class CatalogStampImageSource(
-    AssetCatalog catalog, Func<MapDocument> document, Func<string?> projectPath) : IStampImageSource, IDisposable
+    AssetCatalog catalog, Func<MapDocument> document, Func<string?> projectPath, int imageCapacity = 4096) : IStampImageSource, IDisposable
 {
     // Large owner art keeps its master plus a ladder of halved steps; the budget holds the
     // working steps of a whole set and the masters of the few objects a close view shows.
-    private readonly AssetImageCache _cache = new(64, 512L * 1024 * 1024);
+    // Many distinct small stamps must fit as well as a few large masters. The byte budget,
+    // not a 64-image thumbnail limit, bounds their memory. Ladder steps count as entries too.
+    private readonly AssetImageCache _cache = new(imageCapacity, 512L * 1024 * 1024);
+
+    public (int Entries, long ResidentBytes, long Hits, long Misses, long Evictions) CacheStatistics
+    {
+        get { lock (_gate) return (_cache.Count, _cache.ResidentBytes, _cache.Hits, _cache.Misses, _cache.Evictions); }
+    }
     private readonly Dictionary<string, (string Path, long Length, DateTime LastWriteUtc)> _resolved =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _missingSteps = new(StringComparer.OrdinalIgnoreCase);

@@ -11,7 +11,11 @@ if (int.TryParse(Environment.GetEnvironmentVariable("MAP_PERF_FREE_MB"), out var
         512 * Map.Core.Resources.WorkingMemoryBudget.MiB));
 object report;
 bool gatePassed;
-if (options.Profile == "hex-world-1024")
+if (options.Profile == "stamp-cache-probe")
+{
+    report = StampCacheProbe.Run(options); gatePassed = true;
+}
+else if (options.Profile == "hex-world-1024")
 {
     report = HexWorld1024Probe.Run(); gatePassed = true;
 }
@@ -48,7 +52,7 @@ else if (options.Profile == "native-paint-perf")
     Console.WriteLine($"native-paint-perf: routes={smoke.Routes.Count}, gate={(smoke.GatePassed ? "PASS" : "FAIL")}");
     if (smoke.Failure is not null) Console.WriteLine(smoke.Failure);
 }
-else if (options.Profile == "native-zoom-assets")
+else if (options.Profile is "native-zoom-assets" or "native-million-assets")
 {
     var smoke = NativeZoomAssetsSmoke.Run(options); report = smoke; gatePassed = smoke.GatePassed;
     Console.WriteLine($"native-zoom-assets: scenarios={smoke.Scenarios.Count}, gate={(smoke.GatePassed ? "PASS" : "FAIL")}");

@@ -15,6 +15,27 @@ public sealed class StampImageLeaseTests : IDisposable
     private readonly string _root = Path.Combine(Path.GetTempPath(), "map-lease-tests", Guid.NewGuid().ToString("N"));
 
     [Fact]
+    public void A_screen_of_distinct_small_owner_images_stays_resident_with_identical_pixels()
+    {
+        var (oldImages, shas) = Source(64);
+        var (images, _) = Source(4096);
+        using var oldLifetime = oldImages;
+        using var lifetime = images;
+        foreach (var sha in shas)
+        {
+            using var oldPixels = SKBitmap.FromImage(oldImages.TryGetImage(sha)!);
+            using var pixels = SKBitmap.FromImage(images.TryGetImage(sha)!);
+            Assert.Equal(oldPixels.Bytes, pixels.Bytes);
+        }
+        var before = images.CacheStatistics;
+        foreach (var sha in shas) Assert.NotNull(images.TryGetImage(sha));
+        Assert.Equal(before.Misses, images.CacheStatistics.Misses);
+        Assert.Equal(0, images.CacheStatistics.Evictions);
+        Assert.True(oldImages.CacheStatistics.Evictions > 0);
+        Assert.True(images.CacheStatistics.ResidentBytes < 512L * 1024 * 1024);
+    }
+
+    [Fact]
     public void Without_a_lease_the_canvas_evicting_more_than_64_pictures_frees_the_one_in_use()
     {
         // The old route of PrepareAssets: a picture taken from the shared source, then the canvas draws 71 others.
@@ -117,7 +138,7 @@ public sealed class StampImageLeaseTests : IDisposable
     }
 
     /// <summary>The owner's six mountains, each at twelve sizes: 72 different pictures embedded in one map.</summary>
-    private (CatalogStampImageSource Images, string[] Shas) Source()
+    private (CatalogStampImageSource Images, string[] Shas) Source(int capacity = 64)
     {
         var root = new DirectoryInfo(AppContext.BaseDirectory);
         while (root is not null && !File.Exists(Path.Combine(root.FullName, "Map.slnx"))) root = root.Parent;
@@ -141,7 +162,7 @@ public sealed class StampImageLeaseTests : IDisposable
             new CanvasDefinition(1024, 1024, "px", "#FFFFFFFF"),
             [new BaseColorLayer(LayerId.New(), "Base", true, false, 1, "#FFFFFFFF")], []) { Assets = [.. assets] };
         var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));
-        return (new CatalogStampImageSource(catalog, () => document, () => null), assets.Select(a => a.Sha256).ToArray());
+        return (new CatalogStampImageSource(catalog, () => document, () => null, capacity), assets.Select(a => a.Sha256).ToArray());
     }
 
     public void Dispose()

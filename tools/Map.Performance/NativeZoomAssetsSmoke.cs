@@ -32,7 +32,7 @@ namespace Map.Performance;
 /// </summary>
 internal sealed class NativeZoomAssetsReport
 {
-    public string Observation { get; } = "Own native Avalonia window, ShowActivated=false, off-screen; production viewport/router hooks; frame = render-thread completion of the canvas scene pass, not monitor scan-out.";
+    public string Observation { get; set; } = "Own native Avalonia window, ShowActivated=false, off-screen; production viewport/router hooks; frame = render-thread completion of the canvas scene pass, not monitor scan-out.";
     public Dictionary<string, string> Environment { get; } = [];
     public List<ZoomScenarioReport> Scenarios { get; } = [];
     public List<string> Frames { get; } = [];
@@ -128,7 +128,7 @@ internal static class NativeZoomAssetsSmoke
     }
 }
 
-public sealed class ZoomAssetsApplication : Application
+public sealed partial class ZoomAssetsApplication : Application
 {
     internal static PerformanceOptions Options = null!;
     internal static TaskCompletionSource<NativeZoomAssetsReport> Completion = null!;
@@ -155,13 +155,14 @@ public sealed class ZoomAssetsApplication : Application
     public override void OnFrameworkInitializationCompleted()
     {
         var desktop = (IClassicDesktopStyleApplicationLifetime)ApplicationLifetime!;
-        _workspace = Path.Combine(Path.GetDirectoryName(Options.OutputPath)!, "zoom-assets-" + Guid.NewGuid().ToString("N")[..8]);
+        _workspace = Path.Combine(System.Environment.GetEnvironmentVariable("MAP_PERF_PROFILE_ROOT") ?? Path.GetDirectoryName(Options.OutputPath)!, "zoom-assets-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(_workspace);
         System.Environment.SetEnvironmentVariable("MAP_UI_TEST_MODE", "1");
         System.Environment.SetEnvironmentVariable("MAP_UI_TEST_PROFILE_ROOT", Path.Combine(_workspace, "profile"));
         _catalog = new AssetCatalog(Path.Combine(_workspace, "catalog"));
         _window = new Window { Width = 1440, Height = 900, Title = "Map — zoom/assets performance", ShowActivated = false,
             ShowInTaskbar = false, WindowStartupLocation = WindowStartupLocation.Manual, Position = new PixelPoint(-32000, -32000) };
+        if (Options.Profile == "native-million-assets") { _window.Position = new PixelPoint(0, 0); _window.ShowInTaskbar = true; }
         _window.Opened += async (_, _) =>
         {
             try { await Execute(); }
@@ -411,6 +412,7 @@ public sealed class ZoomAssetsApplication : Application
 
     private async Task Execute()
     {
+        if (Options.Profile == "native-million-assets") { await ExecuteMillion(); return; }
         _report.Environment["os"] = System.Environment.OSVersion.VersionString;
         _report.Environment["cpu-threads"] = System.Environment.ProcessorCount.ToString();
         _report.Environment["window-logical"] = $"{_window.Width}x{_window.Height}";
@@ -882,7 +884,7 @@ public sealed class ZoomAssetsApplication : Application
             var watch = Stopwatch.StartNew();
             input();
             System.Threading.Volatile.Write(ref requested, canvas.RequestFrameForSmoke());
-            var scene = await completion.Task.WaitAsync(TimeSpan.FromSeconds(30));
+            var scene = await completion.Task.WaitAsync(TimeSpan.FromSeconds(Options.Profile == "native-million-assets" ? 180 : 30));
             watch.Stop();
             return (scene, watch.Elapsed.TotalMilliseconds);
         }
