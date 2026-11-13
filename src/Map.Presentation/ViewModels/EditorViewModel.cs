@@ -192,6 +192,8 @@ public sealed class EditorSceneInvalidatedEventArgs(EditorChangeReason reasons) 
 /// </summary>
 public sealed partial class EditorViewModel : ViewModelBase
 {
+    /// <summary>Set by the desktop host to its validated user/test profile, never a mounted library.</summary>
+    public static string? DerivedAssetCacheRoot { get; set; }
     private readonly IProjectStore _store;
     private readonly IRecentMaps _recent;
     private readonly IFilePicker _filePicker;
@@ -370,7 +372,8 @@ public sealed partial class EditorViewModel : ViewModelBase
         EditorLocalPreferences? localPreferences = null,
         Action<EditorLocalPreferences>? saveLocalPreferences = null,
         DateTimeOffset? lastSavedUtc = null,
-        Map.Core.Resources.WorkingMemoryBudget? memory = null)
+        Map.Core.Resources.WorkingMemoryBudget? memory = null,
+        IStampImageSource? stampImages = null)
     {
         _workingMemory = memory ?? Map.Core.Resources.WorkingMemoryBudget.Shared;
         Session = new EditingSession(document, _workingMemory);
@@ -423,9 +426,12 @@ public sealed partial class EditorViewModel : ViewModelBase
             availableFontFamilies ?? SystemFontCatalog.Families);
         _assetResolver = assetResolver
             ?? (assetCatalog is null ? null : new CatalogAssetContentResolver(assetCatalog));
-        StampImages = assetCatalog is null
+        // A native probe may supply the same production source with a different cache policy.
+        // Its lifetime is transferred to the editor/canvas, like the default catalog source.
+        StampImages = stampImages ?? (assetCatalog is null
             ? null
-            : new CatalogStampImageSource(assetCatalog, () => Session.Document, () => DocumentPath);
+            : new CatalogStampImageSource(assetCatalog, () => Session.Document, () => DocumentPath,
+                derivedRoot: DerivedAssetCacheRoot));
         AttachLibraryTextures();
 
         // The tools start at sizes that fit this canvas (А1.2); what the map already holds is not touched.

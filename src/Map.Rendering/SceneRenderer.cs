@@ -10,10 +10,16 @@ namespace Map.Rendering;
 /// <summary>Supplies decoded asset images to the renderer. Stage 4's catalog implements it.</summary>
 public interface IStampImageSource
 {
+    /// <summary>Changes when backing files become unavailable or are replaced, not for ordinary mip arrivals.</summary>
+    long SourceRevision => 0;
     /// <summary>The image for the content hash, or null when the asset is missing/not resolved.</summary>
     SKImage? TryGetImage(string sha256);
+    /// <summary>Optional culling must not make an otherwise unnecessary cold image load.</summary>
+    SKImage? TryGetImageForOcclusion(string sha256) => TryGetImage(sha256);
     (int Width, int Height)? TryGetImageSize(string sha256) => TryGetImage(sha256) is { } image ? (image.Width, image.Height) : null;
     SKColor? TryGetOverviewColor(string sha256) => TryGetImage(sha256) is { } image ? SceneRenderer.StampOverviewColor(image) : null;
+    /// <summary>Queues exact overview metadata without reading files on the frame thread.</summary>
+    bool PrepareOverview(IEnumerable<string> assets, Action ready) => true;
     SKImage? TryGetImageForPixelSize(string sha256, double width, double height) => TryGetImage(sha256);
     /// <summary>
     /// True when every image these stamps sample at their pixel sizes is already decoded. Otherwise
@@ -42,6 +48,7 @@ public interface IStampImageLease : IStampImageSource, IDisposable;
 
 internal sealed class StampImagePassThrough(IStampImageSource source) : IStampImageLease
 {
+    public long SourceRevision => source.SourceRevision;
     public SKImage? TryGetImage(string sha256) => source.TryGetImage(sha256);
     public SKImage? TryGetImageForPixelSize(string sha256, double width, double height) => source.TryGetImageForPixelSize(sha256, width, height);
     public bool PrepareForPixelSizes(IEnumerable<(string Sha256, double Width, double Height)> stamps, Action ready) => source.PrepareForPixelSizes(stamps, ready);
@@ -3155,7 +3162,7 @@ public static partial class SceneRenderer
             && options.ObjectOverrides is not { Count: > 0 } && layer.Objects.Count >= DenseTileMinimumObjects
             && ObjectSpatialIndex.For(layer).MayContainAtLeast(view, DenseTileMinimumVisible)
             && RevisionsFor(layer).CanCache
-            && document.Assets.All(asset => options.Stamps?.TryGetImage(asset.Sha256) is not null))
+            && document.Assets.All(asset => options.Stamps?.TryGetImageSize(asset.Sha256) is not null))
         {
             DrawDetailedStampTiles(canvas, document, layer, view, options);
             return;
@@ -3249,6 +3256,20 @@ public static partial class SceneRenderer
         if (options.Stats is { } stats)
         {
             stats.ObjectCandidates += ordered.Count;
+        }
+
+        if (!options.IsExport && options.ObjectCache is not null && options.RequestRefinedFrame is { } ready
+            && options.Stamps is { } preparing)
+        {
+            var matrix = canvas.TotalMatrix;
+            var pixelScale = Math.Sqrt(matrix.ScaleX * matrix.ScaleX + matrix.SkewY * matrix.SkewY);
+            if (!preparing.PrepareForPixelSizes(ordered.Where(o => o.Visible && o.Stamp is not null)
+                .Select(o => (o.Stamp!.AssetSha256, DetailPixels(o.Width, pixelScale, options), DetailPixels(o.Height, pixelScale, options))), ready))
+            {
+                if (options.Stats is { } pending) pending.DetailTilesPending++;
+                DrawOverviewObjects(canvas, document, layer, view, options, fallbackScale: Math.Min(.02, options.ViewScale));
+                return;
+            }
         }
 
         // Exact/interactive rendering evaluates "behind layer" as one bounded prepass. Overview
@@ -3389,19 +3410,42 @@ public static partial class SceneRenderer
             }
         }
         using var batchScratch = new StampBatchScratch();
-        // Keep a small raster overview of the whole page, using the same stamp evaluator. Unlike
-        // a neighbouring zoom level it also covers tiles first revealed by a pan. Preparing it
-        // only seeds the cache (normally one 514-square tile); it never paints under exact tiles,
-        // which would composite translucent stamps twice. Everything stays on the Skia thread.
+        // Seed a fallback with the same stamp evaluator, without painting under exact tiles.
+        // On a giant map a whole-page seed visits every object before a local view can appear.
+        // Bound that preparation to the view at half its detail scale; later pans seed their own
+        // uncovered area. Small pages retain the cheap whole-page fallback.
         var canRefine = prepareBucket is null && !options.IsExport && options.RequestRefinedFrame is not null;
         var page = new WorldBounds(0, 0, document.Canvas.Width, document.Canvas.Height);
         var fallbackBucket = canRefine ? NearestKeptBucket(layer, view, bucket, revisions, cache) : null;
+        if (canRefine && !HasKeptTiles(layer, view, bucket, revisions, cache)
+            && !StampImagesReady(layer, AlignedDetailView(view, worldSize), scale, options))
+        {
+            if (fallbackBucket is not { } kept || !TryDrawKeptTiles(canvas, layer, view, kept, revisions, cache, options))
+                DrawOverviewObjects(canvas, document, layer, view, options, fallbackScale: Math.Min(.02, options.ViewScale));
+            if (options.Stats is { } pending) pending.DetailTilesPending++;
+            options.RequestRefinedFrame?.Invoke();
+            return;
+        }
         if (canRefine && fallbackBucket is null)
         {
             var overviewBucket = (int)Math.Floor(Math.Log2(512d / Math.Max(document.Canvas.Width, document.Canvas.Height)) * 4);
+            var preparationView = page;
+            if (overviewBucket < bucket - 8)
+            {
+                overviewBucket = bucket - 4;
+                preparationView = view;
+            }
             if (overviewBucket < bucket)
             {
-                DrawDetailedStampTiles(canvas, document, layer, page, options, overviewBucket);
+                var preparationScale = Math.Pow(2, overviewBucket / 4d);
+                if (!StampImagesReady(layer, AlignedDetailView(preparationView, 512 / preparationScale), preparationScale, options))
+                {
+                    DrawOverviewObjects(canvas, document, layer, view, options, fallbackScale: Math.Min(.02, options.ViewScale));
+                    if (options.Stats is { } pending) pending.DetailTilesPending++;
+                    options.RequestRefinedFrame?.Invoke();
+                    return;
+                }
+                DrawDetailedStampTiles(canvas, document, layer, preparationView, options, overviewBucket);
                 fallbackBucket = overviewBucket;
             }
         }
@@ -3515,6 +3559,10 @@ public static partial class SceneRenderer
 
     /// <summary>Milliseconds of exact object tiles one settled frame builds before deferring the rest.</summary>
     private const double DetailBudgetMilliseconds = 24;
+
+    private static WorldBounds AlignedDetailView(WorldBounds view, double tileSize) => new(
+        Math.Floor(view.Left / tileSize) * tileSize, Math.Floor(view.Top / tileSize) * tileSize,
+        (Math.Floor(view.Right / tileSize) + 1) * tileSize, (Math.Floor(view.Bottom / tileSize) + 1) * tileSize);
 
     /// <summary>Whether a tile's stamps can be drawn without decoding on this thread (see <see cref="IStampImageSource.PrepareForPixelSizes"/>).</summary>
     private static bool StampImagesReady(ObjectLayer layer, WorldBounds bounds, double scale, RenderOptions options) =>
@@ -5670,20 +5718,26 @@ public static partial class SceneRenderer
         MapDocument document,
         ObjectLayer layer,
         WorldBounds view,
-        RenderOptions options)
+        RenderOptions options, double? fallbackScale = null)
     {
         var cache = options.ObjectCache!;
         var plan = OverviewPlans.GetValue(layer, static current => new ObjectOverviewPlan(current));
+        // A document may retain references after objects were removed. Preparing their colors
+        // can decode a whole library while this layer contains only a few stamps.
+        var assets = document.Assets.Where(asset => plan.UsesAsset(asset.Sha256)).ToArray();
+        if (options.RequestRefinedFrame is { } ready && options.Stamps is { } source
+            && !source.PrepareOverview(assets.Select(asset => asset.Sha256), ready)
+            && options.Stats is { } pendingStats) pendingStats.DetailTilesPending++;
         var colors = new Dictionary<string, SKColor>(StringComparer.Ordinal);
         var colorSignature = new HashCode();
-        foreach (var asset in document.Assets)
+        foreach (var asset in assets)
         {
             if (options.Stamps?.TryGetOverviewColor(asset.Sha256) is not { } color) continue;
             colors[asset.Sha256] = color;
             colorSignature.Add(asset.Sha256); colorSignature.Add(color);
         }
         var tintRevision = colorSignature.ToHashCode();
-        var zoomBucket = OverviewZoomBucket(options.ViewScale);
+        var zoomBucket = OverviewZoomBucket(fallbackScale ?? options.ViewScale);
         var bucketScale = Math.Pow(2, zoomBucket / 4.0);
         var minX = (int)Math.Floor(view.Left / OverviewChunkSize);
         var maxX = (int)Math.Floor(view.Right / OverviewChunkSize);
@@ -5824,7 +5878,10 @@ public static partial class SceneRenderer
     private sealed class ObjectOverviewPlan
     {
         private readonly ImmutableDictionary<(int X, int Y), OverviewChunk> _chunks;
+        private readonly ImmutableDictionary<string, int> _assetCounts;
         private readonly bool _compacted;
+
+        public bool UsesAsset(string sha) => _assetCounts.ContainsKey(sha);
 
         public ObjectOverviewPlan(ObjectLayer layer)
         {
@@ -5833,9 +5890,12 @@ public static partial class SceneRenderer
                 var previous = OverviewPlans.GetValue(delta.Source, static l => new(l));
                 _compacted = previous._compacted || delta.OrderCompacted;
                 var chunks = previous._chunks.ToBuilder();
+                var assetCounts = previous._assetCounts.ToBuilder();
                 var changes = new Dictionary<(int, int), (List<ObjectId> Remove, List<(long, SceneObject)> Add)>();
-                foreach (var index in delta.Removed) Collect(delta.Source.Objects[index], index, false);
-                foreach (var index in delta.Added) Collect(layer.Objects[index], index, true);
+                foreach (var index in delta.Removed)
+                { CountAsset(assetCounts, delta.Source.Objects[index], -1); Collect(delta.Source.Objects[index], index, false); }
+                foreach (var index in delta.Added)
+                { CountAsset(assetCounts, layer.Objects[index], 1); Collect(layer.Objects[index], index, true); }
                 foreach (var (key, change) in changes)
                 {
                     var objects = chunks.TryGetValue(key, out var oldChunk)
@@ -5849,6 +5909,7 @@ public static partial class SceneRenderer
                     else chunks[key] = new OverviewChunk(key.Item1, key.Item2, objects.ToImmutable());
                 }
                 _chunks = chunks.ToImmutable();
+                _assetCounts = assetCounts.ToImmutable();
 
                 void Collect(SceneObject item, int index, bool add)
                 {
@@ -5862,17 +5923,29 @@ public static partial class SceneRenderer
             else
             {
                 var chunks = new Dictionary<(int, int), ImmutableDictionary<ObjectId, (long Order, SceneObject Item)>.Builder>();
+                var assetCounts = ImmutableDictionary.CreateBuilder<string, int>(StringComparer.Ordinal);
                 for (var index = 0; index < layer.Objects.Count; index++)
                 {
                     var item = layer.Objects[index];
                     if (!item.Visible) continue;
+                    CountAsset(assetCounts, item, 1);
                     var key = KeyOf(item);
                     if (!chunks.TryGetValue(key, out var objects)) chunks[key] = objects = ImmutableDictionary.CreateBuilder<ObjectId, (long Order, SceneObject Item)>();
                     objects.Add(item.Id, (index, item));
                 }
                 _chunks = chunks.ToImmutableDictionary(p => p.Key,
                     p => new OverviewChunk(p.Key.Item1, p.Key.Item2, p.Value.ToImmutable()));
+                _assetCounts = assetCounts.ToImmutable();
             }
+        }
+
+        private static void CountAsset(ImmutableDictionary<string, int>.Builder counts, SceneObject item, int delta)
+        {
+            if (!item.Visible || item.Stamp is not { } stamp) return;
+            counts.TryGetValue(stamp.AssetSha256, out var previous);
+            var count = previous + delta;
+            if (count == 0) counts.Remove(stamp.AssetSha256);
+            else counts[stamp.AssetSha256] = count;
         }
 
         private static (int, int) KeyOf(SceneObject item) =>

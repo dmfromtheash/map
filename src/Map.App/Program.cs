@@ -20,6 +20,7 @@ internal static class Program
             ? AppPaths.ResolveTestProfileRoot(testProfileRoot)
             : AppPaths.Root;
         var log = new DiagnosticsLog(Path.Combine(profileRoot, "Diagnostics"));
+        Map.Presentation.ViewModels.EditorViewModel.DerivedAssetCacheRoot = Path.Combine(profileRoot, "cache", "derived");
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
             log.Error("Unhandled exception", e.ExceptionObject as Exception);
 

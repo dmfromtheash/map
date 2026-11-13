@@ -11,13 +11,69 @@ namespace Map.Presentation.Services;
 /// </summary>
 public sealed class CatalogStampImageSource(
     AssetCatalog catalog, Func<MapDocument> document, Func<string?> projectPath, int imageCapacity = 4096,
-    long cacheBytes = 512L * 1024 * 1024, bool retainSamples = true) : IStampImageSource, IDisposable
+    long cacheBytes = 512L * 1024 * 1024, bool retainSamples = true, string? derivedRoot = null) : IStampImageSource, IDisposable
 {
+    private readonly StampDerivedAssetStore? _derived = derivedRoot is null ? null : new(catalog, derivedRoot);
+    private int _overviewNotification;
+    private int _previewNotification;
+    private readonly HashSet<string> _derivedNotifications = new(StringComparer.OrdinalIgnoreCase);
+    private Action? _derivedReady;
+    private readonly HashSet<(string Sha, int Level)> _wantedMips = [];
+    private long _sourceRevision;
+    public long SourceRevision => Interlocked.Read(ref _sourceRevision);
+    public (long DiskHits, long Builds, long DiskBytes, long DiskEvictions, int MetadataEntries, int PendingMips, long DiscardedMips) DerivedStatistics
+        => (_derived?.DiskHits ?? 0, _derived?.Builds ?? 0, _derived?.DiskBytes ?? 0,
+            _derived?.DiskEvictions ?? 0, _derived?.MetadataEntries ?? 0, _derived?.PendingMips ?? 0, _derived?.DiscardedMips ?? 0);
+
+    public bool PrepareOverview(IEnumerable<string> assets, Action ready)
+    {
+        if (_derived is null) return true;
+        _derived.SourceChanged = ready;
+        string[] shas;
+        lock (_gate) shas = assets.Where(sha => !_overviewColors.ContainsKey(sha)).ToArray();
+        if (shas.Length == 0) return true;
+        var generation = _derived.Generation;
+        var tasks = shas.Select(_derived.Request).ToArray();
+        var pending = tasks.Where(task => !task.IsCompleted).ToArray();
+        if (pending.Length == 0)
+        {
+            RememberOverview(tasks, generation);
+            return true;
+        }
+        var previews = shas.Select(_derived.Preview).Where(task => !task.IsCompleted).ToArray();
+        if (previews.Length > 0 && Interlocked.CompareExchange(ref _previewNotification, 1, 0) == 0)
+            _ = Task.WhenAll(previews).ContinueWith(_ =>
+            {
+                Interlocked.Exchange(ref _previewNotification, 0);
+                if (!_disposed) ready();
+            }, TaskScheduler.Default);
+        if (Interlocked.CompareExchange(ref _overviewNotification, 1, 0) == 0)
+            _ = Task.WhenAll(tasks).ContinueWith(_ =>
+            {
+                RememberOverview(tasks, generation);
+                Interlocked.Exchange(ref _overviewNotification, 0);
+                if (!_disposed) ready();
+            }, TaskScheduler.Default);
+        return false;
+    }
+
+    private void RememberOverview(IEnumerable<Task<StampDerivedAssetStore.Header?>> tasks, long generation)
+    {
+        lock (_gate)
+        {
+            if (_disposed || _derived?.Generation != generation) return;
+            // Compact colors belong to this document's assets, independent of the bounded
+            // heavy metadata/task cache. An overview with >8192 assets must still converge.
+            foreach (var task in tasks)
+                if (task.IsCompletedSuccessfully && task.Result is { } header)
+                    _overviewColors[header.Sha] = new SKColor(header.Color);
+        }
+    }
     // Large owner art keeps its master plus a ladder of halved steps; the budget holds the
     // working steps of a whole set and the masters of the few objects a close view shows.
     // Many distinct small stamps must fit as well as a few large masters. The byte budget,
     // not a 64-image thumbnail limit, bounds their memory. Ladder steps count as entries too.
-    private readonly AssetImageCache _cache = new(imageCapacity, retainSamples ? cacheBytes * 3 / 4 : cacheBytes);
+    private readonly AssetImageCache _cache = new(imageCapacity, retainSamples || derivedRoot is not null ? cacheBytes * 3 / 4 : cacheBytes);
     // The total remains 512 MiB. Copies of the exact sampled pixels survive source churn;
     // neither the resampling algorithm nor the chosen detail level changes.
     private readonly AssetImageCache _samples = new(Math.Max(imageCapacity, 4096), Math.Max(1, cacheBytes / 4));
@@ -25,6 +81,20 @@ public sealed class CatalogStampImageSource(
     private readonly Dictionary<string, (int Width, int Height)> _workingDimensions = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, SKColor> _overviewColors = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _validatedThisFrame = new(StringComparer.OrdinalIgnoreCase);
+    // Opt-in native-probe timings; normal editor frames do not read the clock for these counters.
+    public bool MeasureTimings { get; set; }
+    private long _loadTicks, _sampleTicks, _overviewTicks, _adoptTicks, _loadCalls, _sampleCalls;
+    public (double LoadMs, double SampleMs, double OverviewMs, long LoadCalls, long SampleCalls, double AdoptMs) Timings
+    {
+        get
+        {
+            lock (_gate)
+            {
+                var ms = 1000d / System.Diagnostics.Stopwatch.Frequency;
+                return (_loadTicks * ms, _sampleTicks * ms, _overviewTicks * ms, _loadCalls, _sampleCalls, _adoptTicks * ms);
+            }
+        }
+    }
 
     public (int Entries, long ResidentBytes, long Hits, long Misses, long Evictions) CacheStatistics
     {
@@ -62,8 +132,10 @@ public sealed class CatalogStampImageSource(
     /// </summary>
     public void ForgetMissing()
     {
+        _derived?.Forget();
         lock (_gate)
         {
+            Interlocked.Increment(ref _sourceRevision);
             Enter();
             foreach (var key in _sampleDimensions.Keys)
                 for (var level = 0; level <= 15; level++) _samples.Remove(key + "#" + level);
@@ -73,6 +145,7 @@ public sealed class CatalogStampImageSource(
             _validatedThisFrame.Clear();
             _missingSteps.Clear();
             _decodeFailed.Clear();
+            _derivedNotifications.Clear();
             _resolved.Clear();
         }
     }
@@ -84,6 +157,16 @@ public sealed class CatalogStampImageSource(
             if (_disposed) return null;
             Enter();
             return WorkingImage(sha256);
+        }
+    }
+
+    public SKImage? TryGetImageForOcclusion(string sha256)
+    {
+        lock (_gate)
+        {
+            if (_disposed) return null;
+            Enter();
+            return _cache.Get(sha256 + "@1", null) ?? _cache.Get(sha256, null);
         }
     }
 
@@ -99,6 +182,10 @@ public sealed class CatalogStampImageSource(
         lock (_gate)
         {
             if (_disposed) return null;
+            if (_derived?.TryReady(sha256) is { } prepared) return (prepared.Width, prepared.Height);
+            if (_derived is not null && catalog.Find(sha256) is { } metadata
+                && AssetCatalog.DetailLadderDepth(metadata.Width, metadata.Height) == 0)
+                return (metadata.Width, metadata.Height);
             Enter(); ValidateRetained(sha256);
             if (retainSamples && _workingDimensions.TryGetValue(sha256, out var size)) return size;
             return WorkingImage(sha256) is { } image ? (image.Width, image.Height) : null;
@@ -107,15 +194,34 @@ public sealed class CatalogStampImageSource(
 
     public SKColor? TryGetOverviewColor(string sha256)
     {
+        if (_derived is not null && catalog.Find(sha256) is not null)
+        {
+            lock (_gate)
+            {
+                if (_disposed) return null;
+                if (_overviewColors.TryGetValue(sha256, out var known)) return known;
+                _derived.Request(sha256);
+                if (_derived.TryReady(sha256) is { } prepared)
+                    return _overviewColors[sha256] = new SKColor(prepared.Color);
+            }
+            // Pending is not missing: the catalog's existing thumbnail is the temporary tint.
+            // Until even that is ready, leave its points transparent, never paint the red error glyph.
+            return _derived.Request(sha256).IsCompleted ? null : _derived.TryPreview(sha256) ?? SKColors.Transparent;
+        }
         lock (_gate)
         {
-            if (_disposed) return null;
-            Enter(); ValidateRetained(sha256);
-            if (retainSamples && _overviewColors.TryGetValue(sha256, out var color)) return color;
-            if (WorkingImage(sha256) is not { } image) return null;
-            color = SceneRenderer.StampOverviewColor(image);
-            if (retainSamples) _overviewColors[sha256] = color;
-            return color;
+            var started = MeasureTimings ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
+            try
+            {
+                if (_disposed) return null;
+                Enter(); ValidateRetained(sha256);
+                if (retainSamples && _overviewColors.TryGetValue(sha256, out var color)) return color;
+                if (WorkingImage(sha256) is not { } image) return null;
+                color = SceneRenderer.StampOverviewColor(image);
+                if (retainSamples) _overviewColors[sha256] = color;
+                return color;
+            }
+            finally { if (started != 0) _overviewTicks += System.Diagnostics.Stopwatch.GetTimestamp() - started; }
         }
     }
 
@@ -175,13 +281,21 @@ public sealed class CatalogStampImageSource(
     /// </summary>
     private SKImage? Load(string key, string? path, byte[]? embedded, string? sha256, string? mediaType, string? extension)
     {
-        if (!_planning)
-            return embedded is not null ? _cache.GetEncoded(key, embedded, mediaType, extension)
-                : sha256 is not null ? _cache.GetVerified(key, path, sha256, mediaType, extension)
-                : _cache.Get(key, path);
-        if (_cache.Get(key, null) is { } held) return held;
-        if (_plan is null && _planFailed?.Contains(key) != true) _plan = new(key, path, embedded, sha256, mediaType, extension);
-        return null;
+        var started = MeasureTimings ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
+        try
+        {
+            if (!_planning)
+                return embedded is not null ? _cache.GetEncoded(key, embedded, mediaType, extension)
+                    : sha256 is not null ? _cache.GetVerified(key, path, sha256, mediaType, extension)
+                    : _cache.Get(key, path);
+            if (_cache.Get(key, null) is { } held) return held;
+            if (_plan is null && _planFailed?.Contains(key) != true) _plan = new(key, path, embedded, sha256, mediaType, extension);
+            return null;
+        }
+        finally
+        {
+            if (started != 0) { _loadTicks += System.Diagnostics.Stopwatch.GetTimestamp() - started; _loadCalls++; }
+        }
     }
 
     /// <summary>
@@ -202,6 +316,9 @@ public sealed class CatalogStampImageSource(
 
     private SKImage? ForPixelSize(string sha256, double width, double height)
     {
+        // Prepared raw pixels have already passed the worker's source-stamp and SHA checks.
+        // Do not reopen/stat the original merely to draw a resident derived sample.
+        if (_derived is not null && CachedSample(sha256, width, height) is { } prepared) return prepared;
         ValidateRetained(sha256);
         if (catalog.Find(sha256) is { } record && AssetCatalog.DetailLadderDepth(record.Width, record.Height) is > 0 and var depth)
         {
@@ -223,21 +340,29 @@ public sealed class CatalogStampImageSource(
         Math.Clamp((int)Math.Floor(Math.Log2(Math.Max(1, Math.Min(size.Width / Math.Max(1, width), size.Height / Math.Max(1, height))))), 0, 15);
 
     private SKImage? CachedSample(string key, double width, double height) =>
-        retainSamples && _sampleDimensions.TryGetValue(key, out var size)
+        (retainSamples || _derived is not null) && _sampleDimensions.TryGetValue(key, out var size)
             ? _samples.Get(key + "#" + SampleLevel(size, width, height), null) : null;
 
     private SKImage Sample(string key, SKImage original, double width, double height)
     {
-        var image = _cache.GetForPixelSize(key, width, height) ?? original;
-        if (!retainSamples) return image;
-        var size = (Width: original.Width, Height: original.Height);
-        _sampleDimensions[key] = size;
-        var level = SampleLevel(size, width, height);
-        // A memory-pressure fallback may return the original. Do not retain it under a mip key.
-        if (image.Width != Math.Max(1, size.Width >> level) || image.Height != Math.Max(1, size.Height >> level)
-            || (long)image.Width * image.Height * 4 > cacheBytes / 4) return image;
-        using var pixels = SKBitmap.FromImage(image);
-        return _samples.AdoptPixels(key + "#" + level, SKImage.FromBitmap(pixels)) ?? image;
+        var started = MeasureTimings ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
+        try
+        {
+            var image = _cache.GetForPixelSize(key, width, height) ?? original;
+            if (!retainSamples && _derived is null) return image;
+            var size = (Width: original.Width, Height: original.Height);
+            _sampleDimensions[key] = size;
+            var level = SampleLevel(size, width, height);
+            // A memory-pressure fallback may return the original. Do not retain it under a mip key.
+            if (image.Width != Math.Max(1, size.Width >> level) || image.Height != Math.Max(1, size.Height >> level)
+                || (long)image.Width * image.Height * 4 > cacheBytes / 4) return image;
+            using var pixels = SKBitmap.FromImage(image);
+            return _samples.AdoptPixels(key + "#" + level, SKImage.FromBitmap(pixels)) ?? image;
+        }
+        finally
+        {
+            if (started != 0) { _sampleTicks += System.Diagnostics.Stopwatch.GetTimestamp() - started; _sampleCalls++; }
+        }
     }
 
     /// <summary>
@@ -262,6 +387,22 @@ public sealed class CatalogStampImageSource(
             if (_disposed) return null;
             _frameThread = Environment.CurrentManagedThreadId;
             _validatedThisFrame.Clear();
+            _wantedMips.Clear();
+            if (_derived is not null)
+                foreach (var sha in _derived.TakeInvalidated()) InvalidateDerived(sha);
+            // Consume completed work even if the camera moved away from its request. Otherwise
+            // eight old completions can occupy every slot and starve the new view indefinitely.
+            if (_derived is not null)
+            {
+                var started = System.Diagnostics.Stopwatch.GetTimestamp();
+                foreach (var (sha, level) in _derived.ReadyMips)
+                {
+                    if (_derived.TryTakeMip(sha, level, out var mip)) AdoptDerivedMip(sha, level, mip);
+                    if (System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds >= 2)
+                    { if (_derived.ReadyMips.Any()) _derivedReady?.Invoke(); break; }
+                }
+                if (MeasureTimings) _adoptTicks += System.Diagnostics.Stopwatch.GetTimestamp() - started;
+            }
             return new FrameScope(this);
         }
     }
@@ -271,12 +412,27 @@ public sealed class CatalogStampImageSource(
         lock (_gate)
         {
             _frameThread = 0;
+            _derived?.CancelUnwantedMips(_wantedMips);
             if (_disposed) { DisposeIfUnused(); return; }
             _cache.DeferDisposal = false;
             _samples.DeferDisposal = false;
             _cache.DisposeRetired();
             _samples.DisposeRetired();
         }
+    }
+
+    private void InvalidateDerived(string sha)
+    {
+        Interlocked.Increment(ref _sourceRevision);
+        Enter();
+        _overviewColors.Remove(sha); _workingDimensions.Remove(sha); _resolved.Remove(sha);
+        foreach (var key in _sampleDimensions.Keys.Where(key => key.Equals(sha, StringComparison.OrdinalIgnoreCase)
+            || key.StartsWith(sha + "@", StringComparison.OrdinalIgnoreCase)).ToArray())
+        {
+            for (var level = 0; level <= 15; level++) { _samples.Remove(key + "#" + level); _decodeFailed.Remove(key + "#" + level); }
+            _sampleDimensions.Remove(key);
+        }
+        for (var level = 0; level <= 15; level++) _cache.Remove(level == 0 ? sha : sha + "@" + level);
     }
 
     private SKImage? LeaseGet(ImageLease lease, Func<SKImage?> resolve)
@@ -359,6 +515,7 @@ public sealed class CatalogStampImageSource(
 
     private sealed class ImageLease(CatalogStampImageSource source) : IStampImageLease
     {
+        public long SourceRevision => source.SourceRevision;
         internal readonly List<SKImage> Held = [];
         internal readonly HashSet<string> Failed = new(StringComparer.OrdinalIgnoreCase);
         internal bool Closed;
@@ -407,6 +564,8 @@ public sealed class CatalogStampImageSource(
 
     private bool PrepareLocked(IEnumerable<(string Sha256, double Width, double Height)> stamps, Action ready)
     {
+        _derivedReady = ready;
+        if (_derived is not null) _derived.SourceChanged = ready;
         AdoptDecoded();
         var resident = true;
         var seen = new HashSet<(string, int)>();
@@ -414,6 +573,35 @@ public sealed class CatalogStampImageSource(
         foreach (var (sha256, width, height) in stamps)
         {
             if (record?.Sha256 != sha256) record = catalog.Find(sha256);
+            if (_derived is not null && record is not null && AssetCatalog.DetailLadderDepth(record.Width, record.Height) == 0)
+            {
+                var headerTask = _derived.Request(sha256);
+                if (!headerTask.IsCompleted)
+                {
+                    resident = false; NotifyDerived(sha256, headerTask, ready); continue;
+                }
+                if (_derived.TryReady(sha256) is { } header)
+                {
+                    var sampleLevel = SampleLevel((header.Width, header.Height), width, height);
+                    if (sampleLevel >= header.FirstMip && sampleLevel < header.FirstMip + header.MipCount)
+                    {
+                        var sampleKey = sha256 + "#" + sampleLevel;
+                        _wantedMips.Add((header.Sha.ToLowerInvariant(), sampleLevel));
+                        if (!seen.Add((sha256, sampleLevel))) continue;
+                        _sampleDimensions[sha256] = (header.Width, header.Height);
+                        _workingDimensions[sha256] = (header.Width, header.Height);
+                        if (_samples.Contains(sampleKey) || _decodeFailed.Contains(sampleKey)) continue;
+                        if (_derived.TryTakeMip(sha256, sampleLevel, out var mip))
+                        {
+                            AdoptDerivedMip(sha256, sampleLevel, mip);
+                            if (mip is not { Cancelled: true }) continue;
+                        }
+                        resident = false;
+                        NotifyDerived(sampleKey, _derived.RequestMip(header, sampleLevel), ready);
+                        continue;
+                    }
+                }
+            }
             if (record is null || AssetCatalog.DetailLadderDepth(record.Width, record.Height) is not (> 0 and var depth)) continue;
             var ratio = Math.Min(record.Width / Math.Max(1, width), record.Height / Math.Max(1, height));
             var level = Math.Min(depth, (int)Math.Floor(Math.Log2(Math.Max(1, ratio))));
@@ -435,6 +623,30 @@ public sealed class CatalogStampImageSource(
             else { _missingSteps.Add(key); resident = true; }
         }
         return resident;
+    }
+
+    private void NotifyDerived(string key, Task task, Action ready)
+    {
+        if (!_derivedNotifications.Add(key)) return;
+        _ = task.ContinueWith(_ =>
+        {
+            lock (_gate) _derivedNotifications.Remove(key);
+            if (!_disposed) ready();
+        }, TaskScheduler.Default);
+    }
+
+    private void AdoptDerivedMip(string sha, int level, StampDerivedAssetStore.Mip? mip)
+    {
+        var key = sha + "#" + level;
+        if (mip?.Pixels is { } pixels && _sampleDimensions.ContainsKey(sha))
+        {
+            using var bitmap = new SKBitmap(new SKImageInfo(mip.Width, mip.Height, SKColorType.Rgba8888, SKAlphaType.Premul));
+            System.Runtime.InteropServices.Marshal.Copy(pixels, 0, bitmap.GetPixels(), pixels.Length);
+            bitmap.SetImmutable();
+            _samples.AdoptPixels(key, SKImage.FromBitmap(bitmap));
+        }
+        else if (mip is not { Cancelled: true }) _decodeFailed.Add(key);
+        _derivedNotifications.Remove(key);
     }
 
     private void StartDecode(string key, string path, string? sha256, string? mediaType, string? extension, Action ready)
@@ -524,6 +736,7 @@ public sealed class CatalogStampImageSource(
         lock (_gate)
         {
             _disposed = true;
+            _derived?.Dispose();
             DisposeIfUnused();
         }
     }

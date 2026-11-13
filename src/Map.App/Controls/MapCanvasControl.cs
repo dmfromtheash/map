@@ -29,6 +29,17 @@ public sealed partial class MapCanvasControl : Control
     private Point? _lastPointer;
     private long _sceneRevision;
     private long _completedSceneRevision;
+    private int _refinementQueued;
+
+    private void QueueRefinedFrame()
+    {
+        if (System.Threading.Interlocked.Exchange(ref _refinementQueued, 1) != 0) return;
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            System.Threading.Interlocked.Exchange(ref _refinementQueued, 0);
+            if (TopLevel.GetTopLevel(this) is not null) QueueVisualInvalidation();
+        }, Avalonia.Threading.DispatcherPriority.Render);
+    }
 
     /// <summary>A diagnostic frame request tied to the input that just changed this canvas.</summary>
     public long RequestFrameForSmoke()
@@ -88,6 +99,7 @@ public sealed partial class MapCanvasControl : Control
         public object Gate { get; } = new();
         private long _disposedObjectImages;
         private readonly System.Collections.Generic.Dictionary<int, HexChunkCache> _hexChunks = [];
+        private readonly System.Collections.Generic.Dictionary<int, (IStampImageSource? Source, long Revision)> _sourceVersions = [];
 
         /// <summary>Kept hex chunk pictures of the current render thread.</summary>
         public HexChunkCache Hex()
@@ -97,9 +109,17 @@ public sealed partial class MapCanvasControl : Control
             return cache;
         }
         private readonly System.Collections.Generic.Dictionary<int, (TileImageCache Tiles, ObjectOverviewCache Objects, CarvedLandCache Land, RenderImageCache Styled, RenderImageCache Terrain, ObjectOverviewCache Atlases, TerrainRefinement Refinement, StrokePreviewCache Preview, LayerImageCache Layers)> _contexts = [];
-        public (TileImageCache Tiles, ObjectOverviewCache Objects, CarvedLandCache Land, RenderImageCache Styled, RenderImageCache Terrain, ObjectOverviewCache Atlases, TerrainRefinement Refinement, StrokePreviewCache Preview, LayerImageCache Layers) Current()
+        public (TileImageCache Tiles, ObjectOverviewCache Objects, CarvedLandCache Land, RenderImageCache Styled, RenderImageCache Terrain, ObjectOverviewCache Atlases, TerrainRefinement Refinement, StrokePreviewCache Preview, LayerImageCache Layers) Current(IStampImageSource? source)
         {
             var thread = Environment.CurrentManagedThreadId;
+            var version = (source, source?.SourceRevision ?? 0);
+            if (_sourceVersions.TryGetValue(thread, out var previous) && previous != version && _contexts.Remove(thread, out var stale))
+            {
+                stale.Refinement.Dispose(); stale.Tiles.Dispose(); stale.Objects.Dispose(); stale.Land.Dispose();
+                stale.Styled.Dispose(); stale.Terrain.Dispose(); stale.Atlases.Dispose(); stale.Preview.Dispose(); stale.Layers.Dispose();
+                _disposedObjectImages += stale.Objects.Disposals;
+            }
+            _sourceVersions[thread] = version;
             if (!_contexts.TryGetValue(thread, out var context))
                 // Eight finished land pieces and six whole terrains, each a view-sized half-float
                 // image (about 10 MiB at 1440×900): enough that returning to a recent view, the
@@ -136,6 +156,7 @@ public sealed partial class MapCanvasControl : Control
                     _disposedObjectImages += context.Objects.Disposals;
                 }
                 _contexts.Clear();
+                _sourceVersions.Clear();
             }
         }
     }
@@ -264,7 +285,7 @@ public sealed partial class MapCanvasControl : Control
     public long LastFrameTerrainHits { get; private set; }
     public long LastFrameTerrainMisses { get; private set; }
     public bool LastFrameHadGpuContext { get; private set; }
-    public string LastStyledLandMiss { get { lock (_renderResources.Gate) { var current = _renderResources.Current(); return "terrain: " + current.Terrain.LastMiss + "; land: " + current.Styled.LastMiss; } } }
+    public string LastStyledLandMiss { get { lock (_renderResources.Gate) { var current = _renderResources.Current(_editor?.StampImages); return "terrain: " + current.Terrain.LastMiss + "; land: " + current.Styled.LastMiss; } } }
     public long FramesRendered => System.Threading.Interlocked.Read(ref _framesRendered);
     private long _framesRendered;
     public Map.Core.Documents.MapDocument? LastRenderedDocument { get; private set; }
@@ -599,10 +620,7 @@ public sealed partial class MapCanvasControl : Control
             // the land and the water exactly as the idle frame draws them.
             _input is { ActiveGesture: CanvasInputGesture.Pan } || CameraMoving
                 || _editor.IsDraggingRiver || _editor.IsDraggingRoad,
-            () => Avalonia.Threading.Dispatcher.UIThread.Post(() =>
-            {
-                if (TopLevel.GetTopLevel(this) is not null) QueueVisualInvalidation();
-            }, Avalonia.Threading.DispatcherPriority.Render),
+            QueueRefinedFrame,
             (surface, canvas) => CompleteGpuCapture(surface, canvas, sceneRevision),
             ShowFpsBadge ? DrawFpsBadge : null,
             (tier, elapsedMilliseconds, document, fastTerrain, styledHits, styledMisses, terrainHits, terrainMisses, gpu) =>
@@ -749,9 +767,9 @@ public sealed partial class MapCanvasControl : Control
 
         private void RenderFrame(ISkiaSharpApiLeaseFeature feature)
         {
-            var (tileCache, objectCache, carvedLandCache, styledLandCache, terrainCache, atlasCache, refinement, previewCache, layerImages) = resources.Current();
             // Pictures other threads push out of the stamp cache while this frame draws are freed after it.
             using var stampFrame = editor.StampImages?.BeginFrame();
+            var (tileCache, objectCache, carvedLandCache, styledLandCache, terrainCache, atlasCache, refinement, previewCache, layerImages) = resources.Current(editor.StampImages);
             tileCache.BeginFrame();
             var overviewFrame = false;
             try

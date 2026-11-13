@@ -1320,6 +1320,14 @@ public sealed partial class AssetCatalog : IAsyncDisposable
         return new AssetResolution(payload.Status, payload.Path);
     }
 
+    /// <summary>Metadata-only path routing. This is not verification; reads still use ReadVerified.</summary>
+    public string? SourcePath(AssetRecord record)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        if (_snapshot.MountForRecord(record.Sha256) is { } mount) return mount.SourcePath(record);
+        return record.StoredRelativePath is { } stored ? ResolveCatalogRelative(stored, "originals") : record.LinkedPath;
+    }
+
     /// <summary>
     /// Reads one bounded original and verifies the SHA-256 of those exact bytes. Callers that
     /// embed or decode content must use the returned payload instead of reopening its mutable path.
