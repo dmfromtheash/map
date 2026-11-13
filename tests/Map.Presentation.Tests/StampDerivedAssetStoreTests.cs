@@ -71,6 +71,7 @@ public sealed class StampDerivedAssetStoreTests : IDisposable
     [InlineData("json")]
     [InlineData("pixels")]
     [InlineData("missing-pixels")]
+    [InlineData("garbage-pixels")]
     public async Task Interrupted_cache_pair_is_rebuilt_from_verified_owner_bytes(string damage)
     {
         await using var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));
@@ -81,7 +82,13 @@ public sealed class StampDerivedAssetStoreTests : IDisposable
         var expected = initial.ReadMip(header, header.FirstMip, out _, out _);
         initial.Dispose(); await initial.Completion;
         var stem = Path.Combine(root, "v1", record.Sha256.ToLowerInvariant());
-        if (damage == "missing-pixels") File.Delete(stem + ".pixels");
+        if (damage == "garbage-pixels")
+        {
+            var garbage = new byte[new FileInfo(stem + ".pixels").Length];
+            new Random(13013).NextBytes(garbage);
+            File.WriteAllBytes(stem + ".pixels", garbage);
+        }
+        else if (damage == "missing-pixels") File.Delete(stem + ".pixels");
         else File.WriteAllBytes(stem + "." + damage, [0, 1, 2]);
         var reopened = new StampDerivedAssetStore(catalog, root);
         try
@@ -235,6 +242,211 @@ public sealed class StampDerivedAssetStoreTests : IDisposable
         var fixture = new DirectoryInfo(AppContext.BaseDirectory);
         while (fixture is not null && !File.Exists(Path.Combine(fixture.FullName, "Map.slnx"))) fixture = fixture.Parent;
         return catalog.Import(Path.Combine(fixture!.FullName, "tests", "fixtures", "assets", $"owner-mountain-{number:00}.png"), new(), DateTimeOffset.UnixEpoch);
+    }
+
+    [Fact]
+    public async Task Every_owner_zoom_is_prepared_off_frame_with_exact_pixels_and_no_sync_load_or_sample()
+    {
+        await using var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));
+        var records = Enumerable.Range(1, 6).Select(n => ImportOwner(catalog, n)).ToArray();
+        var document = new MapDocument(DocumentId.New(), "All levels", DateTimeOffset.UnixEpoch,
+            new CanvasDefinition(512, 512, "px", "#FFFFFFFF"),
+            [new BaseColorLayer(LayerId.New(), "Page", true, false, 1, "#FFFFFFFF")]);
+        using var source = new CatalogStampImageSource(catalog, () => document, () => null,
+            derivedRoot: Path.Combine(_root, "derived")) { MeasureTimings = true };
+        using var baseline = new CatalogStampImageSource(catalog, () => document, () => null);
+        foreach (var pixels in new[] { 16d, 64d, 256d, 512d, 4096d, 64d, 4096d })
+        {
+            var ready = false;
+            var deadline = DateTime.UtcNow.AddSeconds(30);
+            while (!ready && DateTime.UtcNow < deadline)
+            {
+                using (source.BeginFrame())
+                    ready = source.PrepareForPixelSizes(records.Select(r => (r.Sha256, pixels, pixels)), () => { });
+                if (!ready) await Task.Delay(10);
+            }
+            Assert.True(ready);
+            using (source.BeginFrame())
+                foreach (var record in records)
+                {
+                    using var actual = SKBitmap.FromImage(source.TryGetImageForPixelSize(record.Sha256, pixels, pixels)!);
+                    using var expected = SKBitmap.FromImage(baseline.TryGetImageForPixelSize(record.Sha256, pixels, pixels)!);
+                    Assert.Equal(expected.Width, actual.Width); Assert.Equal(expected.Height, actual.Height);
+                    Assert.Equal(expected.Bytes, actual.Bytes);
+                }
+        }
+        Assert.Equal(0, source.Timings.LoadCalls);
+        Assert.Equal(0, source.Timings.SampleCalls);
+        Assert.InRange(source.CacheStatistics.ResidentBytes, 1, 512L * 1024 * 1024);
+    }
+
+    [Fact]
+    public async Task Missing_asset_does_not_hide_another_pending_request()
+    {
+        await using var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));
+        var record = ImportOwner(catalog, 1);
+        var document = new MapDocument(DocumentId.New(), "Pending", DateTimeOffset.UnixEpoch,
+            new CanvasDefinition(512, 512, "px", "#FFFFFFFF"),
+            [new BaseColorLayer(LayerId.New(), "Page", true, false, 1, "#FFFFFFFF")]);
+        await using var source = new CatalogStampImageSource(catalog, () => document, () => null,
+            derivedRoot: Path.Combine(_root, "derived"));
+        using (source.BeginFrame())
+            Assert.False(source.PrepareForPixelSizes([(record.Sha256, 4096d, 4096d), (new string('f', 64), 4096d, 4096d)], () => { }));
+    }
+
+    [Fact]
+    public async Task A_pending_zoom_uses_resident_pixels_without_requesting_a_working_original()
+    {
+        await using var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));
+        var record = ImportOwner(catalog, 1);
+        var document = new MapDocument(DocumentId.New(), "Resident fallback", DateTimeOffset.UnixEpoch,
+            new CanvasDefinition(512, 512, "px", "#FFFFFFFF"),
+            [new BaseColorLayer(LayerId.New(), "Page", true, false, 1, "#FFFFFFFF")]);
+        await using var source = new CatalogStampImageSource(catalog, () => document, () => null,
+            derivedRoot: Path.Combine(_root, "derived")) { MeasureTimings = true };
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        var ready = false;
+        while (!ready && DateTime.UtcNow < deadline)
+        {
+            using (source.BeginFrame()) ready = source.PrepareForPixelSizes([(record.Sha256, 16d, 16d)], () => { });
+            if (!ready) await Task.Delay(10);
+        }
+        Assert.True(ready);
+        using (source.BeginFrame())
+        {
+            var small = source.TryGetImageForPixelSize(record.Sha256, 16, 16);
+            Assert.NotNull(small);
+            Assert.Null(source.TryGetImageForPixelSize(record.Sha256, 64, 64));
+            var pending = source.DerivedStatistics.PendingMips;
+            Assert.Equal(1, pending);
+            Assert.Same(small, source.TryGetReadyImageForPixelSize(record.Sha256, 64, 64));
+            Assert.Equal(pending, source.DerivedStatistics.PendingMips);
+            Assert.True(source.ImageRequestsPending);
+        }
+        Assert.Equal(0, source.Timings.LoadCalls);
+        Assert.Equal(0, source.SourceRevision);
+        using (source.BeginFrame()) { } // Camera left that requested size.
+        Assert.False(source.ImageRequestsPending);
+        source.ForgetMissing();
+        Assert.False(source.ImageRequestsPending);
+    }
+
+    [Fact]
+    public async Task Unwritable_cache_keeps_exact_colors_and_pixels_in_memory_and_queue_continues()
+    {
+        await using var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));
+        var records = Enumerable.Range(1, 6).Select(n => ImportOwner(catalog, n)).ToArray();
+        var blocked = Path.Combine(_root, "blocked");
+        File.WriteAllText(blocked, "A file, not a writable cache directory");
+        var store = new StampDerivedAssetStore(catalog, blocked);
+        try
+        {
+            foreach (var record in records.Concat(records))
+            {
+                var header = await store.Request(record.Sha256).WaitAsync(TimeSpan.FromSeconds(30));
+                Assert.NotNull(header);
+                var mip = await store.RequestMip(header, header.FirstMip).WaitAsync(TimeSpan.FromSeconds(30));
+                Assert.True(store.TryTakeMip(record.Sha256, header.FirstMip, out _));
+                Assert.NotNull(mip.Pixels);
+                using var expected = new AssetImageCache();
+                var original = expected.GetVerified(record.Sha256, catalog.SourcePath(record), record.Sha256)!;
+                Assert.Equal(SceneRenderer.StampOverviewColor(original), new SKColor(header.Color));
+                using var pixels = SKBitmap.FromImage(expected.GetForPixelSize(record.Sha256,
+                    original.Width / Math.Pow(2, header.FirstMip), original.Height / Math.Pow(2, header.FirstMip))!);
+                using var rgba = new SKBitmap(new SKImageInfo(pixels.Width, pixels.Height, SKColorType.Rgba8888, SKAlphaType.Premul));
+                using var image = SKImage.FromBitmap(pixels);
+                Assert.True(image.ReadPixels(rgba.Info, rgba.GetPixels(), rgba.RowBytes, 0, 0));
+                Assert.Equal(rgba.Bytes, mip.Pixels);
+            }
+            Assert.True(store.Failures >= 6);
+            Assert.Equal(0, store.PendingMips);
+        }
+        finally { store.Dispose(); await store.Completion; }
+    }
+
+    [Fact]
+    public async Task Existing_ladder_keeps_its_own_pixels_at_odd_dimensions_and_missing_step_falls_back()
+    {
+        await using var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));
+        var owner = ImportOwner(catalog, 1);
+        // Only the owner's mountain, resized in the disposable fixture to exercise ladder
+        // selection and odd rounding. The repository fixture is never modified.
+        using var original = SKBitmap.Decode(catalog.SourcePath(owner));
+        using var large = original.Resize(new SKImageInfo(2051, 1027), new SKSamplingOptions(SKFilterMode.Linear));
+        var path = Path.Combine(_root, "owner-large.png");
+        using (var png = large.Encode(SKEncodedImageFormat.Png, 100))
+        using (var file = File.Create(path)) png.SaveTo(file);
+        var record = catalog.Import(path, new(), DateTimeOffset.UnixEpoch);
+        Assert.True(AssetCatalog.DetailLadderDepth(record.Width, record.Height) > 0);
+        var document = new MapDocument(DocumentId.New(), "Ladder", DateTimeOffset.UnixEpoch,
+            new CanvasDefinition(512, 512, "px", "#FFFFFFFF"),
+            [new BaseColorLayer(LayerId.New(), "Page", true, false, 1, "#FFFFFFFF")]);
+        foreach (var missing in new[] { false, true })
+        {
+            if (missing && catalog.TryDetailLevelPath(record, 2, out var step)) File.Delete(step);
+            using var source = new CatalogStampImageSource(catalog, () => document, () => null,
+                derivedRoot: Path.Combine(_root, "derived")) { MeasureTimings = true };
+            using var baseline = new CatalogStampImageSource(catalog, () => document, () => null);
+            foreach (var size in new[] { 4096d, 800d, 400d, 200d, 16d, 800d, 400d })
+            {
+                var ready = false;
+                var deadline = DateTime.UtcNow.AddSeconds(30);
+                while (!ready && DateTime.UtcNow < deadline)
+                {
+                    using (source.BeginFrame()) ready = source.PrepareForPixelSizes([(record.Sha256, size, size / 2)], () => { });
+                    if (!ready) await Task.Delay(10);
+                }
+                Assert.True(ready);
+                using (source.BeginFrame())
+                {
+                    using var expected = SKBitmap.FromImage(baseline.TryGetImageForPixelSize(record.Sha256, size, size / 2)!);
+                    using var actual = SKBitmap.FromImage(source.TryGetImageForPixelSize(record.Sha256, size, size / 2)!);
+                    Assert.Equal(expected.Width, actual.Width); Assert.Equal(expected.Height, actual.Height);
+                    Assert.Equal(expected.Bytes, actual.Bytes);
+                }
+            }
+            if (missing)
+            {
+                var revision = source.SourceRevision;
+                AssetCatalog.BuildDetailLadder(catalog.ReadVerified(record).Content!,
+                    Path.Combine(catalog.RootFor(record), "ladder", record.Sha256.ToLowerInvariant()));
+                var deadline = DateTime.UtcNow.AddSeconds(10);
+                while (source.SourceRevision == revision && DateTime.UtcNow < deadline)
+                { using (source.BeginFrame()) { } await Task.Delay(10); }
+                Assert.True(source.SourceRevision > revision);
+                var ready = false;
+                while (!ready && DateTime.UtcNow < deadline)
+                {
+                    using (source.BeginFrame()) ready = source.PrepareForPixelSizes([(record.Sha256, 400d, 200d)], () => { });
+                    if (!ready) await Task.Delay(10);
+                }
+                Assert.True(ready);
+                using var refreshed = new CatalogStampImageSource(catalog, () => document, () => null);
+                using (source.BeginFrame())
+                {
+                    using var expected = SKBitmap.FromImage(refreshed.TryGetImageForPixelSize(record.Sha256, 400, 200)!);
+                    using var actual = SKBitmap.FromImage(source.TryGetImageForPixelSize(record.Sha256, 400, 200)!);
+                    Assert.Equal(expected.Bytes, actual.Bytes);
+                }
+            }
+            Assert.Equal(0, source.Timings.LoadCalls); Assert.Equal(0, source.Timings.SampleCalls);
+        }
+    }
+
+    [Fact]
+    public async Task Temporary_source_read_failure_does_not_poison_the_queue_or_the_asset()
+    {
+        await using var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));
+        var first = ImportOwner(catalog, 1);
+        var second = ImportOwner(catalog, 2);
+        await using var store = new StampDerivedAssetStore(catalog, Path.Combine(_root, "derived"));
+        using (var locked = new FileStream(catalog.SourcePath(first)!, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            Assert.Null(await store.Request(first.Sha256).WaitAsync(TimeSpan.FromSeconds(10)));
+            Assert.NotNull(await store.Request(second.Sha256).WaitAsync(TimeSpan.FromSeconds(10)));
+        }
+        await Task.Delay(2100);
+        Assert.NotNull(await store.Request(first.Sha256).WaitAsync(TimeSpan.FromSeconds(10)));
     }
 
     public void Dispose()

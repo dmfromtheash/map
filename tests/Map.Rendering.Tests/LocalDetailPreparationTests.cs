@@ -9,6 +9,80 @@ public sealed class LocalDetailPreparationTests
     private static readonly string Near = new('a', 64);
     private static readonly string Far = new('b', 64);
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public void Overview_is_pending_until_its_exact_stamps_arrive_and_does_not_keep_a_partial_layer(bool lateRequest, bool masked)
+    {
+        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        while (root is not null && !File.Exists(Path.Combine(root.FullName, "Map.slnx"))) root = root.Parent;
+        using var bitmap = SKBitmap.Decode(Path.Combine(root!.FullName, "tests", "fixtures", "assets", "owner-mountain-01.png"));
+        using var image = SKImage.FromBitmap(bitmap);
+        using var small = bitmap.Resize(new SKImageInfo(8, 8), new SKSamplingOptions(SKFilterMode.Linear));
+        using var fallback = SKImage.FromBitmap(small);
+        var source = new DelayedExact(image, fallback) { LateRequest = lateRequest };
+        var stamp = new SceneObject(ObjectId.New(), SceneObjectKind.Stamp, "Owner mountain", 2048, 2048, 1024, 1024,
+            17, "#FFFFFFFF", "#00000000", 0, true, false) { Stamp = new StampStyle(Near) };
+        var document = new MapDocument(DocumentId.New(), "Overview exact arrival", DateTimeOffset.UnixEpoch,
+            new CanvasDefinition(8192, 8192, "px", "#FFFFFFFF"),
+            [new BaseColorLayer(LayerId.New(), "Page", true, false, 1, "#FFFFFFFF"),
+             new ObjectLayer(LayerId.New(), "Mountains", true, false, 1, [stamp])])
+            .WithAssets([new MapAssetReference(Near, Near, "image/png", "png", ProjectAssetStorage.Linked,
+                DateTimeOffset.UnixEpoch, "owner-fixture", "user-owned", catalogId: Near)]);
+        using var cache = new ObjectOverviewCache();
+        using var layers = new LayerImageCache();
+        using var referenceLayers = new LayerImageCache();
+        var requested = 0;
+        byte[] Draw(RenderStats stats, bool progressive)
+        {
+            using var surface = SKSurface.Create(new SKImageInfo(256, 256))!;
+            surface.Canvas.Scale(1f / 32);
+            cache.BeginFrame();
+            try
+            {
+                SceneRenderer.Render(surface.Canvas, document, new RenderOptions
+                {
+                    Stamps = source, ObjectCache = cache, LayerImages = progressive ? layers : referenceLayers,
+                    Stats = stats, ViewScale = 1d / 32, LodTier = RenderLodTier.Overview,
+                    MaskEditLayerId = masked ? document.Layers.OfType<ObjectLayer>().Single().Id : null,
+                    VisibleWorld = new(0, 0, 8192, 8192), RequestRefinedFrame = progressive ? () => requested++ : null,
+                });
+                using var snapshot = surface.Snapshot();
+                using var result = SKBitmap.FromImage(snapshot);
+                return result.Bytes;
+            }
+            finally { cache.EndFrame(); }
+        }
+        var pending = new RenderStats();
+        var partial = Draw(pending, true);
+        Assert.True(pending.DetailTilesPending > 0);
+        Assert.True(requested > 0);
+        Assert.Equal(0, layers.Count);
+        Assert.Contains(source.Requested, request => request.Sha256 == Near && request.Width == 32 && request.Height == 32);
+        source.Ready = true;
+        var complete = new RenderStats();
+        var actual = Draw(complete, true);
+        Assert.Equal(0, complete.DetailTilesPending);
+        Assert.Equal(Draw(new(), false), actual);
+        Assert.NotEqual(partial, actual);
+    }
+
+    private sealed class DelayedExact(SKImage image, SKImage fallback) : IStampImageSource
+    {
+        public bool Ready { get; set; }
+        public bool LateRequest { get; init; }
+        private bool _asked;
+        public bool ImageRequestsPending => LateRequest && _asked && !Ready;
+        public List<(string Sha256, double Width, double Height)> Requested { get; } = [];
+        public SKImage? TryGetImage(string sha256) { _asked = true; return Ready ? image : null; }
+        public SKImage? TryGetReadyImageForPixelSize(string sha256, double width, double height) => fallback;
+        public SKColor? TryGetOverviewColor(string sha256) => SceneRenderer.StampOverviewColor(image);
+        public bool PrepareForPixelSizes(IEnumerable<(string Sha256, double Width, double Height)> stamps, Action ready)
+        { Requested.AddRange(stamps); return Ready || LateRequest; }
+    }
+
     [Fact]
     public void Cold_fallback_prepares_only_used_references_and_tracks_append_delete_and_visibility()
     {

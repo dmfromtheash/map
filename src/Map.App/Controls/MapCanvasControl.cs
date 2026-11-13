@@ -59,6 +59,13 @@ public sealed partial class MapCanvasControl : Control
     private sealed record GpuCapture(long Revision, System.Threading.Tasks.TaskCompletionSource<SKBitmap> Completion);
     private GpuCapture? _gpuCapture;
 
+    /// <summary>Diagnostic: rebuild retained scene pixels without changing the document or camera.</summary>
+    public void ClearDerivedRenderCachesForSmoke()
+    {
+        lock (_renderResources.Gate) _renderResources.Dispose();
+        QueueVisualInvalidation();
+    }
+
     /// <summary>Reads this canvas from its own native GPU frame; no desktop capture or activation.</summary>
     public async System.Threading.Tasks.Task<SKBitmap> CaptureGpuFrameForSmokeAsync()
     {
@@ -214,6 +221,9 @@ public sealed partial class MapCanvasControl : Control
     /// <summary>Diagnostic: when MAP_MEASURE_GPU_FLUSH=1 the frame waits for its GPU work and records the wait.</summary>
     private static readonly bool MeasureGpuFlush = Environment.GetEnvironmentVariable("MAP_MEASURE_GPU_FLUSH") == "1";
     public static double LastFrameGpuFlushMilliseconds { get; private set; }
+    /// <summary>Canvas work including resource locking, image adoption and GPU completion;
+    /// excludes diagnostic screenshot readback and monitor scan-out.</summary>
+    public static double LastFrameWorkMilliseconds { get; private set; }
 
     public double LastPressureSample => _input?.LastPressureSample ?? 1;
 
@@ -762,12 +772,15 @@ public sealed partial class MapCanvasControl : Control
                 return;
             }
 
-            lock (resources.Gate) RenderFrame(feature);
+            var frameStarted = Stopwatch.GetTimestamp();
+            lock (resources.Gate) RenderFrame(feature, frameStarted);
         }
 
-        private void RenderFrame(ISkiaSharpApiLeaseFeature feature)
+        private void RenderFrame(ISkiaSharpApiLeaseFeature feature, long frameStarted)
         {
             // Pictures other threads push out of the stamp cache while this frame draws are freed after it.
+            if (editor.StampImages is Map.Presentation.Services.CatalogStampImageSource images)
+                images.SetFrameReady(requestRefinedFrame);
             using var stampFrame = editor.StampImages?.BeginFrame();
             var (tileCache, objectCache, carvedLandCache, styledLandCache, terrainCache, atlasCache, refinement, previewCache, layerImages) = resources.Current(editor.StampImages);
             tileCache.BeginFrame();
@@ -1036,6 +1049,7 @@ public sealed partial class MapCanvasControl : Control
             }
 
             canvas.Restore();
+            LastFrameWorkMilliseconds = Stopwatch.GetElapsedTime(frameStarted).TotalMilliseconds;
             if (lease.GrContext is not null && lease.SkSurface is { } nativeSurface) captureFrame(nativeSurface, canvas);
             // After the capture: the smokes compare map pixels, and the readout is not the map.
             drawBadge?.Invoke(canvas, (float)Bounds.Width, (float)Bounds.Height);

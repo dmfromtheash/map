@@ -84,6 +84,18 @@ public sealed partial class ZoomAssetsApplication
         scenario.OpenToExactTerrainMs = open.Elapsed.TotalMilliseconds;
         if (kind == "style") { _editor.ApplyStylePreset(MapStylePreset.WatercolorBigShapes); await Step(() => { }); }
         await MillionCapture(kind + "-fit"); Checkpoint();
+        if (System.Environment.GetEnvironmentVariable("MAP_PERF_CAPTURE_REBUILT") == "1")
+        {
+            _view.Canvas.ClearDerivedRenderCachesForSmoke();
+            await Step(() => { });
+            await Settled(scenario.Routes[^1]);
+            await MillionCapture(kind + "-fit-rebuilt"); Checkpoint();
+            _view.Canvas.ClearDerivedRenderCachesForSmoke();
+            Map.App.Controls.MapCanvasControl.PurgeGpuResourcesOnNextFrame();
+            await Step(() => { });
+            await Settled(scenario.Routes[^1]);
+            await MillionCapture(kind + "-fit-purged"); Checkpoint();
+        }
         if (System.Environment.GetEnvironmentVariable("MAP_MILLION_FIRST_ONLY") == "1")
         {
             _report.Environment["scope"] = "diagnostic first frame only; pan/zoom/edit routes NOT CHECKED";
@@ -148,7 +160,9 @@ public sealed partial class ZoomAssetsApplication
         _report.Environment["reopen-ms"] = io.Elapsed.TotalMilliseconds.ToString("F1");
         _report.Checks["reopened-count"] = reopened.Document.Layers.OfType<ObjectLayer>().Sum(l => l.Objects.Count) == count;
         _report.Checks["gpu"] = scenario.Routes.All(r => r.Gpu);
-        _report.Checks["fps-target"] = scenario.Routes.Where(r => r.Name.StartsWith("pan-") || r.Name.StartsWith("wheel-")).All(r => r.FramesRendered > 1 && r.SceneP95 <= 16.7 && r.FrameIntervalP95 <= 16.7 && r.PausesOver100 == 0 && r.Fps >= 59);
+        _report.Checks["fps-target"] = scenario.Routes.Where(r => r.Name != "open-first-frame").All(r =>
+            r.FrameWorkMs.Count > 0 && r.FrameWorkP99 <= 16.7 && r.FrameWorkMax <= 33 && r.RefinementWorkMax <= 33
+            && r.LatencyMax <= 33 && (r.FrameIntervalP99 is null || r.FrameIntervalP99 <= 16.7));
         await Finish(scenario); Checkpoint();
     }
 

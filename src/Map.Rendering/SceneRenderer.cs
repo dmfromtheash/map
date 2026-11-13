@@ -10,8 +10,10 @@ namespace Map.Rendering;
 /// <summary>Supplies decoded asset images to the renderer. Stage 4's catalog implements it.</summary>
 public interface IStampImageSource
 {
-    /// <summary>Changes when backing files become unavailable or are replaced, not for ordinary mip arrivals.</summary>
+    /// <summary>Changes when files or cached fallback pixels become stale, not for preflighted mip arrivals.</summary>
     long SourceRevision => 0;
+    /// <summary>Late requests beyond the size preflight still need refinement.</summary>
+    bool ImageRequestsPending => false;
     /// <summary>The image for the content hash, or null when the asset is missing/not resolved.</summary>
     SKImage? TryGetImage(string sha256);
     /// <summary>Optional culling must not make an otherwise unnecessary cold image load.</summary>
@@ -21,6 +23,8 @@ public interface IStampImageSource
     /// <summary>Queues exact overview metadata without reading files on the frame thread.</summary>
     bool PrepareOverview(IEnumerable<string> assets, Action ready) => true;
     SKImage? TryGetImageForPixelSize(string sha256, double width, double height) => TryGetImage(sha256);
+    /// <summary>A resident fallback while the requested size is preparing; must not request a larger decode.</summary>
+    SKImage? TryGetReadyImageForPixelSize(string sha256, double width, double height) => TryGetImage(sha256);
     /// <summary>
     /// True when every image these stamps sample at their pixel sizes is already decoded. Otherwise
     /// the missing ones start decoding off the render thread, <paramref name="ready"/> is called as
@@ -49,8 +53,10 @@ public interface IStampImageLease : IStampImageSource, IDisposable;
 internal sealed class StampImagePassThrough(IStampImageSource source) : IStampImageLease
 {
     public long SourceRevision => source.SourceRevision;
+    public bool ImageRequestsPending => source.ImageRequestsPending;
     public SKImage? TryGetImage(string sha256) => source.TryGetImage(sha256);
     public SKImage? TryGetImageForPixelSize(string sha256, double width, double height) => source.TryGetImageForPixelSize(sha256, width, height);
+    public SKImage? TryGetReadyImageForPixelSize(string sha256, double width, double height) => source.TryGetReadyImageForPixelSize(sha256, width, height);
     public bool PrepareForPixelSizes(IEnumerable<(string Sha256, double Width, double Height)> stamps, Action ready) => source.PrepareForPixelSizes(stamps, ready);
     public void Dispose() { }
 }
@@ -802,6 +808,11 @@ public static partial class SceneRenderer
         }
         canvas.Restore();
         if (chrome) DrawBoundaryOverlay(canvas, options.BoundaryOverlay, options.ViewScale);
+        if (!options.IsExport && options.Stamps?.ImageRequestsPending == true)
+        {
+            if (options.Stats is { } pending) pending.DetailTilesPending++;
+            options.RequestRefinedFrame?.Invoke();
+        }
     }
 
     /// <summary>
@@ -840,6 +851,7 @@ public static partial class SceneRenderer
     {
         var stats = options.Stats!;
         var missingBefore = stats.MissingAssets;
+        var pendingBefore = stats.DetailTilesPending;
         // R10: the depth order of the layer and its areas' underlays are drawn with the objects.
         object[] parts = [layer.Objects, layer.SublayerStates, layer.Effects.DepthSort, layer.PlacementAreas, options.LodTier, options.FastPreview, options.FastTerrain, options.ViewScale,
             (object?)options.Stamps ?? DBNull.Value, (object?)document.StampForeground ?? DBNull.Value, document.Assets];
@@ -852,7 +864,8 @@ public static partial class SceneRenderer
             stats.ObjectsMilliseconds += Stopwatch.GetElapsedTime(started).TotalMilliseconds;
         }
         if (!options.LayerImages!.TryDraw(canvas, layer.Id, parts, options.GpuContext, Draw,
-                () => stats.MissingAssets == missingBefore, slot: 1))
+                () => stats.MissingAssets == missingBefore && stats.DetailTilesPending == pendingBefore
+                    && options.Stamps?.ImageRequestsPending != true, slot: 1))
         {
             Draw(canvas);
             return;
@@ -905,7 +918,8 @@ public static partial class SceneRenderer
         var appended = AppendedObjects(layer, view, options, out var previous);
         var drawn = options.LayerImages!.TryDraw(canvas, layer.Id, parts, options.GpuContext,
             target => { built = true; DrawLayer(target, document, layer, clippingSource, view, options, drawRivers: false); },
-            () => stats.MissingAssets == missingBefore && stats.DetailTilesPending == pendingBefore,
+            () => stats.MissingAssets == missingBefore && stats.DetailTilesPending == pendingBefore
+                && options.Stamps?.ImageRequestsPending != true,
             previous,
             appended is null ? null : target =>
             {
@@ -953,7 +967,8 @@ public static partial class SceneRenderer
                 DrawLayer(target, document, layer, clippingSource, new WorldBounds(world.Left, world.Top, world.Right, world.Bottom),
                     options, drawRivers: false);
             },
-            () => stats.MissingAssets == missingBefore && stats.DetailTilesPending == pendingBefore, reuseOnly, allowScale: !reuseOnly);
+            () => stats.MissingAssets == missingBefore && stats.DetailTilesPending == pendingBefore
+                && options.Stamps?.ImageRequestsPending != true, reuseOnly, allowScale: !reuseOnly);
         if (drawn && !built) stats.LayerImagesKept++;
         if (drawn) stats.LayersDrawn++;
         return drawn;
@@ -3657,8 +3672,11 @@ public static partial class SceneRenderer
         // stamps are later rebuilt as an atlas batch (notably at fractional detail scales).
         if (count == 0 || (count == 1 && options.GpuContext is null)) return 0;
         var image = stamps.TryGetImageForPixelSize(first.Stamp!.AssetSha256,
-            DetailPixels(first.Width, pixelScale, options), DetailPixels(first.Height, pixelScale, options))
-            ?? stamps.TryGetImage(first.Stamp!.AssetSha256);
+            DetailPixels(first.Width, pixelScale, options), DetailPixels(first.Height, pixelScale, options));
+        var fallback = image is null ? stamps.TryGetReadyImageForPixelSize(first.Stamp!.AssetSha256,
+            DetailPixels(first.Width, pixelScale, options), DetailPixels(first.Height, pixelScale, options)) : null;
+        using var fallbackIdentity = GpuFallbackIdentity(canvas, fallback);
+        image ??= fallbackIdentity ?? fallback;
         if (image is null) return 0;
         // Odd-sized source images round their mip width and height independently. DrawAtlas
         // has only a uniform scale; DrawImage preserves the exact rectangle in this case.
@@ -4105,7 +4123,8 @@ public static partial class SceneRenderer
             if (sources.ContainsKey(key)) continue;
             var image = stamps.TryGetImageForPixelSize(stamp.AssetSha256,
                 DetailPixels(item.Width, scale, options), DetailPixels(item.Height, scale, options))
-                ?? stamps.TryGetImage(stamp.AssetSha256);
+                ?? stamps.TryGetReadyImageForPixelSize(stamp.AssetSha256,
+                    DetailPixels(item.Width, scale, options), DetailPixels(item.Height, scale, options));
             if (image is null) return false;
             if (image.Width > DenseAtlasMaxSide - 8 || image.Height > DenseAtlasMaxSide - 8) return false;
             sources.Add(key, image);
@@ -5095,8 +5114,11 @@ public static partial class SceneRenderer
         var needsWorkingImage = stamp.ClipMaskEnabled || stamp.ShadowOpacity > 0;
         var image = needsWorkingImage ? options.Stamps?.TryGetImage(stamp.AssetSha256)
             : options.Stamps?.TryGetImageForPixelSize(stamp.AssetSha256,
-                DetailPixels(rect.Width, pixelScale, options), DetailPixels(rect.Height, pixelScale, options))
-                ?? options.Stamps?.TryGetImage(stamp.AssetSha256);
+                DetailPixels(rect.Width, pixelScale, options), DetailPixels(rect.Height, pixelScale, options));
+        var fallback = !needsWorkingImage && image is null ? options.Stamps?.TryGetReadyImageForPixelSize(stamp.AssetSha256,
+            DetailPixels(rect.Width, pixelScale, options), DetailPixels(rect.Height, pixelScale, options)) : null;
+        using var fallbackIdentity = GpuFallbackIdentity(canvas, fallback);
+        image ??= fallbackIdentity ?? fallback;
         if (image is null)
         {
             // A linked asset that is not on this machine must be visible, not silently absent.
@@ -5331,6 +5353,17 @@ public static partial class SceneRenderer
             new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear),
             paint);
         canvas.Restore();
+    }
+
+    private static SKImage? GpuFallbackIdentity(SKCanvas canvas, SKImage? image)
+    {
+        // A provisional magnified draw must not determine the cached GPU mip chain of the
+        // exact raster. Borrow the same immutable pixels under a disposable unique image id.
+        // Direct Ganesh uploads during this draw; the source owns its pixels through the
+        // frame, and the alias never escapes this call. No copy, decode or change of sampling.
+        if (image is null || image.IsTextureBacked || canvas.Context is not GRContext) return null;
+        using var pixels = image.PeekPixels();
+        return pixels is null ? null : SKImage.FromPixels(pixels);
     }
 
     private static void DrawLayerStampShadow(
@@ -5814,6 +5847,20 @@ public static partial class SceneRenderer
             }
         }
 
+        // Overview chunks keep larger stamps exact. Their pixels arrive independently of
+        // the tiny color metadata: a ready color does not make this complete frame ready.
+        // Without this preflight a kept layer could freeze whichever subset arrived first.
+        if (options.RequestRefinedFrame is { } refine && options.Stamps is { } exactSource)
+        {
+            var matrix = canvas.TotalMatrix;
+            var pixelScale = Math.Sqrt(matrix.ScaleX * matrix.ScaleX + matrix.SkewY * matrix.SkewY);
+            if (!exactSource.PrepareForPixelSizes(exact.Values.Where(o => o.Visible && o.Stamp is not null)
+                .Select(o => (o.Stamp!.AssetSha256, DetailPixels(o.Width, pixelScale, options), DetailPixels(o.Height, pixelScale, options))), refine))
+            {
+                if (options.Stats is { } pending) pending.DetailTilesPending++;
+                refine();
+            }
+        }
         var hiddenLabels = LabelPriority.Hidden(document, options.ViewScale);
         foreach (var sceneObject in exact.Values.OrderBy(item => item.Sublayer))
         {

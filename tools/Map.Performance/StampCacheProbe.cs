@@ -19,6 +19,8 @@ internal static class StampCacheProbe
         var catalog = new AssetCatalog(Path.Combine(profile, "catalog"));
         var root = Environment.GetEnvironmentVariable("MAP_DRIVE_LIBRARY_ROOTS") ?? @"D:\MapLibrary";
         catalog.SetMounts(Directory.GetDirectories(root).Where(p => File.Exists(Path.Combine(p, "catalog.json"))).Order().ToArray());
+        if (Environment.GetEnvironmentVariable("MAP_PERF_PIXEL_AUDIT") == "1")
+            return StampPixelAudit.Run(catalog, options);
         var records = catalog.Records.OrderBy(r => r.DisplayName, StringComparer.Ordinal).Take(options.ObjectCount).ToArray();
         if (records.Length != options.ObjectCount) throw new InvalidOperationException("Insufficient distinct library images.");
         var objects = records.Select((r, i) => new SceneObject(ObjectId.New(), SceneObjectKind.Stamp, r.DisplayName,

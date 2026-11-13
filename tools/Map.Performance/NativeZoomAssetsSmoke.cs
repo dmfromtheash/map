@@ -97,7 +97,14 @@ internal sealed class ZoomRouteReport
     public double? RefinementBuildMs { get; set; }
     public List<string> SlowRefinementFrames { get; } = [];
     public double? FrameIntervalP95 { get; set; }
+    public double? FrameIntervalP99 { get; set; }
     public double? FrameIntervalMax { get; set; }
+    /// <summary>1000 / mean of the slowest ceil(1%) completed-frame intervals; small samples are explicit.</summary>
+    public double? OnePercentLowFps { get; set; }
+    public double FrameWorkP99 { get; set; }
+    public double FrameWorkMax { get; set; }
+    public double RefinementWorkMax { get; set; }
+    public List<double> FrameWorkMs { get; } = [];
     public List<double> GpuFlushMs { get; } = [];
     public string TierLast { get; set; } = "";
     public bool Gpu { get; set; }
@@ -691,9 +698,9 @@ public sealed partial class ZoomAssetsApplication : Application
         {
             var scale = _editor.Session.Viewport.Scale;
             if (factor > 1 ? scale >= limit - 1e-9 : scale <= limit + 1e-9) break;
-            var (scene, latency) = await Step(() => ZoomAt(anchor, factor));
+            var (scene, latency, work, gpu) = await Step(() => ZoomAt(anchor, factor));
             steps++;
-            if (target is not null) { target.SceneMs.Add(scene); target.LatencyMs.Add(latency); target.GpuFlushMs.Add(Map.App.Controls.MapCanvasControl.LastFrameGpuFlushMilliseconds); }
+            if (target is not null) { target.SceneMs.Add(scene); target.LatencyMs.Add(latency); target.FrameWorkMs.Add(work); target.GpuFlushMs.Add(gpu); }
         }
         watch.Stop();
         if (target is null) return;
@@ -722,6 +729,7 @@ public sealed partial class ZoomAssetsApplication : Application
                 lock (exactFrames)
                 {
                     var totalFrame = canvas.LastSceneRenderMilliseconds + Map.App.Controls.MapCanvasControl.LastFrameGpuFlushMilliseconds;
+                    target.RefinementWorkMax = Math.Max(target.RefinementWorkMax, Map.App.Controls.MapCanvasControl.LastFrameWorkMilliseconds);
                     exactFrames.Add(totalFrame);
                     if (totalFrame > 25 && target.SlowRefinementFrames.Count < 32)
                     {
@@ -760,8 +768,9 @@ public sealed partial class ZoomAssetsApplication : Application
         for (var i = 0; i < steps; i++)
         {
             var index = i;
-            var (scene, latency) = await Step(() => step(index));
+            var (scene, latency, work, gpu) = await Step(() => step(index));
             target.SceneMs.Add(scene); target.LatencyMs.Add(latency);
+            target.FrameWorkMs.Add(work); target.GpuFlushMs.Add(gpu);
         }
         watch.Stop();
         target.Steps = steps; target.WallMs = watch.Elapsed.TotalMilliseconds;
@@ -791,6 +800,7 @@ public sealed partial class ZoomAssetsApplication : Application
                 if (revision <= lastRevision) return; // compositor replays are not fresh input frames
                 lastRevision = revision;
                 sceneTimes.Add(canvas.LastSceneRenderMilliseconds);
+                target.FrameWorkMs.Add(Map.App.Controls.MapCanvasControl.LastFrameWorkMilliseconds);
                 frameStamps.Add((Stopwatch.GetTimestamp(), revision));
             }
         }
@@ -847,7 +857,12 @@ public sealed partial class ZoomAssetsApplication : Application
         }
         var intervals = frames.Skip(1).Select((frame, index) =>
             (frame.Stamp - frames[index].Stamp) * 1000.0 / Stopwatch.Frequency).Order().ToArray();
-        if (intervals.Length > 0) { target.FrameIntervalP95 = Percentile(intervals, .95); target.FrameIntervalMax = intervals[^1]; }
+        if (intervals.Length > 0)
+        {
+            target.FrameIntervalP95 = Percentile(intervals, .95); target.FrameIntervalP99 = Percentile(intervals, .99);
+            target.FrameIntervalMax = intervals[^1];
+            target.OnePercentLowFps = 1000 / intervals.TakeLast(Math.Max(1, (int)Math.Ceiling(intervals.Length * .01))).Average();
+        }
         target.Steps = steps;
         target.FramesRendered = frames.Count;
         target.WallMs = frames.Count > 0 ? (frames[^1].Stamp - inputStamps[0].Stamp) * 1000.0 / Stopwatch.Frequency : watch.Elapsed.TotalMilliseconds;
@@ -874,6 +889,9 @@ public sealed partial class ZoomAssetsApplication : Application
         var latency = target.LatencyMs.Order().ToArray();
         target.SceneP50 = Percentile(scene, .5); target.SceneP95 = Percentile(scene, .95); target.SceneP99 = Percentile(scene, .99);
         target.SceneMax = scene.Length == 0 ? double.NaN : scene[^1];
+        var work = target.FrameWorkMs.Order().ToArray();
+        target.FrameWorkP99 = Percentile(work, .99);
+        target.FrameWorkMax = work.Length == 0 ? 0 : work[^1];
         target.LatencyP50 = Percentile(latency, .5); target.LatencyP95 = Percentile(latency, .95); target.LatencyP99 = Percentile(latency, .99);
         target.LatencyMax = latency.Length == 0 ? double.NaN : latency[^1];
         target.LongPauses = target.LatencyMs.Count(l => l > 50);
@@ -906,6 +924,9 @@ public sealed partial class ZoomAssetsApplication : Application
                 ["derivedDiskBytes"] = images.DerivedStatistics.DiskBytes, ["derivedDiskEvictions"] = images.DerivedStatistics.DiskEvictions,
                 ["derivedMetadataEntries"] = images.DerivedStatistics.MetadataEntries, ["derivedPendingMips"] = images.DerivedStatistics.PendingMips,
                 ["derivedDiscardedMips"] = images.DerivedStatistics.DiscardedMips,
+                ["sampleEntries"] = images.SampleStatistics.Entries,
+                ["sampleBytes"] = images.SampleStatistics.Bytes,
+                ["sampleEvictions"] = images.SampleStatistics.Evictions,
             };
             var timing = images.Timings;
             target.ImageTimingLast = new()
@@ -924,15 +945,17 @@ public sealed partial class ZoomAssetsApplication : Application
     }
 
     /// <summary>One input, then the first frame finished after it; scene time of that frame and wall time from the input.</summary>
-    private async Task<(double Scene, double Latency)> Step(Action input)
+    private async Task<(double Scene, double Latency, double Work, double Gpu)> Step(Action input)
     {
         var canvas = _view.Canvas;
-        var completion = new TaskCompletionSource<double>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completion = new TaskCompletionSource<(double Scene, double Work, double Gpu)>(TaskCreationOptions.RunContinuationsAsynchronously);
         var requested = long.MaxValue;
         void OnFrame(object? s, EventArgs e)
         {
             if (canvas.CompletedSceneRevision >= System.Threading.Volatile.Read(ref requested))
-                completion.TrySetResult(canvas.LastSceneRenderMilliseconds);
+                completion.TrySetResult((canvas.LastSceneRenderMilliseconds,
+                    Map.App.Controls.MapCanvasControl.LastFrameWorkMilliseconds,
+                    Map.App.Controls.MapCanvasControl.LastFrameGpuFlushMilliseconds));
         }
         canvas.FrameRendered += OnFrame;
         try
@@ -940,9 +963,9 @@ public sealed partial class ZoomAssetsApplication : Application
             var watch = Stopwatch.StartNew();
             input();
             System.Threading.Volatile.Write(ref requested, canvas.RequestFrameForSmoke());
-            var scene = await completion.Task.WaitAsync(TimeSpan.FromSeconds(Options.Profile == "native-million-assets" ? 180 : 30));
+            var frame = await completion.Task.WaitAsync(TimeSpan.FromSeconds(Options.Profile == "native-million-assets" ? 180 : 30));
             watch.Stop();
-            return (scene, watch.Elapsed.TotalMilliseconds);
+            return (frame.Scene, watch.Elapsed.TotalMilliseconds, frame.Work, frame.Gpu);
         }
         finally { canvas.FrameRendered -= OnFrame; }
     }

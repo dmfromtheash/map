@@ -13,7 +13,7 @@ namespace Map.Presentation.Services;
 /// decode, resampling or waits are performed by Request/TryReady on the canvas thread.
 /// One worker bounds native decode memory and avoids competing with the frame for all cores.
 /// </summary>
-public sealed class StampDerivedAssetStore : IDisposable
+public sealed class StampDerivedAssetStore : IDisposable, IAsyncDisposable
 {
     // Bump when the working-image choice, overview evaluator or mip sampling changes.
     private const int Version = 1;
@@ -22,9 +22,19 @@ public sealed class StampDerivedAssetStore : IDisposable
     private readonly long _diskBudget;
     private readonly object _requestsGate = new();
     private readonly object _diskGate = new();
+    private readonly object _memoryGate = new();
+    private readonly Dictionary<string, byte[]> _memoryPixels = new(StringComparer.OrdinalIgnoreCase);
+    private long _memoryBytes, _failures;
+    public long Failures => Interlocked.Read(ref _failures);
+    private void ReportFailure(string operation, Exception error)
+    {
+        Interlocked.Increment(ref _failures);
+        System.Diagnostics.Trace.TraceError("Stamp preparation {0}: {1}", operation, error);
+    }
     private readonly ConcurrentQueue<(string Sha, TaskCompletionSource<Header?> Completion)> _completedHeaders = new();
     private readonly int _metadataCapacity;
     private readonly ConcurrentDictionary<string, TaskCompletionSource<Header?>> _requests = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, long> _failedHeaders = new(StringComparer.OrdinalIgnoreCase);
     private readonly Channel<(string Sha, TaskCompletionSource<Header?> Completion, TaskCompletionSource<SKColor?> Preview)> _queue =
         Channel.CreateUnbounded<(string, TaskCompletionSource<Header?>, TaskCompletionSource<SKColor?>)>(new() { SingleReader = true });
     private readonly Channel<(string Sha, TaskCompletionSource<Header?> Completion)> _buildQueue =
@@ -51,7 +61,8 @@ public sealed class StampDerivedAssetStore : IDisposable
     public int PendingMips => _mips.Count;
     private long _diskBytes, _diskEvictions;
     private long _diskHits, _builds;
-    private readonly ConcurrentDictionary<(string Sha, int Level), MipRequest> _mips = new();
+    public readonly record struct PixelKey(string Sha, int Step, int Level);
+    private readonly ConcurrentDictionary<PixelKey, MipRequest> _mips = new();
     private long _requestSequence, _discardedMips;
     public long DiscardedMips => Interlocked.Read(ref _discardedMips);
     private sealed class MipRequest(CancellationTokenSource stop, long order)
@@ -63,9 +74,19 @@ public sealed class StampDerivedAssetStore : IDisposable
     }
     private readonly SemaphoreSlim _mipSlots = new(8);
     private readonly SemaphoreSlim _mipReader = new(1);
+    // At most one completed large raster can wait for the canvas. Small results retain
+    // their eight slots, so a large upload never fills memory with eight 128 MiB masters.
+    private readonly SemaphoreSlim _largeSlot = new(1);
+    private SKImage? _preparedSource;
+    private PixelKey _preparedKey;
+    private FileStamp? _preparedOriginal, _preparedWorking;
     private readonly CancellationTokenSource _stop = new();
-    public sealed record Mip(byte[]? Pixels, int Width, int Height, bool Reserved, bool Cancelled = false);
-    public Task Completion { get; }
+    public sealed record Mip(byte[]? Pixels, int Width, int Height, bool Reserved, bool Cancelled = false,
+        SKImage? Image = null, bool LargeReserved = false);
+    private readonly Task _workers;
+    private Task? _shutdown;
+    private readonly ConcurrentQueue<Task> _retirements = new();
+    public Task Completion => _shutdown ?? _workers;
 
     public sealed record FileStamp(string Path, long Length, long WrittenTicks)
     {
@@ -90,7 +111,7 @@ public sealed class StampDerivedAssetStore : IDisposable
         _root = Path.GetFullPath(root);
         _diskBudget = diskBudgetBytes;
         _metadataCapacity = metadataCapacity;
-        Completion = Task.WhenAll(Task.Run(async () => { TrimDisk(); await Work().ConfigureAwait(false); }), Task.Run(BuildWork));
+        _workers = Task.WhenAll(Task.Run(async () => { TrimDisk(); await Work().ConfigureAwait(false); }), Task.Run(BuildWork));
     }
 
     public Task<Header?> Request(string sha)
@@ -98,7 +119,12 @@ public sealed class StampDerivedAssetStore : IDisposable
         if (_disposed || sha.Length != 64 || !sha.All(Uri.IsHexDigit)) return Task.FromResult<Header?>(null);
         lock (_requestsGate)
         {
-            if (_requests.TryGetValue(sha, out var existing)) return existing.Task;
+            if (_disposed) return Task.FromResult<Header?>(null);
+            if (_requests.TryGetValue(sha, out var existing))
+            {
+                if (!_failedHeaders.TryGetValue(sha, out var failed) || Environment.TickCount64 - failed < 2000) return existing.Task;
+                _requests.TryRemove(sha, out _); _previews.TryRemove(sha, out _); _failedHeaders.TryRemove(sha, out _);
+            }
             if (_catalog.Find(sha) is null) return Task.FromResult<Header?>(null);
             var completion = new TaskCompletionSource<Header?>(TaskCreationOptions.RunContinuationsAsynchronously);
             _requests[sha] = completion;
@@ -127,7 +153,7 @@ public sealed class StampDerivedAssetStore : IDisposable
         lock (_requestsGate)
         {
             Interlocked.Increment(ref _generation);
-            _requests.Clear(); _previews.Clear(); _completedHeaders.Clear();
+            _requests.Clear(); _previews.Clear(); _completedHeaders.Clear(); _failedHeaders.Clear();
             foreach (var request in _mips.Values) Retire(request);
             _mips.Clear();
         }
@@ -136,11 +162,15 @@ public sealed class StampDerivedAssetStore : IDisposable
     private void Retire(MipRequest request)
     {
         request.Stop.Cancel();
-        _ = request.Task.ContinueWith(task =>
+        var retirement = request.Task.ContinueWith(task =>
         {
             if (task.IsCompletedSuccessfully && task.Result.Reserved) _mipSlots.Release();
+            if (task.IsCompletedSuccessfully && task.Result.LargeReserved) _largeSlot.Release();
+            if (task.IsCompletedSuccessfully) task.Result.Image?.Dispose();
             request.Stop.Dispose();
         }, TaskScheduler.Default);
+        _retirements.Enqueue(retirement);
+        while (_retirements.TryPeek(out var completed) && completed.IsCompleted) _retirements.TryDequeue(out _);
     }
 
     private void CompleteHeader(string sha, TaskCompletionSource<Header?> completion, Header? header)
@@ -149,21 +179,27 @@ public sealed class StampDerivedAssetStore : IDisposable
         {
             if (_requests.TryGetValue(sha, out var active) && ReferenceEquals(active, completion))
             {
+                if (header is null) _failedHeaders[sha] = Environment.TickCount64;
+                else _failedHeaders.TryRemove(sha, out _);
                 _completedHeaders.Enqueue((sha, completion));
-                while (_requests.Count > _metadataCapacity && _completedHeaders.TryDequeue(out var oldest))
+                while ((_requests.Count > _metadataCapacity || _completedHeaders.Count > _metadataCapacity)
+                    && _completedHeaders.TryDequeue(out var oldest))
                     if (_requests.TryGetValue(oldest.Sha, out var current) && ReferenceEquals(current, oldest.Completion))
-                    { _requests.TryRemove(oldest.Sha, out _); _previews.TryRemove(oldest.Sha, out _); }
+                    { _requests.TryRemove(oldest.Sha, out _); _previews.TryRemove(oldest.Sha, out _); _failedHeaders.TryRemove(oldest.Sha, out _); }
             }
         }
         completion.TrySetResult(header);
     }
 
-    public Task<Mip> RequestMip(Header header, int level)
+    public Task<Mip> RequestMip(Header header, int level) => RequestPixels(header, 0, level);
+
+    public Task<Mip> RequestPixels(Header header, int step, int level)
     {
         if (_disposed) return Task.FromResult(new Mip(null, 0, 0, false, Cancelled: true));
-        var key = (header.Sha.ToLowerInvariant(), level);
+        var key = new PixelKey(header.Sha.ToLowerInvariant(), step, level);
         lock (_requestsGate)
         {
+            if (_disposed) return Task.FromResult(new Mip(null, 0, 0, false, Cancelled: true));
             if (_mips.TryGetValue(key, out var held)) return held.Task;
             if (_mips.Count >= 4096)
             {
@@ -175,13 +211,16 @@ public sealed class StampDerivedAssetStore : IDisposable
                 }
             }
             var request = new MipRequest(CancellationTokenSource.CreateLinkedTokenSource(_stop.Token), ++_requestSequence);
-            request.Task = Task.Run(() => ReadRequestedMip(header, level, request));
+            request.Task = Task.Run(() => ReadRequestedMip(header, key, request));
             _mips[key] = request;
             return request.Task;
         }
     }
 
     public void CancelUnwantedMips(IReadOnlySet<(string Sha, int Level)> wanted)
+        => CancelUnwantedPixels(wanted.Select(key => new PixelKey(key.Sha, 0, key.Level)).ToHashSet());
+
+    public void CancelUnwantedPixels(IReadOnlySet<PixelKey> wanted)
     {
         lock (_requestsGate)
             foreach (var pair in _mips)
@@ -189,26 +228,37 @@ public sealed class StampDerivedAssetStore : IDisposable
                 { pair.Value.Stop.Cancel(); Interlocked.Increment(ref _discardedMips); }
     }
 
-    private async Task<Mip> ReadRequestedMip(Header header, int level, MipRequest request)
+    private async Task<Mip> ReadRequestedMip(Header header, PixelKey key, MipRequest request)
     {
         var reserved = false;
+        var largeReserved = false;
         try
         {
-            await _mipSlots.WaitAsync(request.Stop.Token).ConfigureAwait(false);
-            reserved = true;
+            var record = _catalog.Find(header.Sha);
+            var small = record is not null && AssetCatalog.DetailLadderDepth(record.Width, record.Height) == 0
+                && key.Step == 0 && key.Level >= header.FirstMip && key.Level < header.FirstMip + header.MipCount;
+            if (small) { await _mipSlots.WaitAsync(request.Stop.Token).ConfigureAwait(false); reserved = true; }
+            else { await _largeSlot.WaitAsync(request.Stop.Token).ConfigureAwait(false); largeReserved = true; }
             await _mipReader.WaitAsync(request.Stop.Token).ConfigureAwait(false);
             try
             {
                 lock (_requestsGate) { request.Stop.Token.ThrowIfCancellationRequested(); request.Started = true; }
-                byte[]? pixels; int width, height;
-                try { pixels = ReadMip(header, level, out width, out height); }
-                catch (Exception ex) when (ex is IOException or InvalidDataException)
+                if (!small)
                 {
+                    var image = PrepareRaster(header, key, request.Stop.Token);
+                    return new Mip(null, image?.Width ?? 0, image?.Height ?? 0, false,
+                        Image: image, LargeReserved: true);
+                }
+                byte[]? pixels; int width, height;
+                try { pixels = ReadMip(header, key.Level, out width, out height); }
+                catch (Exception ex)
+                {
+                    ReportFailure("read/rebuild " + header.Sha, ex);
                     // A crash, interrupted write or eviction loses only derived data. Rebuild
                     // from verified owner bytes here, never fall back to frame-thread decoding.
                     var repaired = LoadOrBuild(header.Sha);
                     if (repaired is null) return new Mip(null, 0, 0, reserved);
-                    pixels = ReadMip(repaired, level, out width, out height);
+                    pixels = ReadMip(repaired, key.Level, out width, out height);
                 }
                 return new Mip(pixels, width, height, reserved);
             }
@@ -217,34 +267,39 @@ public sealed class StampDerivedAssetStore : IDisposable
         catch (OperationCanceledException)
         {
             if (reserved) _mipSlots.Release();
+            if (largeReserved) _largeSlot.Release();
             return new Mip(null, 0, 0, false, Cancelled: true);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
-        { return new Mip(null, 0, 0, reserved); }
+        catch (Exception ex)
+        { ReportFailure("pixels " + header.Sha, ex); return new Mip(null, 0, 0, reserved, LargeReserved: largeReserved); }
     }
 
     public bool TryTakeMip(string sha, int level, out Mip? mip)
+        => TryTakePixels(new PixelKey(sha.ToLowerInvariant(), 0, level), out mip);
+
+    public bool TryTakePixels(PixelKey key, out Mip? mip)
     {
         lock (_requestsGate)
         {
             mip = null;
-            var key = (sha.ToLowerInvariant(), level);
             if (!_mips.TryGetValue(key, out var request) || !request.Task.IsCompletedSuccessfully) return false;
             if (!_mips.TryRemove(key, out request)) return false;
             mip = request.Task.Result;
             if (mip.Reserved) _mipSlots.Release();
+            if (mip.LargeReserved) _largeSlot.Release();
             request.Stop.Dispose();
             return true;
         }
     }
 
-    public IEnumerable<(string Sha, int Level)> ReadyMips => _mips
+    public IEnumerable<PixelKey> ReadyPixels => _mips
         .Where(pair => pair.Value.Task.IsCompletedSuccessfully).Select(pair => pair.Key);
 
     private async Task Work()
     {
         await foreach (var (sha, completion, previewCompletion) in _queue.Reader.ReadAllAsync().ConfigureAwait(false))
         {
+            if (!IsCurrent(sha, completion)) { completion.TrySetResult(null); previewCompletion.TrySetResult(null); continue; }
             Header? held = null; SKColor? preview = null;
             try
             {
@@ -263,7 +318,7 @@ public sealed class StampDerivedAssetStore : IDisposable
                     }
                 }
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or ArgumentException) { }
+            catch (Exception ex) { ReportFailure("metadata " + sha, ex); }
             previewCompletion.TrySetResult(preview);
             if (_disposed || held is not null) CompleteHeader(sha, completion, held);
             else if (!_buildQueue.Writer.TryWrite((sha, completion))) CompleteHeader(sha, completion, null);
@@ -275,13 +330,16 @@ public sealed class StampDerivedAssetStore : IDisposable
     {
         await foreach (var (sha, completion) in _buildQueue.Reader.ReadAllAsync().ConfigureAwait(false))
         {
+            if (!IsCurrent(sha, completion)) { completion.TrySetResult(null); continue; }
             Header? result = null;
             try { if (!_disposed) result = LoadOrBuild(sha); }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException
-                or JsonException or ArgumentException or OverflowException) { }
+            catch (Exception ex) { ReportFailure("build " + sha, ex); }
             CompleteHeader(sha, completion, result);
         }
     }
+
+    private bool IsCurrent(string sha, TaskCompletionSource<Header?> completion) => !_disposed
+        && _requests.TryGetValue(sha, out var active) && ReferenceEquals(active, completion);
 
     private string Stem(string sha) => Path.Combine(_root, "v" + Version, sha.ToLowerInvariant());
 
@@ -291,14 +349,16 @@ public sealed class StampDerivedAssetStore : IDisposable
     {
         _watchedFiles[path] = record.Sha256;
         var root = Path.GetFullPath(_catalog.RootFor(record));
-        if (!path.StartsWith(root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+        var recursive = path.StartsWith(root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+        if (!recursive)
             root = Path.GetDirectoryName(path)!;
         lock (_watchers)
         {
             if (_disposed || _watchers.ContainsKey(root)) return;
             var watcher = new FileSystemWatcher(root)
             {
-                IncludeSubdirectories = true,
+                IncludeSubdirectories = recursive,
+                InternalBufferSize = 32 * 1024,
                 NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.Size,
             };
             watcher.Changed += (_, args) => FileChanged(args.FullPath);
@@ -312,7 +372,10 @@ public sealed class StampDerivedAssetStore : IDisposable
                 lock (_watchers)
                     if (_watchers.TryGetValue(root, out var current) && ReferenceEquals(current, watcher)) _watchers.Remove(root);
                 watcher.Dispose();
-                foreach (var path in _watchedFiles.Keys) FileChanged(path);
+                var prefix = root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+                foreach (var path in _watchedFiles.Keys.Where(path => recursive
+                    ? path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+                    : string.Equals(Path.GetDirectoryName(path), root, StringComparison.OrdinalIgnoreCase))) FileChanged(path);
             };
             _watchers[root] = watcher;
             watcher.EnableRaisingEvents = true;
@@ -326,6 +389,7 @@ public sealed class StampDerivedAssetStore : IDisposable
         {
             Interlocked.Increment(ref _generation);
             _requests.TryRemove(sha, out _); _previews.TryRemove(sha, out _);
+            _failedHeaders.TryRemove(sha, out _);
             foreach (var key in _mips.Keys.Where(key => string.Equals(key.Sha, sha, StringComparison.OrdinalIgnoreCase)))
                 if (_mips.TryRemove(key, out var request)) Retire(request);
             _invalidated[sha] = 0;
@@ -339,16 +403,20 @@ public sealed class StampDerivedAssetStore : IDisposable
         try
         {
             if (_catalog.SourcePath(record) is { } source) Watch(record, source);
-            if (_catalog.TryDetailLevelPath(record, 1, out var step)) Watch(record, step);
+            var currentWorking = _catalog.SourcePath(record);
+            if (AssetCatalog.DetailLadderDepth(record.Width, record.Height) > 0)
+                Watch(record, Path.Combine(_catalog.RootFor(record), "ladder", record.Sha256.ToLowerInvariant(), "1.png"));
+            if (_catalog.TryDetailLevelPath(record, 1, out var step)) currentWorking = step;
             var info = new FileInfo(stem + ".json");
             if (info.Exists && info.Length <= 16 * 1024)
             {
                 var held = JsonSerializer.Deserialize<Header>(File.ReadAllBytes(info.FullName));
                 if (held is { Version: Version, Width: > 0 and <= 32768, Height: > 0 and <= 32768,
-                        MipCount: > 0 and <= 16, FirstMip: >= 0 and <= 15, PixelHash.Length: 64 }
+                        MipCount: >= 0 and <= 16, FirstMip: >= 0 and <= 15, PixelHash.Length: 64 }
                     && string.Equals(held.Sha, sha, StringComparison.OrdinalIgnoreCase)
                     && held.Original is not null && held.Working is not null
                     && string.Equals(held.Original.Path, _catalog.SourcePath(record), StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(held.Working.Path, currentWorking, StringComparison.OrdinalIgnoreCase)
                     && held.Original.Matches() && held.Working.Matches()
                     && File.Exists(stem + ".pixels"))
                 {
@@ -366,21 +434,8 @@ public sealed class StampDerivedAssetStore : IDisposable
         var record = _catalog.Find(sha);
         if (record is null) return null;
         var stem = Stem(sha);
-        // ReadVerified returns the same bytes it checked. Do not resolve and reopen the source.
-        var original = FileStamp.Read(_catalog.SourcePath(record));
-        if (original is null) return null;
-        var payload = _catalog.ReadVerified(record);
-        if (payload is not { Status: AssetResolutionStatus.Available, Content: { } encoded, Path: { } path }) return null;
-        if (!original.Matches() || !string.Equals(original.Path, Path.GetFullPath(path), StringComparison.OrdinalIgnoreCase)) return null;
-        var working = original;
-        if (_catalog.TryDetailLevelPath(record, 1, out var step))
-        {
-            working = FileStamp.Read(step);
-            if (working is null) return null;
-            encoded = AssetImagePolicy.ReadEncodedFile(step);
-        }
-        using var image = AssetImageCache.DecodeOwned(encoded);
-        if (image is null || !original.Matches() || !working.Matches()) return null;
+        using var image = ReadSource(record, 1, null, out var original, out var working);
+        if (image is null || original is null || working is null) return null;
         var color = SceneRenderer.StampOverviewColor(image);
         using var raw = new MemoryStream();
         using var writer = new BinaryWriter(raw, System.Text.Encoding.UTF8, leaveOpen: true);
@@ -423,21 +478,123 @@ public sealed class StampDerivedAssetStore : IDisposable
         var header = new Header(Version, sha, image.Width, image.Height, (uint)color, original, working,
             first, count, Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(content)));
         if (!original.Matches() || !working.Matches()) return null;
-        Directory.CreateDirectory(Path.GetDirectoryName(stem)!);
         var temporary = stem + "." + Guid.NewGuid().ToString("N") + ".tmp";
         var previousBytes = FileBytes(stem + ".pixels") + FileBytes(stem + ".json");
+        lock (_memoryGate)
+            if (_memoryPixels.Remove(sha, out var replaced)) _memoryBytes -= replaced.Length;
         try
         {
+            Directory.CreateDirectory(Path.GetDirectoryName(stem)!);
             using (var file = File.Create(temporary))
             using (var compressed = new BrotliStream(file, CompressionLevel.Fastest)) compressed.Write(content);
             File.Move(temporary, stem + ".pixels", overwrite: true);
             File.WriteAllBytes(temporary, JsonSerializer.SerializeToUtf8Bytes(header));
             File.Move(temporary, stem + ".json", overwrite: true);
         }
-        finally { if (File.Exists(temporary)) File.Delete(temporary); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            ReportFailure("persist; using memory " + sha, ex);
+            lock (_memoryGate)
+            {
+                if (_memoryPixels.Remove(sha, out var previous)) _memoryBytes -= previous.Length;
+                while (_memoryBytes + content.Length > 32L * 1024 * 1024 && _memoryPixels.Count > 0)
+                {
+                    var oldest = _memoryPixels.First(); _memoryPixels.Remove(oldest.Key); _memoryBytes -= oldest.Value.Length;
+                }
+                _memoryPixels[sha] = content; _memoryBytes += content.Length;
+            }
+        }
+        finally
+        {
+            try { if (File.Exists(temporary)) File.Delete(temporary); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { ReportFailure("temporary cleanup", ex); }
+        }
         Interlocked.Add(ref _diskBytes, FileBytes(stem + ".pixels") + FileBytes(stem + ".json") - previousBytes);
         if (Interlocked.Increment(ref _builds) % 64 == 0 || DiskBytes > _diskBudget) TrimDisk();
         return header;
+    }
+
+    // Shared source preparation for persisted derivatives and requested large rasters.
+    // A matching header proves these exact source bytes were already SHA-checked; changed
+    // size/time/path goes through ReadVerified again. All path checks run on the worker.
+    private SKImage? ReadSource(AssetRecord record, int step, Header? trusted,
+        out FileStamp? original, out FileStamp? working)
+    {
+        original = FileStamp.Read(_catalog.SourcePath(record));
+        working = original;
+        if (original is null) return null;
+        Watch(record, original.Path);
+        if (step > 0 && step <= AssetCatalog.DetailLadderDepth(record.Width, record.Height))
+            Watch(record, Path.Combine(_catalog.RootFor(record), "ladder", record.Sha256.ToLowerInvariant(), step + ".png"));
+        byte[] encoded;
+        if (_catalog.TryDetailLevelPath(record, step, out var ladder))
+        {
+            working = FileStamp.Read(ladder);
+            if (working is null) return null;
+            Watch(record, working.Path);
+            // Even when drawing a ladder, a new or changed master must pass its content id.
+            if (trusted?.Original != original && _catalog.ReadVerified(record).Status != AssetResolutionStatus.Available) return null;
+            encoded = AssetImagePolicy.ReadEncodedFile(working.Path);
+        }
+        else if (trusted?.Original == original) encoded = AssetImagePolicy.ReadEncodedFile(original.Path);
+        else
+        {
+            var payload = _catalog.ReadVerified(record);
+            if (payload is not { Status: AssetResolutionStatus.Available, Content: { } bytes, Path: { } path }
+                || !string.Equals(original.Path, Path.GetFullPath(path), StringComparison.OrdinalIgnoreCase)) return null;
+            encoded = bytes;
+        }
+        _ = AssetImagePolicy.Inspect(encoded);
+        var image = AssetImageCache.DecodeOwned(encoded);
+        if (!original.Matches() || !working.Matches()) { image?.Dispose(); return null; }
+        return image;
+    }
+
+    private SKImage? PrepareRaster(Header header, PixelKey key, CancellationToken cancellation)
+    {
+        var record = _catalog.Find(key.Sha);
+        if (record is null) return null;
+        var sourceKey = key with { Level = 0 };
+        var workingPath = _catalog.TryDetailLevelPath(record, key.Step, out var currentStep)
+            ? currentStep : _catalog.SourcePath(record);
+        if (_preparedSource is null || _preparedKey != sourceKey
+            || _preparedOriginal?.Matches() != true || _preparedWorking?.Matches() != true
+            || !string.Equals(_preparedWorking.Path, workingPath, StringComparison.OrdinalIgnoreCase))
+        {
+            _preparedSource?.Dispose(); _preparedSource = null;
+            _preparedSource = ReadSource(record, key.Step, header, out _preparedOriginal, out _preparedWorking);
+            _preparedKey = sourceKey;
+        }
+        if (_preparedSource is not { } source) return null;
+        var requestedWidth = Math.Max(1, record.Width >> key.Step) / Math.Pow(2, key.Level);
+        var requestedHeight = Math.Max(1, record.Height >> key.Step) / Math.Pow(2, key.Level);
+        var level = Math.Clamp((int)Math.Floor(Math.Log2(Math.Max(1,
+            Math.Min(source.Width / Math.Max(1, requestedWidth), source.Height / Math.Max(1, requestedHeight))))), 0, 15);
+        // Missing ladder steps use the original's same linear mip path as ForPixelSize.
+        // Each halving uses the previous pixels, never a direct downscale of the master.
+        SKImage current = source;
+        try
+        {
+            for (var n = 1; n <= level; n++)
+            {
+                cancellation.ThrowIfCancellationRequested();
+                using var bitmap = new SKBitmap(new SKImageInfo(Math.Max(1, source.Width >> n),
+                    Math.Max(1, source.Height >> n), SKColorType.Rgba8888, SKAlphaType.Premul));
+                using var pixels = bitmap.PeekPixels();
+                if (!current.ScalePixels(pixels, new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None))) return null;
+                bitmap.SetImmutable();
+                var next = SKImage.FromBitmap(bitmap);
+                if (!ReferenceEquals(current, source)) current.Dispose();
+                current = next;
+            }
+            cancellation.ThrowIfCancellationRequested();
+            // A separate SKImage wrapper owns the immutable pixels while the worker moves
+            // to the next source; creation and any necessary copy happen off the canvas.
+            using var retained = SKBitmap.FromImage(current);
+            retained.SetImmutable();
+            return SKImage.FromBitmap(retained);
+        }
+        finally { if (!ReferenceEquals(current, source)) current.Dispose(); }
     }
 
     private static long FileBytes(string path)
@@ -484,17 +641,9 @@ public sealed class StampDerivedAssetStore : IDisposable
     public byte[]? ReadMip(Header header, int level, out int width, out int height)
     {
         width = height = 0;
-        using var file = File.OpenRead(Stem(header.Sha) + ".pixels");
-        using var compressed = new BrotliStream(file, CompressionMode.Decompress);
-        using var raw = new MemoryStream();
-        var buffer = new byte[16 * 1024];
-        int read;
-        while ((read = compressed.Read(buffer)) > 0)
-        {
-            if (raw.Length + read > 2 * 1024 * 1024) throw new InvalidDataException("Oversized derived mip data.");
-            raw.Write(buffer, 0, read);
-        }
-        var bytes = raw.ToArray();
+        byte[]? bytes;
+        lock (_memoryGate) _memoryPixels.TryGetValue(header.Sha, out bytes);
+        bytes ??= ReadCompressedPixels(header);
         if (Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bytes)) != header.PixelHash)
             throw new InvalidDataException("Derived mip checksum mismatch.");
         using var reader = new BinaryReader(new MemoryStream(bytes));
@@ -509,11 +658,42 @@ public sealed class StampDerivedAssetStore : IDisposable
         return null;
     }
 
+    private byte[] ReadCompressedPixels(Header header)
+    {
+        using var file = new FileStream(Stem(header.Sha) + ".pixels", FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
+        using var compressed = new BrotliStream(file, CompressionMode.Decompress);
+        using var raw = new MemoryStream();
+        var buffer = new byte[16 * 1024];
+        int read;
+        while ((read = compressed.Read(buffer)) > 0)
+        {
+            if (raw.Length + read > 2 * 1024 * 1024) throw new InvalidDataException("Oversized derived mip data.");
+            raw.Write(buffer, 0, read);
+        }
+        return raw.ToArray();
+    }
+
     public void Dispose()
     {
-        _disposed = true; _stop.Cancel(); _queue.Writer.TryComplete();
-        Forget();
-        lock (_watchers) { foreach (var watcher in _watchers.Values) watcher.Dispose(); _watchers.Clear(); }
-        _watchedFiles.Clear(); SourceChanged = null;
+        lock (_requestsGate)
+        {
+            if (_disposed) return;
+            _disposed = true; _stop.Cancel(); _queue.Writer.TryComplete();
+            Forget();
+            lock (_watchers) { foreach (var watcher in _watchers.Values) watcher.Dispose(); _watchers.Clear(); }
+            _watchedFiles.Clear(); SourceChanged = null;
+            var retiring = _retirements.ToArray();
+            // Dispose is nonblocking for the UI. Async disposal/Completion lets tests and
+            // profile cleanup await all file handles and native buffers before removing them.
+            _shutdown = Task.Run(async () =>
+            {
+                await Task.WhenAll(retiring.Append(_workers)).ConfigureAwait(false);
+                _preparedSource?.Dispose(); _preparedSource = null;
+                lock (_memoryGate) { _memoryPixels.Clear(); _memoryBytes = 0; }
+                _mipReader.Dispose(); _mipSlots.Dispose(); _largeSlot.Dispose(); _stop.Dispose();
+            });
+        }
     }
+
+    public ValueTask DisposeAsync() { Dispose(); return new(Completion); }
 }
