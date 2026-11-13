@@ -11,9 +11,26 @@ namespace Map.Presentation.Services;
 /// </summary>
 public sealed class CatalogStampImageSource(
     AssetCatalog catalog, Func<MapDocument> document, Func<string?> projectPath, int imageCapacity = 4096,
-    long cacheBytes = 512L * 1024 * 1024, bool retainSamples = true, string? derivedRoot = null) : IStampImageSource, IDisposable, IAsyncDisposable
+    long cacheBytes = 512L * 1024 * 1024, bool retainSamples = true, string? derivedRoot = null,
+    TimeProvider? retryClock = null, Action<FileSystemWatcher>? startWatcher = null) : IStampImageSource, IDisposable, IAsyncDisposable
 {
-    private readonly StampDerivedAssetStore? _derived = derivedRoot is null ? null : new(catalog, derivedRoot);
+    private readonly StampDerivedAssetStore? _derived = derivedRoot is null ? null : new(catalog, derivedRoot,
+        retryClock: retryClock, startWatcher: startWatcher);
+    private readonly TimeProvider _retryClock = retryClock ?? TimeProvider.System;
+    private readonly CancellationTokenSource _retryStop = new();
+    private Task? _missingRetry;
+    private readonly HashSet<StampDerivedAssetStore.PixelKey> _cacheableMissing = [];
+    // Per-SHA count of _cacheableMissing keys: the overview asks per asset inside a frame (no linear scan).
+    private readonly Dictionary<string, int> _cacheableMissingShas = new(StringComparer.OrdinalIgnoreCase);
+    private long _missingRevision;
+    public long MissingRevision => Interlocked.Read(ref _missingRevision);
+    [ThreadStatic] private static bool _lastImageRequestCacheableMissing;
+    public bool LastImageRequestCacheableMissing => _lastImageRequestCacheableMissing;
+    public bool IsMissingCacheable(string sha256)
+    {
+        lock (_gate) return _derived?.IsTerminalMissing(sha256) == true
+            || _cacheableMissingShas.ContainsKey(sha256);
+    }
     private int _overviewNotification;
     private int _previewNotification;
     private readonly HashSet<string> _derivedNotifications = new(StringComparer.OrdinalIgnoreCase);
@@ -44,7 +61,13 @@ public sealed class CatalogStampImageSource(
         if (_derived is null) return true;
         _derived.SourceChanged = ready;
         string[] shas;
-        lock (_gate) shas = assets.Where(sha => !_overviewColors.ContainsKey(sha)).ToArray();
+        lock (_gate)
+        {
+            _derivedReady = ready;
+            shas = assets.Where(sha => !_overviewColors.ContainsKey(sha)).ToArray();
+            foreach (var sha in shas) TrackMissingHeader(sha);
+            shas = shas.Where(sha => !IsMissingCacheable(sha)).ToArray();
+        }
         if (shas.Length == 0) return true;
         var generation = _derived.Generation;
         var tasks = shas.Select(_derived.Request).ToArray();
@@ -165,6 +188,7 @@ public sealed class CatalogStampImageSource(
             _missingSteps.Clear();
             _decodeFailed.Clear();
             _latePixels.Clear(); _pixelRetryAt.Clear(); _pixelFailures.Clear();
+            _cacheableMissing.Clear(); _cacheableMissingShas.Clear();
             _derivedNotifications.Clear();
             _resolved.Clear();
         }
@@ -193,19 +217,21 @@ public sealed class CatalogStampImageSource(
     private SKImage? WorkingImage(string sha256)
     {
         LastImageRequestPending = false;
+        _lastImageRequestCacheableMissing = false;
         if (!_planning && _derived is not null && _frameThread == Environment.CurrentManagedThreadId
             && catalog.Find(sha256) is { } record)
         {
             var step = AssetCatalog.DetailLadderDepth(record.Width, record.Height) > 0 ? 1 : 0;
             var key = new StampDerivedAssetStore.PixelKey(sha256.ToLowerInvariant(), step, 0);
             var ready = ReadyPixels(key);
-            if (ready is null) _unresolvedRequestVersion++;
             if (ready is null && !_decodeFailed.Contains(PixelName(key)))
             {
                 _latePixels.Add(key);
                 if (QueuePixels(key, _derivedReady ?? (() => { }))) _latePixels.Remove(key);
                 LastImageRequestPending = !_decodeFailed.Contains(PixelName(key));
             }
+            _lastImageRequestCacheableMissing = _cacheableMissing.Contains(key);
+            if (ready is null && !_lastImageRequestCacheableMissing) _unresolvedRequestVersion++;
             return ready;
         }
         var image = TryGetLadderStep(sha256, 1) ?? (_plan is null ? TryGetOriginal(sha256) : null);
@@ -238,6 +264,8 @@ public sealed class CatalogStampImageSource(
             {
                 if (_disposed) return null;
                 if (_overviewColors.TryGetValue(sha256, out var known)) return known;
+                TrackMissingHeader(sha256);
+                if (IsMissingCacheable(sha256)) return null;
                 _derived.Request(sha256);
                 if (_derived.TryReady(sha256) is { } prepared)
                     return _overviewColors[sha256] = new SKColor(prepared.Color);
@@ -385,12 +413,12 @@ public sealed class CatalogStampImageSource(
     private SKImage? ForPixelSize(string sha256, double width, double height)
     {
         LastImageRequestPending = false;
+        _lastImageRequestCacheableMissing = false;
         if (!_planning && _derived is not null && _frameThread == Environment.CurrentManagedThreadId
             && catalog.Find(sha256) is { } recordForFrame)
         {
             var key = PixelKey(recordForFrame, width, height);
             var ready = ReadyPixels(key);
-            if (ready is null) _unresolvedRequestVersion++;
             if (ready is null && !_decodeFailed.Contains(PixelName(key)))
             {
                 // Float geometry/rotation may cross a mip boundary that the double-sized
@@ -399,6 +427,8 @@ public sealed class CatalogStampImageSource(
                 if (QueuePixels(key, _derivedReady ?? (() => { }))) _latePixels.Remove(key);
                 LastImageRequestPending = !_decodeFailed.Contains(PixelName(key));
             }
+            _lastImageRequestCacheableMissing = _cacheableMissing.Contains(key);
+            if (ready is null && !_lastImageRequestCacheableMissing) _unresolvedRequestVersion++;
             return ready;
         }
         // Prepared raw pixels have already passed the worker's source-stamp and SHA checks.
@@ -500,6 +530,7 @@ public sealed class CatalogStampImageSource(
             // A late request can still be waiting for metadata when the camera leaves it;
             // then no pixel task exists to deliver a cancellation back to BeginFrame.
             _latePixels.RemoveWhere(key => !_wantedMips.Contains(key));
+            _wantedMips.UnionWith(_cacheableMissing);
             _derived?.CancelUnwantedPixels(_wantedMips);
             if (_disposed) { DisposeIfUnused(); return; }
             _cache.DeferDisposal = false;
@@ -722,25 +753,92 @@ public sealed class CatalogStampImageSource(
     private SKImage? ReadyPixels(StampDerivedAssetStore.PixelKey key)
     {
         var name = PixelName(key);
-        if (_pixelRetryAt.TryGetValue(name, out var retry) && Environment.TickCount64 >= retry)
+        if (_pixelRetryAt.TryGetValue(name, out var retry) && _retryClock.GetUtcNow().ToUnixTimeMilliseconds() >= retry)
         { _pixelRetryAt.Remove(name); _decodeFailed.Remove(name); }
         return _samples.Get(name, null) ?? _cache.Get(name, null);
     }
 
-    private void FailedPixels(string name, bool permanent = false)
+    private void FailedPixels(StampDerivedAssetStore.PixelKey pixel, bool permanent = false)
     {
+        var name = PixelName(pixel);
         _decodeFailed.Add(name);
-        if (_pixelRetryAt.ContainsKey(name)) return;
+        if (!permanent && _pixelRetryAt.ContainsKey(name)) return;
         var attempts = _pixelFailures.GetValueOrDefault(name) + 1;
         _pixelFailures[name] = attempts;
-        if (permanent || attempts >= 4) { _pixelRetryAt[name] = long.MaxValue; return; }
+        if (permanent || attempts >= 4)
+        {
+            _pixelRetryAt[name] = long.MaxValue;
+            if (_cacheableMissing.Add(pixel))
+                _cacheableMissingShas[pixel.Sha] = _cacheableMissingShas.GetValueOrDefault(pixel.Sha) + 1;
+            _latePixels.Remove(pixel);
+            _derived!.SetCacheableMissing(pixel.Sha, true);
+            _missingRetry ??= Task.Run(RetryMissingLoop);
+            return;
+        }
         var delay = 2100 << (attempts - 1);
-        _pixelRetryAt[name] = Environment.TickCount64 + delay;
-        _ = Task.Delay(delay).ContinueWith(_ => { if (!_disposed) _derivedReady?.Invoke(); }, TaskScheduler.Default);
+        _pixelRetryAt[name] = _retryClock.GetUtcNow().ToUnixTimeMilliseconds() + delay;
+        _ = Task.Delay(TimeSpan.FromMilliseconds(delay), _retryClock, _retryStop.Token).ContinueWith(task =>
+        { if (task.IsCompletedSuccessfully && !_disposed) _derivedReady?.Invoke(); }, TaskScheduler.Default);
     }
 
-    // Only BeginFrame adopts completed rasters, under its 2 ms budget. A preflight may
-    // run several times per frame; draining here would silently multiply that budget.
+    private async Task RetryMissingLoop()
+    {
+        try
+        {
+            while (true)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(60), _retryClock, _retryStop.Token).ConfigureAwait(false);
+                StampDerivedAssetStore.PixelKey[] missing;
+                lock (_gate) missing = _cacheableMissing.ToArray();
+                foreach (var pixel in missing)
+                {
+                    var header = await _derived!.Request(pixel.Sha).ConfigureAwait(false);
+                    if (header is null) continue;
+                    Task<StampDerivedAssetStore.Mip> task;
+                    lock (_gate)
+                    {
+                        if (_disposed || !_cacheableMissing.Contains(pixel)) continue;
+                        if (!_derived.TryRequestPixels(header, pixel.Step, pixel.Level, out task)) continue;
+                    }
+                    await task.ConfigureAwait(false);
+                    lock (_gate)
+                    {
+                        if (_disposed || !_cacheableMissing.Contains(pixel)) continue;
+                        // Same cache lock and lifetime deferral as background image leases.
+                        // Failed retries release their slots silently; only usable pixels wake UI.
+                        Enter();
+                        if (_derived.TryTakePixels(pixel, out var mip)) AdoptDerivedMip(pixel, mip);
+                    }
+                }
+            }
+        }
+        catch (OperationCanceledException) when (_retryStop.IsCancellationRequested) { }
+    }
+
+    private void RecoveredPixels(StampDerivedAssetStore.PixelKey pixel)
+    {
+        var name = PixelName(pixel);
+        _pixelFailures.Remove(name); _pixelRetryAt.Remove(name); _decodeFailed.Remove(name);
+        if (!_cacheableMissing.Remove(pixel)) return;
+        // Distinct from SourceRevision: ordinary mip arrivals do not change any revision.
+        Interlocked.Increment(ref _missingRevision);
+        _overviewColors.Remove(pixel.Sha);
+        var left = _cacheableMissingShas.GetValueOrDefault(pixel.Sha) - 1;
+        if (left > 0) _cacheableMissingShas[pixel.Sha] = left;
+        else { _cacheableMissingShas.Remove(pixel.Sha); _derived!.SetCacheableMissing(pixel.Sha, false); }
+        _derivedReady?.Invoke();
+    }
+
+    private void TrackMissingHeader(string sha)
+    {
+        if (_derived?.IsTerminalMissing(sha) != true || catalog.Find(sha) is not { } record) return;
+        var step = AssetCatalog.DetailLadderDepth(record.Width, record.Height) > 0 ? 1 : 0;
+        var pixel = new StampDerivedAssetStore.PixelKey(sha.ToLowerInvariant(), step, 0);
+        if (!_cacheableMissing.Contains(pixel)) FailedPixels(pixel, permanent: true);
+    }
+
+    // Normal completions are adopted by BeginFrame under its 2 ms budget. A preflight
+    // may run several times per frame; draining here would multiply that budget.
     private bool QueuePixels(StampDerivedAssetStore.PixelKey key, Action ready)
     {
         _wantedMips.Add(key);
@@ -752,7 +850,7 @@ public sealed class CatalogStampImageSource(
             NotifyDerived(accepted ? PixelName(key) : "queue-capacity", pixels, ready);
             return false;
         }
-        FailedPixels(PixelName(key));
+        FailedPixels(key);
         return true;
     }
 
@@ -764,18 +862,19 @@ public sealed class CatalogStampImageSource(
         if (mip?.Image is { } image)
         {
             var target = Math.Max(image.Width, image.Height) <= 256 ? _samples : _cache;
-            if (target.AdoptPixels(key, image) is null && !target.Contains(key)) FailedPixels(key, permanent: true);
-            else { _pixelFailures.Remove(key); _pixelRetryAt.Remove(key); _decodeFailed.Remove(key); }
+            if (target.AdoptPixels(key, image) is null && !target.Contains(key)) FailedPixels(pixel, permanent: true);
+            else RecoveredPixels(pixel);
         }
         else if (mip?.Pixels is { } pixels)
         {
             using var bitmap = new SKBitmap(new SKImageInfo(mip.Width, mip.Height, SKColorType.Rgba8888, SKAlphaType.Premul));
             System.Runtime.InteropServices.Marshal.Copy(pixels, 0, bitmap.GetPixels(), pixels.Length);
             bitmap.SetImmutable();
-            _samples.AdoptPixels(key, SKImage.FromBitmap(bitmap));
+            if (_samples.AdoptPixels(key, SKImage.FromBitmap(bitmap)) is null && !_samples.Contains(key)) FailedPixels(pixel, permanent: true);
+            else RecoveredPixels(pixel);
         }
-        else if (mip is not { Cancelled: true }) FailedPixels(key);
-        // Provisional pixels are not retained by the renderer. Arrivals never invalidate unrelated resources.
+        else if (mip is not { Cancelled: true }) FailedPixels(pixel);
+        // Ordinary mip arrivals leave SourceRevision and MissingRevision unchanged.
         _latePixels.Remove(pixel);
         _derivedNotifications.Remove(key);
     }
@@ -867,6 +966,7 @@ public sealed class CatalogStampImageSource(
         lock (_gate)
         {
             _disposed = true;
+            _retryStop.Cancel();
             _derived?.Dispose();
             DisposeIfUnused();
         }
@@ -876,6 +976,7 @@ public sealed class CatalogStampImageSource(
     {
         Dispose();
         if (_derived is not null) await _derived.Completion.ConfigureAwait(false);
+        if (_missingRetry is not null) await _missingRetry.ConfigureAwait(false);
     }
 
     private void DisposeIfUnused()

@@ -35,12 +35,20 @@ public sealed class StampDerivedAssetStore : IDisposable, IAsyncDisposable
     private readonly int _metadataCapacity;
     private readonly ConcurrentDictionary<string, TaskCompletionSource<Header?>> _requests = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, (int Attempts, long RetryAt)> _failedHeaders = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, byte> _quietMissing = new(StringComparer.OrdinalIgnoreCase);
+    private readonly TimeProvider _retryClock;
+    internal void SetCacheableMissing(string sha, bool missing)
+    {
+        if (missing) _quietMissing[sha] = 0;
+        else _quietMissing.TryRemove(sha, out _);
+    }
     private readonly Channel<(string Sha, TaskCompletionSource<Header?> Completion, TaskCompletionSource<SKColor?> Preview)> _queue =
         Channel.CreateUnbounded<(string, TaskCompletionSource<Header?>, TaskCompletionSource<SKColor?>)>(new() { SingleReader = true });
     private readonly Channel<(string Sha, TaskCompletionSource<Header?> Completion)> _buildQueue =
         Channel.CreateUnbounded<(string, TaskCompletionSource<Header?>)>(new() { SingleReader = true });
     private readonly ConcurrentDictionary<string, TaskCompletionSource<SKColor?>> _previews = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, string> _watchedFiles = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Action<FileSystemWatcher> _startWatcher;
     private readonly Dictionary<string, FileSystemWatcher> _watchers = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, byte> _invalidated = new(StringComparer.OrdinalIgnoreCase);
     public Action? SourceChanged { get; set; }
@@ -107,13 +115,16 @@ public sealed class StampDerivedAssetStore : IDisposable, IAsyncDisposable
         FileStamp Original, FileStamp Working, int FirstMip, int MipCount, string PixelHash);
 
     public StampDerivedAssetStore(AssetCatalog catalog, string root, long diskBudgetBytes = 2L * 1024 * 1024 * 1024,
-        int metadataCapacity = 8192, int pixelCapacity = 4096, long preparedSourceByteCapacity = 64L * 1024 * 1024)
+        int metadataCapacity = 8192, int pixelCapacity = 4096, long preparedSourceByteCapacity = 64L * 1024 * 1024,
+        TimeProvider? retryClock = null, Action<FileSystemWatcher>? startWatcher = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(diskBudgetBytes);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(metadataCapacity);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(pixelCapacity);
         ArgumentOutOfRangeException.ThrowIfNegative(preparedSourceByteCapacity);
         _catalog = catalog;
+        _retryClock = retryClock ?? TimeProvider.System;
+        _startWatcher = startWatcher ?? (watcher => watcher.EnableRaisingEvents = true);
         _root = Path.GetFullPath(root);
         _diskBudget = diskBudgetBytes;
         _metadataCapacity = metadataCapacity;
@@ -130,9 +141,12 @@ public sealed class StampDerivedAssetStore : IDisposable, IAsyncDisposable
             if (_disposed) return Task.FromResult<Header?>(null);
             if (_requests.TryGetValue(sha, out var existing))
             {
-                if (!_failedHeaders.TryGetValue(sha, out var failed) || Environment.TickCount64 < failed.RetryAt) return existing.Task;
+                if (!_failedHeaders.TryGetValue(sha, out var failed) || _retryClock.GetUtcNow().ToUnixTimeMilliseconds() < failed.RetryAt) return existing.Task;
                 _requests.TryRemove(sha, out _); _previews.TryRemove(sha, out _);
             }
+            // Metadata eviction must not reset a missing asset's backoff/attempt count.
+            if (_failedHeaders.TryGetValue(sha, out var failure) && _retryClock.GetUtcNow().ToUnixTimeMilliseconds() < failure.RetryAt)
+                return Task.FromResult<Header?>(null);
             if (_catalog.Find(sha) is null) return Task.FromResult<Header?>(null);
             var completion = new TaskCompletionSource<Header?>(TaskCreationOptions.RunContinuationsAsynchronously);
             _requests[sha] = completion;
@@ -146,6 +160,8 @@ public sealed class StampDerivedAssetStore : IDisposable, IAsyncDisposable
 
     public Header? TryReady(string sha) => _requests.TryGetValue(sha, out var task)
         && task.Task.IsCompletedSuccessfully ? task.Task.Result : null;
+
+    internal bool IsTerminalMissing(string sha) => _failedHeaders.TryGetValue(sha, out var failure) && failure.Attempts >= 4;
 
     public Task<SKColor?> Preview(string sha)
     {
@@ -162,6 +178,7 @@ public sealed class StampDerivedAssetStore : IDisposable, IAsyncDisposable
         {
             Interlocked.Increment(ref _generation);
             _requests.Clear(); _previews.Clear(); _completedHeaders.Clear(); _failedHeaders.Clear();
+            _quietMissing.Clear();
             foreach (var request in _mips.Values) Retire(request);
             _mips.Clear();
             SignalCapacity();
@@ -191,15 +208,15 @@ public sealed class StampDerivedAssetStore : IDisposable, IAsyncDisposable
                 if (header is null)
                 {
                     var attempts = _failedHeaders.GetValueOrDefault(sha).Attempts + 1;
-                    _failedHeaders[sha] = (attempts, attempts >= 4 ? long.MaxValue
-                        : Environment.TickCount64 + (2000L << (attempts - 1)));
+                    _failedHeaders[sha] = (attempts, _retryClock.GetUtcNow().ToUnixTimeMilliseconds()
+                        + (attempts >= 4 ? 60_000 : 2000L << (attempts - 1)));
                 }
                 else _failedHeaders.TryRemove(sha, out _);
                 _completedHeaders.Enqueue((sha, completion));
                 while ((_requests.Count > _metadataCapacity || _completedHeaders.Count > _metadataCapacity)
                     && _completedHeaders.TryDequeue(out var oldest))
                     if (_requests.TryGetValue(oldest.Sha, out var current) && ReferenceEquals(current, oldest.Completion))
-                    { _requests.TryRemove(oldest.Sha, out _); _previews.TryRemove(oldest.Sha, out _); _failedHeaders.TryRemove(oldest.Sha, out _); }
+                    { _requests.TryRemove(oldest.Sha, out _); _previews.TryRemove(oldest.Sha, out _); }
             }
         }
         completion.TrySetResult(header);
@@ -379,10 +396,10 @@ public sealed class StampDerivedAssetStore : IDisposable, IAsyncDisposable
         var recursive = path.StartsWith(root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
         if (!recursive)
             root = Path.GetDirectoryName(path)!;
-        // A linked file or its parent can be temporarily absent. Watch the nearest
-        // existing ancestor so a later restore wakes stopped retries as well.
-        while (!Directory.Exists(root) && Path.GetDirectoryName(root) is { } parent)
-        { root = parent; recursive = true; }
+        // Never widen a missing library/link into an ancestor or drive-wide watcher.
+        // The slow missing-asset retry will register this exact directory on recovery.
+        if (!Directory.Exists(root) || string.Equals(root.TrimEnd(Path.DirectorySeparatorChar),
+            Path.GetPathRoot(root)?.TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase)) return;
         lock (_watchers)
         {
             if (_disposed || _watchers.ContainsKey(root)) return;
@@ -409,7 +426,7 @@ public sealed class StampDerivedAssetStore : IDisposable, IAsyncDisposable
                     : string.Equals(Path.GetDirectoryName(path), root, StringComparison.OrdinalIgnoreCase))) FileChanged(path);
             };
             _watchers[root] = watcher;
-            watcher.EnableRaisingEvents = true;
+            _startWatcher(watcher);
         }
     }
 
@@ -418,12 +435,17 @@ public sealed class StampDerivedAssetStore : IDisposable, IAsyncDisposable
         if (_disposed || !_watchedFiles.TryGetValue(path, out var sha)) return;
         lock (_requestsGate)
         {
+            // File events are only hints for terminal misses. A successful read by the
+            // slow retry confirms recovery; repeated events must not wake the canvas.
+            var quiet = _quietMissing.ContainsKey(sha)
+                || _failedHeaders.TryGetValue(sha, out var failure) && failure.Attempts >= 4;
             Interlocked.Increment(ref _generation);
             _requests.TryRemove(sha, out _); _previews.TryRemove(sha, out _);
-            _failedHeaders.TryRemove(sha, out _);
+            if (!quiet) _failedHeaders.TryRemove(sha, out _);
             foreach (var key in _mips.Keys.Where(key => string.Equals(key.Sha, sha, StringComparison.OrdinalIgnoreCase)))
                 if (_mips.TryRemove(key, out var request)) Retire(request);
             SignalCapacity();
+            if (quiet) return;
             _invalidated[sha] = 0;
         }
         SourceChanged?.Invoke();

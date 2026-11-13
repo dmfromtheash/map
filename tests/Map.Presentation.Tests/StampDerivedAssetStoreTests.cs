@@ -506,30 +506,33 @@ public sealed class StampDerivedAssetStoreTests : IDisposable
     }
 
     [Fact]
-    public async Task Persistent_missing_source_stops_retries_until_watched_file_is_restored()
+    public async Task Persistent_missing_source_ignores_file_hints_until_the_slow_retry_confirms_restoration()
     {
         await using var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));
         var record = ImportOwner(catalog, 1);
         var path = catalog.SourcePath(record)!;
         var bytes = File.ReadAllBytes(path);
         File.Delete(path);
-        await using var store = new StampDerivedAssetStore(catalog, Path.Combine(_root, "derived"));
+        var clock = new RetryClock();
+        await using var store = new StampDerivedAssetStore(catalog, Path.Combine(_root, "derived"),
+            retryClock: clock, startWatcher: _ => { });
         var previous = store.Request(record.Sha256);
         Assert.Null(await previous.WaitAsync(TimeSpan.FromSeconds(10)));
         foreach (var delay in new[] { 2100, 4100, 8100 })
         {
-            await Task.Delay(delay);
+            clock.Advance(TimeSpan.FromMilliseconds(delay));
             var retry = store.Request(record.Sha256);
             Assert.NotSame(previous, retry);
             Assert.Null(await retry.WaitAsync(TimeSpan.FromSeconds(10)));
             previous = retry;
         }
-        await Task.Delay(2100);
         Assert.Same(previous, store.Request(record.Sha256));
         File.WriteAllBytes(path, bytes);
-        var deadline = DateTime.UtcNow.AddSeconds(10);
-        while (ReferenceEquals(previous, store.Request(record.Sha256)) && DateTime.UtcNow < deadline)
-            await Task.Delay(20);
+        typeof(StampDerivedAssetStore).GetMethod("FileChanged", System.Reflection.BindingFlags.Instance
+            | System.Reflection.BindingFlags.NonPublic)!.Invoke(store, [path]);
+        Assert.Null(await store.Request(record.Sha256));
+        Assert.Empty(store.TakeInvalidated());
+        clock.Advance(TimeSpan.FromSeconds(60));
         Assert.NotNull(await store.Request(record.Sha256).WaitAsync(TimeSpan.FromSeconds(10)));
     }
 
@@ -558,6 +561,205 @@ public sealed class StampDerivedAssetStoreTests : IDisposable
         other!.Image?.Dispose();
         Assert.NotEqual(IntPtr.Zero, owned.Handle);
         Assert.Equal(0, store.PreparedSourceBytes);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Missing_external_folder_is_unwatched_and_slow_retry_recovers_once_without_failure_frames(bool workingImage)
+    {
+        await using var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));
+        var owner = ImportOwner(catalog, 1);
+        var external = Path.Combine(_root, "external", "nested");
+        Directory.CreateDirectory(external);
+        var path = Path.Combine(external, "owner.png");
+        File.Copy(catalog.SourcePath(owner)!, path);
+        // A separate catalog ensures this is a linked record, rather than a deduplicated import.
+        await using var links = new AssetCatalog(Path.Combine(_root, "links"));
+        var record = links.Import(path, new() { Linked = OperatingSystem.IsWindows() }, DateTimeOffset.UnixEpoch);
+        if (!OperatingSystem.IsWindows())
+        {
+            // Catalog persistence validates Windows linked paths. Publish only this test's
+            // in-memory linked record on other hosts; leave its saved metadata valid.
+            await links.FlushMetadataAsync();
+            record = record with { StoredRelativePath = null, LinkedPath = path };
+            Private<AssetLibraryDocument>(links, "_document").Records[0] = record;
+            typeof(AssetCatalog).GetMethod("Reindex", System.Reflection.BindingFlags.Instance
+                | System.Reflection.BindingFlags.NonPublic)!.Invoke(links, null);
+        }
+        var parked = Path.Combine(_root, "parked");
+        Directory.Move(Path.GetDirectoryName(external)!, parked);
+        var clock = new RetryClock();
+        var stamp = new SceneObject(ObjectId.New(), SceneObjectKind.Stamp, "Гора", 32, 32, 64, 64,
+            0, "#FFFFFFFF", "#00000000", 0, true, false) { Stamp = new StampStyle(record.Sha256) };
+        var document = new MapDocument(DocumentId.New(), "Missing", DateTimeOffset.UnixEpoch,
+            new CanvasDefinition(128, 128, "px", "#FFFFFFFF"),
+            [new BaseColorLayer(LayerId.New(), "Page", true, false, 1, "#FFFFFFFF"),
+             new ObjectLayer(LayerId.New(), "Горы", true, false, 1, [stamp])]);
+        await using var source = new CatalogStampImageSource(links, () => document, () => null,
+            derivedRoot: Path.Combine(_root, "derived"), retryClock: clock, startWatcher: _ => { });
+        var store = Private<StampDerivedAssetStore>(source, "_derived");
+        SKImage? Lookup() => workingImage ? source.TryGetImage(record.Sha256)
+            : source.TryGetImageForPixelSize(record.Sha256, 16, 16);
+        var notifications = 0;
+        source.SetFrameReady(() => Interlocked.Increment(ref notifications));
+        for (var attempt = 0; attempt < 4; attempt++)
+        {
+            using (source.BeginFrame()) Assert.Null(Lookup());
+            Assert.Null(await store.Request(record.Sha256).WaitAsync(TimeSpan.FromSeconds(10)));
+            using (source.BeginFrame()) Assert.Null(Lookup());
+            if (attempt < 3) clock.Advance(TimeSpan.FromMilliseconds(2100 << attempt));
+        }
+        await Eventually(() => clock.HasSlowTimer);
+        await Eventually(() => Private<HashSet<string>>(source, "_derivedNotifications").Count == 0);
+        var version = source.UnresolvedRequestVersion;
+        using (source.BeginFrame())
+        {
+            Assert.Null(Lookup());
+            Assert.True(source.LastImageRequestCacheableMissing);
+            Assert.False(source.LastImageRequestPending);
+        }
+        Assert.Equal(version, source.UnresolvedRequestVersion);
+        var watchers = Private<Dictionary<string, FileSystemWatcher>>(store, "_watchers");
+        Assert.DoesNotContain(watchers.Keys, root => !root.StartsWith(links.RootFor(record), StringComparison.Ordinal));
+        Assert.DoesNotContain(watchers.Keys, root => root == Path.GetPathRoot(root));
+        var before = Volatile.Read(ref notifications);
+        clock.Advance(TimeSpan.FromSeconds(60));
+        await Eventually(() => HeaderAttempts(store, record.Sha256) == 5 && clock.HasSlowTimer);
+        Assert.Equal(before, Volatile.Read(ref notifications));
+        Assert.Equal(0, source.MissingRevision);
+        Directory.Move(parked, Path.GetDirectoryName(external)!);
+        clock.Advance(TimeSpan.FromSeconds(59));
+        Assert.Equal(before, Volatile.Read(ref notifications));
+        clock.Advance(TimeSpan.FromSeconds(1));
+        await Eventually(() => source.MissingRevision == 1 && Volatile.Read(ref notifications) == before + 1);
+        Assert.Equal(0, source.SourceRevision);
+        Assert.True(watchers.TryGetValue(external, out var watcher));
+        Assert.False(watcher.IncludeSubdirectories);
+        using var baseline = new CatalogStampImageSource(links, () => document, () => null);
+        using (source.BeginFrame())
+        {
+            using var actual = SKBitmap.FromImage(Lookup()!);
+            using var expected = SKBitmap.FromImage((workingImage ? baseline.TryGetImage(record.Sha256)
+                : baseline.TryGetImageForPixelSize(record.Sha256, 16, 16))!);
+            Assert.Equal(expected.Bytes, actual.Bytes);
+        }
+        Assert.Empty(Private<Dictionary<string, int>>(source, "_pixelFailures"));
+        clock.Advance(TimeSpan.FromSeconds(60));
+        Assert.Equal(before + 1, Volatile.Read(ref notifications));
+        Assert.Equal(1, source.MissingRevision);
+        await Eventually(() =>
+        {
+            using (source.BeginFrame()) return source.TryGetImageForPixelSize(record.Sha256, 64, 64) is not null;
+        });
+        Assert.Equal(0, source.SourceRevision); // Ordinary mip arrival is independent of recovery.
+        Assert.Equal(1, source.MissingRevision);
+    }
+
+    [Fact]
+    public async Task Catalog_watcher_is_single_recursive_and_missing_catalog_never_uses_an_ancestor_or_drive_root()
+    {
+        await using var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));
+        var records = new[] { ImportOwner(catalog, 1), ImportOwner(catalog, 2) };
+        await catalog.FlushMetadataAsync();
+        await using (var store = new StampDerivedAssetStore(catalog, Path.Combine(_root, "derived"), startWatcher: _ => { }))
+        {
+            foreach (var record in records) Assert.NotNull(await store.Request(record.Sha256));
+            var watcher = Assert.Single(Private<Dictionary<string, FileSystemWatcher>>(store, "_watchers"));
+            Assert.Equal(catalog.Root, watcher.Key);
+            Assert.True(watcher.Value.IncludeSubdirectories);
+        }
+        var parked = Path.Combine(_root, "parked");
+        Directory.Move(catalog.Root, parked);
+        try
+        {
+            await using var store = new StampDerivedAssetStore(catalog, Path.Combine(_root, "derived"), startWatcher: _ => { });
+            Assert.Null(await store.Request(records[0].Sha256));
+            typeof(StampDerivedAssetStore).GetMethod("Watch", System.Reflection.BindingFlags.Instance
+                | System.Reflection.BindingFlags.NonPublic)!.Invoke(store,
+                    [records[0], Path.Combine(Path.GetPathRoot(_root)!, "map-missing-watcher-test.png")]);
+            Assert.Empty(Private<Dictionary<string, FileSystemWatcher>>(store, "_watchers"));
+        }
+        finally { Directory.Move(parked, catalog.Root); }
+    }
+
+    [Fact]
+    public async Task Metadata_trimming_preserves_missing_attempts_and_backoff()
+    {
+        await using var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));
+        var missing = ImportOwner(catalog, 1);
+        var available = ImportOwner(catalog, 2);
+        File.Delete(catalog.SourcePath(missing)!);
+        var clock = new RetryClock();
+        await using var store = new StampDerivedAssetStore(catalog, Path.Combine(_root, "derived"),
+            metadataCapacity: 1, retryClock: clock, startWatcher: _ => { });
+        for (var attempt = 1; attempt <= 4; attempt++)
+        {
+            Assert.Null(await store.Request(missing.Sha256));
+            Assert.NotNull(await store.Request(available.Sha256));
+            Assert.Equal(attempt, HeaderAttempts(store, missing.Sha256));
+            Assert.Null(await store.Request(missing.Sha256));
+            Assert.Equal(attempt, HeaderAttempts(store, missing.Sha256));
+            clock.Advance(TimeSpan.FromSeconds(attempt < 4 ? 2 << (attempt - 1) : 59));
+        }
+        Assert.Null(await store.Request(missing.Sha256));
+        Assert.Equal(4, HeaderAttempts(store, missing.Sha256));
+        clock.Advance(TimeSpan.FromSeconds(1));
+        Assert.Null(await store.Request(missing.Sha256));
+        Assert.Equal(5, HeaderAttempts(store, missing.Sha256));
+    }
+
+    private static T Private<T>(object target, string field) => (T)target.GetType()
+        .GetField(field, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(target)!;
+
+    private static int HeaderAttempts(StampDerivedAssetStore store, string sha) =>
+        Private<System.Collections.Concurrent.ConcurrentDictionary<string, (int Attempts, long RetryAt)>>(store, "_failedHeaders")[sha].Attempts;
+
+    private static async Task Eventually(Func<bool> condition)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (!condition() && DateTime.UtcNow < deadline) await Task.Delay(10);
+        Assert.True(condition());
+    }
+
+    // The production 60-second delay and header/pixel backoffs share this clock. No wall-clock minute in tests.
+    private sealed class RetryClock : TimeProvider
+    {
+        private readonly object _gate = new();
+        private DateTimeOffset _now = DateTimeOffset.UnixEpoch;
+        private readonly List<RetryTimer> _timers = [];
+        public override DateTimeOffset GetUtcNow() { lock (_gate) return _now; }
+        public bool HasSlowTimer { get { lock (_gate) return _timers.Any(t => !t.Disposed && t.Due == _now.AddSeconds(60)); } }
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            lock (_gate)
+            {
+                var timer = new RetryTimer(this, callback, state);
+                timer.Change(dueTime, period); _timers.Add(timer);
+                return timer;
+            }
+        }
+        public void Advance(TimeSpan elapsed)
+        {
+            RetryTimer[] due;
+            lock (_gate) { _now += elapsed; due = _timers.Where(t => !t.Disposed && t.Due <= _now).ToArray(); }
+            foreach (var timer in due) { timer.Dispose(); timer.Callback(timer.State); }
+        }
+        private sealed class RetryTimer(RetryClock clock, TimerCallback callback, object? state) : ITimer
+        {
+            public TimerCallback Callback { get; } = callback;
+            public object? State { get; } = state;
+            public DateTimeOffset Due { get; private set; }
+            public bool Disposed { get; private set; }
+            public bool Change(TimeSpan dueTime, TimeSpan period)
+            {
+                Assert.Equal(Timeout.InfiniteTimeSpan, period);
+                lock (clock._gate) Due = dueTime == Timeout.InfiniteTimeSpan ? DateTimeOffset.MaxValue : clock._now + dueTime;
+                return !Disposed;
+            }
+            public void Dispose() { lock (clock._gate) Disposed = true; }
+            public ValueTask DisposeAsync() { Dispose(); return ValueTask.CompletedTask; }
+        }
     }
 
     public void Dispose()

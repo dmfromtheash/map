@@ -871,13 +871,13 @@ public static partial class SceneRenderer
         RenderOptions options)
     {
         var stats = options.Stats!;
-        var missingBefore = stats.MissingAssets;
         var pendingBefore = stats.DetailTilesPending;
         var unresolvedBefore = stats.UnresolvedImages;
         var requestsBefore = options.Stamps?.UnresolvedRequestVersion ?? 0;
         // R10: the depth order of the layer and its areas' underlays are drawn with the objects.
         object[] parts = [layer.Objects, layer.SublayerStates, layer.Effects.DepthSort, layer.PlacementAreas, options.LodTier, options.FastPreview, options.FastTerrain, options.ViewScale,
-            (object?)options.Stamps ?? DBNull.Value, (object?)document.StampForeground ?? DBNull.Value, document.Assets];
+            (object?)options.Stamps ?? DBNull.Value, options.Stamps?.MissingRevision ?? 0L,
+            (object?)document.StampForeground ?? DBNull.Value, document.Assets];
         var built = false;
         void Draw(SKCanvas target)
         {
@@ -887,7 +887,7 @@ public static partial class SceneRenderer
             stats.ObjectsMilliseconds += Stopwatch.GetElapsedTime(started).TotalMilliseconds;
         }
         if (!options.LayerImages!.TryDraw(canvas, layer.Id, parts, options.GpuContext, Draw,
-                () => stats.MissingAssets == missingBefore && stats.DetailTilesPending == pendingBefore
+                () => stats.DetailTilesPending == pendingBefore
                     && stats.UnresolvedImages == unresolvedBefore
                     && (options.Stamps?.UnresolvedRequestVersion ?? 0) == requestsBefore, slot: 1))
         {
@@ -930,7 +930,6 @@ public static partial class SceneRenderer
         WorldBounds view, RenderOptions options)
     {
         var stats = options.Stats!;
-        var missingBefore = stats.MissingAssets;
         var pendingBefore = stats.DetailTilesPending;
         var built = false;
         // Everything the layer's pixels are drawn from besides the layer itself: the detail
@@ -938,13 +937,13 @@ public static partial class SceneRenderer
         // A fast frame (the camera moving) draws dense tiles of a nearby zoom bucket resampled:
         // its image must not serve the exact frame that follows.
         object[] parts = [layer, options.LodTier, options.FastPreview, options.FastTerrain, options.ViewScale, (object?)options.Stamps ?? DBNull.Value,
-            (object?)document.StampForeground ?? DBNull.Value, document.Assets];
+            options.Stamps?.MissingRevision ?? 0L, (object?)document.StampForeground ?? DBNull.Value, document.Assets];
         var appended = AppendedObjects(layer, view, options, out var previous);
         var unresolvedBefore = stats.UnresolvedImages;
         var requestsBefore = options.Stamps?.UnresolvedRequestVersion ?? 0;
         var drawn = options.LayerImages!.TryDraw(canvas, layer.Id, parts, options.GpuContext,
             target => { built = true; DrawLayer(target, document, layer, clippingSource, view, options, drawRivers: false); },
-            () => stats.MissingAssets == missingBefore && stats.DetailTilesPending == pendingBefore
+            () => stats.DetailTilesPending == pendingBefore
                 && stats.UnresolvedImages == unresolvedBefore
                 && (options.Stamps?.UnresolvedRequestVersion ?? 0) == requestsBefore,
             previous,
@@ -972,7 +971,6 @@ public static partial class SceneRenderer
         RenderOptions options, bool reuseOnly = false)
     {
         var stats = options.Stats!;
-        var missingBefore = stats.MissingAssets;
         var pendingBefore = stats.DetailTilesPending;
         var built = false;
         var unresolvedBefore = stats.UnresolvedImages;
@@ -982,7 +980,7 @@ public static partial class SceneRenderer
         // bucket served every still frame after the zoom (the exact bucket was built only by the
         // next edit, 0.4-0.6 s inside a stroke on 50 000 objects; found in the live check 2026-10-18).
         object[] parts = [layer, options.LodTier, options.FastPreview, options.FastTerrain, (object?)options.Stamps ?? DBNull.Value,
-            (object?)document.StampForeground ?? DBNull.Value, document.Assets];
+            options.Stamps?.MissingRevision ?? 0L, (object?)document.StampForeground ?? DBNull.Value, document.Assets];
         var device = canvas.DeviceClipBounds;
         // Dense layers already reuse world-aligned tiles. Building a widened pan image visits
         // up to three times as many tiles, exceeding the cache's 16 MiB pressure budget and
@@ -996,7 +994,7 @@ public static partial class SceneRenderer
                 DrawLayer(target, document, layer, clippingSource, new WorldBounds(world.Left, world.Top, world.Right, world.Bottom),
                     options, drawRivers: false);
             },
-            () => stats.MissingAssets == missingBefore && stats.DetailTilesPending == pendingBefore
+            () => stats.DetailTilesPending == pendingBefore
                 && stats.UnresolvedImages == unresolvedBefore
                 && (options.Stamps?.UnresolvedRequestVersion ?? 0) == requestsBefore, reuseOnly, allowScale: !reuseOnly);
         if (drawn && !built) stats.LayerImagesKept++;
@@ -3396,7 +3394,7 @@ public static partial class SceneRenderer
             }
         }
         public bool TryAppendBase(ObjectOverviewCache cache, LayerId layer, int x, int y, int zoom,
-            WorldBounds bounds, out ObjectOverviewCacheResult basis, out IReadOnlyList<SceneObject> tail)
+            WorldBounds bounds, long missingRevision, out ObjectOverviewCacheResult basis, out IReadOnlyList<SceneObject> tail)
         {
             var segments = new List<SceneObject[]>();
             var current = this;
@@ -3405,7 +3403,7 @@ public static partial class SceneRenderer
                 segments.Add(appended);
                 // The plain detail key only: a depth-sorted layer (R10) is kept under its own key, so an append
                 // that would break its order by Y never finds a base here and the tile is rebuilt instead.
-                if (cache.TryGet(layer, x, y, 10000 + zoom, parent.Version(x, y, zoom, bounds), out basis))
+                if (cache.TryGet(layer, x, y, 10000 + zoom, parent.Version(x, y, zoom, bounds, missingRevision), out basis))
                 {
                     segments.Reverse();
                     tail = segments.SelectMany(s => s).Where(o => o.Visible && SceneGeometry.BoundsOf(o).Intersects(bounds)).ToArray();
@@ -3416,11 +3414,11 @@ public static partial class SceneRenderer
             basis = default; tail = [];
             return false;
         }
-        public ulong Version(int x, int y, int zoom, WorldBounds bounds) => _versions.GetOrAdd((x, y, zoom), key =>
+        public ulong Version(int x, int y, int zoom, WorldBounds bounds, long missingRevision = 0) => _versions.GetOrAdd((x, y, zoom), key =>
         {
             if (_parent is not null && !_changed.Any(b => b.Intersects(bounds))) return _parent.Version(x, y, zoom, bounds);
             return unchecked((ulong)System.Threading.Interlocked.Increment(ref _detailRevision));
-        });
+        }) ^ unchecked((ulong)missingRevision * 0x9e3779b97f4a7c15UL);
         private static bool Neutral(SceneObject o) => o.Kind == SceneObjectKind.Stamp
             && o.Stamp is { Blur: 0, ShadowOpacity: 0, ClipMaskEnabled: false, Blend: "Normal" };
     }
@@ -3461,8 +3459,9 @@ public static partial class SceneRenderer
         // uncovered area. Small pages retain the cheap whole-page fallback.
         var canRefine = prepareBucket is null && !options.IsExport && options.RequestRefinedFrame is not null;
         var page = new WorldBounds(0, 0, document.Canvas.Width, document.Canvas.Height);
-        var fallbackBucket = canRefine ? NearestKeptBucket(layer, view, bucket, revisions, cache) : null;
-        if (canRefine && !HasKeptTiles(layer, view, bucket, revisions, cache)
+        var missingRevision = options.Stamps?.MissingRevision ?? 0;
+        var fallbackBucket = canRefine ? NearestKeptBucket(layer, view, bucket, revisions, cache, missingRevision) : null;
+        if (canRefine && !HasKeptTiles(layer, view, bucket, revisions, cache, missingRevision)
             && !StampImagesReady(layer, AlignedDetailView(view, worldSize), scale, options))
         {
             if (fallbackBucket is not { } kept || !TryDrawKeptTiles(canvas, layer, view, kept, revisions, cache, options))
@@ -3511,7 +3510,7 @@ public static partial class SceneRenderer
         for (var x = (int)Math.Floor(view.Left / worldSize); x <= (int)Math.Floor(view.Right / worldSize); x++)
         {
             var bounds = new WorldBounds(x * worldSize, y * worldSize, (x + 1) * worldSize, (y + 1) * worldSize);
-            var revision = revisions.Version(x, y, bucket, Expand(bounds, 1 / scale));
+            var revision = revisions.Version(x, y, bucket, Expand(bounds, 1 / scale), missingRevision);
             var exactKept = cache.TryGet(layer.Id, x, y, DetailZoomKey(layer, bucket), revision, out _);
             var budgetSpent = budgetTiles && builtThisFrame > 0
                 && System.Diagnostics.Stopwatch.GetElapsedTime(budgetStarted).TotalMilliseconds >= options.DetailTileBudgetMilliseconds;
@@ -3557,7 +3556,7 @@ public static partial class SceneRenderer
                 target.Clear(SKColors.Transparent);
                 // Appended objects go on top of the kept tile; under «Ближние поверх дальних» they may belong below.
                 ObjectOverviewCacheResult basis = default!; IReadOnlyList<SceneObject> appended = [];
-                var incremental = !layer.Effects.DepthSort && revisions.TryAppendBase(cache, layer.Id, x, y, bucket, Expand(bounds, 1 / scale),
+                var incremental = !layer.Effects.DepthSort && revisions.TryAppendBase(cache, layer.Id, x, y, bucket, Expand(bounds, 1 / scale), missingRevision,
                     out basis, out appended) && !appended.Any(AreaBeautyRenderer.HasMass);
                 if (incremental)
                 {
@@ -3637,18 +3636,18 @@ public static partial class SceneRenderer
 
     /// <summary>The nearest zoom bucket whose kept tiles cover the whole view, or null when none does.</summary>
     private static int? NearestKeptBucket(ObjectLayer layer, WorldBounds view, int bucket,
-        DetailTileRevisions revisions, ObjectOverviewCache cache)
+        DetailTileRevisions revisions, ObjectOverviewCache cache, long missingRevision)
     {
         for (var delta = 1; delta <= 12; delta++)
         {
-            if (HasKeptTiles(layer, view, bucket - delta, revisions, cache)) return bucket - delta;
-            if (HasKeptTiles(layer, view, bucket + delta, revisions, cache)) return bucket + delta;
+            if (HasKeptTiles(layer, view, bucket - delta, revisions, cache, missingRevision)) return bucket - delta;
+            if (HasKeptTiles(layer, view, bucket + delta, revisions, cache, missingRevision)) return bucket + delta;
         }
         return null;
     }
 
     private static bool HasKeptTiles(ObjectLayer layer, WorldBounds view, int bucket,
-        DetailTileRevisions revisions, ObjectOverviewCache cache)
+        DetailTileRevisions revisions, ObjectOverviewCache cache, long missingRevision)
     {
         var scale = Math.Pow(2, bucket / 4d);
         var worldSize = 512 / scale;
@@ -3658,7 +3657,7 @@ public static partial class SceneRenderer
         {
             if (++count > 64) return false;
             var bounds = new WorldBounds(x * worldSize, y * worldSize, (x + 1) * worldSize, (y + 1) * worldSize);
-            if (!cache.TryGet(layer.Id, x, y, DetailZoomKey(layer, bucket), revisions.Version(x, y, bucket, Expand(bounds, 1 / scale)), out _)) return false;
+            if (!cache.TryGet(layer.Id, x, y, DetailZoomKey(layer, bucket), revisions.Version(x, y, bucket, Expand(bounds, 1 / scale), missingRevision), out _)) return false;
         }
         return true;
     }
@@ -3675,7 +3674,7 @@ public static partial class SceneRenderer
         {
             if (tiles.Count > 64) return false;
             var bounds = new WorldBounds(x * worldSize, y * worldSize, (x + 1) * worldSize, (y + 1) * worldSize);
-            var revision = revisions.Version(x, y, bucket, Expand(bounds, 1 / scale));
+            var revision = revisions.Version(x, y, bucket, Expand(bounds, 1 / scale), options.Stamps?.MissingRevision ?? 0);
             if (!cache.TryGet(layer.Id, x, y, DetailZoomKey(layer, bucket), revision, out var kept)) return false;
             tiles.Add((bounds, kept));
         }
@@ -4544,7 +4543,7 @@ public static partial class SceneRenderer
 
         if (filter.TextureAssetSha256 is not { } hash) return;
         var image = options.Stamps?.TryGetImage(hash);
-        if (image is null) { if (options.Stats is { } stats) stats.MissingAssets++; return; }
+        if (image is null) { RecordMissingAsset(options); return; }
         var scale = (float)Math.Max(0.05, filter.TextureScale);
         using var shader = image.ToShader(
             SKShaderTileMode.Repeat, SKShaderTileMode.Repeat, SKMatrix.CreateScale(scale, scale));
@@ -4902,7 +4901,7 @@ public static partial class SceneRenderer
         var image = options.Stamps?.TryGetImage(capHash);
         if (image is null)
         {
-            if (options.Stats is { } stats) stats.MissingAssets++;
+            RecordMissingAsset(options);
             return;
         }
         var width = (float)Math.Max(1, wall.Width * room.CapScale);
@@ -5409,9 +5408,17 @@ public static partial class SceneRenderer
 
     private static void RecordUnresolvedImage(RenderOptions options, bool preparing)
     {
+        if (options.Stamps?.LastImageRequestCacheableMissing == true) return;
         if (options.Stats is not { } stats) return;
         stats.UnresolvedImages++;
         if (preparing) stats.DetailTilesPending++;
+    }
+
+    private static void RecordMissingAsset(RenderOptions options)
+    {
+        if (options.Stats is not { } stats) return;
+        stats.MissingAssets++;
+        RecordUnresolvedImage(options, options.Stamps?.LastImageRequestPending == true);
     }
 
     private static void DrawLayerStampShadow(
@@ -5933,6 +5940,8 @@ public static partial class SceneRenderer
             stats.ObjectsDrawn += overviewObjects + exact.Count;
             stats.OverviewObjects += overviewObjects;
             stats.MissingAssets += Math.Max(0, overviewMissing);
+            if (overviewMissing > 0 && assets.Any(asset => !colors.ContainsKey(asset.Sha256)
+                && options.Stamps?.IsMissingCacheable(asset.Sha256) != true)) stats.UnresolvedImages++;
             stats.OverviewChunks += overviewChunks;
             stats.OverviewBatches += overviewBatches;
             stats.ExactObjects += exact.Count;

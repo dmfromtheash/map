@@ -59,6 +59,82 @@ public sealed class LocalDetailPreparationTests
     [Theory]
     [InlineData(false, false)]
     [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void Terminal_missing_stamps_keep_tiles_and_layers_until_confirmed_recovery(bool keepLayers, bool masked)
+    {
+        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        while (root is not null && !File.Exists(Path.Combine(root.FullName, "Map.slnx"))) root = root.Parent;
+        using var image = SKImage.FromEncodedData(Path.Combine(root!.FullName, "tests", "fixtures", "assets", "owner-mountain-01.png"));
+        var source = new TerminalMissing(image);
+        var objects = Enumerable.Range(0, 2400).Select(i => new SceneObject(ObjectId.New(), SceneObjectKind.Stamp,
+            "Гора", 8 + i % 50 * 8, 8 + i / 50 * 8, 16, 16, 0, "#FFFFFFFF", "#00000000", 0, true, false)
+            { Stamp = new StampStyle(Near) }).ToArray();
+        var layer = new ObjectLayer(LayerId.New(), "Горы", true, false, 1, objects);
+        var document = new MapDocument(DocumentId.New(), "Terminal missing", DateTimeOffset.UnixEpoch,
+            new CanvasDefinition(512, 512, "px", "#FFFFFFFF"),
+            [new BaseColorLayer(LayerId.New(), "Page", true, false, 1, "#FFFFFFFF"), layer]);
+        using var tiles = new ObjectOverviewCache();
+        using var referenceTiles = new ObjectOverviewCache();
+        using var layers = new LayerImageCache();
+        byte[] Draw(RenderStats stats, bool reference = false)
+        {
+            using var surface = SKSurface.Create(new SKImageInfo(512, 512))!;
+            tiles.BeginFrame();
+            try
+            {
+                SceneRenderer.Render(surface.Canvas, document, new RenderOptions
+                {
+                    Stamps = source, ObjectCache = reference ? referenceTiles : tiles,
+                    LayerImages = !reference && keepLayers ? layers : null, Stats = stats, ViewScale = 1,
+                    VisibleWorld = new(0, 0, 511, 511), MaskEditLayerId = masked ? layer.Id : null,
+                });
+                using var snapshot = surface.Snapshot();
+                using var bitmap = SKBitmap.FromImage(snapshot);
+                return bitmap.Bytes;
+            }
+            finally { tiles.EndFrame(); }
+        }
+        var first = new RenderStats();
+        var missing = Draw(first);
+        Assert.True(first.MissingAssets > 0);
+        Assert.Equal(0, first.UnresolvedImages);
+        Assert.True(tiles.Count > 0);
+        var misses = tiles.Misses;
+        Draw(new()); // Establish a still layer image after the first changed frame.
+        var calls = source.Lookups;
+        var second = new RenderStats();
+        Assert.Equal(missing, Draw(second));
+        Assert.Equal(misses, tiles.Misses);
+        Assert.Equal(calls, source.Lookups);
+        if (keepLayers) Assert.True(second.LayerImagesKept > 0);
+        source.Recover();
+        var recovered = Draw(new());
+        Assert.NotEqual(missing, recovered);
+        Assert.Equal(Draw(new(), reference: true), recovered);
+        Assert.Equal(0, source.SourceRevision);
+        Assert.Equal(1, source.MissingRevision);
+        misses = tiles.Misses;
+        Draw(new());
+        Assert.Equal(misses, tiles.Misses);
+    }
+
+    private sealed class TerminalMissing(SKImage image) : IStampImageSource
+    {
+        private bool _ready;
+        public int Lookups { get; private set; }
+        public long SourceRevision => 0;
+        public long MissingRevision { get; private set; }
+        public bool LastImageRequestCacheableMissing => !_ready;
+        public bool IsMissingCacheable(string sha256) => !_ready;
+        public (int Width, int Height)? TryGetImageSize(string sha256) => (image.Width, image.Height);
+        public SKImage? TryGetImage(string sha256) { Lookups++; return _ready ? image : null; }
+        public SKImage? TryGetReadyImageForPixelSize(string sha256, double width, double height) => null;
+        public void Recover() { _ready = true; MissingRevision++; }
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
     [InlineData(false, true)]
     [InlineData(true, true)]
     public void Overview_is_pending_until_its_exact_stamps_arrive_and_does_not_keep_a_partial_layer(bool lateRequest, bool masked)
