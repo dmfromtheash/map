@@ -34,7 +34,7 @@ public sealed class StampDerivedAssetStore : IDisposable, IAsyncDisposable
     private readonly ConcurrentQueue<(string Sha, TaskCompletionSource<Header?> Completion)> _completedHeaders = new();
     private readonly int _metadataCapacity;
     private readonly ConcurrentDictionary<string, TaskCompletionSource<Header?>> _requests = new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConcurrentDictionary<string, long> _failedHeaders = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, (int Attempts, long RetryAt)> _failedHeaders = new(StringComparer.OrdinalIgnoreCase);
     private readonly Channel<(string Sha, TaskCompletionSource<Header?> Completion, TaskCompletionSource<SKColor?> Preview)> _queue =
         Channel.CreateUnbounded<(string, TaskCompletionSource<Header?>, TaskCompletionSource<SKColor?>)>(new() { SingleReader = true });
     private readonly Channel<(string Sha, TaskCompletionSource<Header?> Completion)> _buildQueue =
@@ -63,12 +63,13 @@ public sealed class StampDerivedAssetStore : IDisposable, IAsyncDisposable
     private long _diskHits, _builds;
     public readonly record struct PixelKey(string Sha, int Step, int Level);
     private readonly ConcurrentDictionary<PixelKey, MipRequest> _mips = new();
-    private long _requestSequence, _discardedMips;
+    private long _discardedMips;
+    private readonly int _pixelCapacity;
+    private TaskCompletionSource<Mip> _capacityAvailable = new(TaskCreationOptions.RunContinuationsAsynchronously);
     public long DiscardedMips => Interlocked.Read(ref _discardedMips);
-    private sealed class MipRequest(CancellationTokenSource stop, long order)
+    private sealed class MipRequest(CancellationTokenSource stop)
     {
         public CancellationTokenSource Stop { get; } = stop;
-        public long Order { get; } = order;
         public bool Started { get; set; }
         public Task<Mip> Task { get; set; } = null!;
     }
@@ -78,6 +79,9 @@ public sealed class StampDerivedAssetStore : IDisposable, IAsyncDisposable
     // their eight slots, so a large upload never fills memory with eight 128 MiB masters.
     private readonly SemaphoreSlim _largeSlot = new(1);
     private SKImage? _preparedSource;
+    private readonly long _preparedSourceByteCapacity;
+    private long _preparedSourceBytes;
+    public long PreparedSourceBytes => Interlocked.Read(ref _preparedSourceBytes);
     private PixelKey _preparedKey;
     private FileStamp? _preparedOriginal, _preparedWorking;
     private readonly CancellationTokenSource _stop = new();
@@ -103,14 +107,18 @@ public sealed class StampDerivedAssetStore : IDisposable, IAsyncDisposable
         FileStamp Original, FileStamp Working, int FirstMip, int MipCount, string PixelHash);
 
     public StampDerivedAssetStore(AssetCatalog catalog, string root, long diskBudgetBytes = 2L * 1024 * 1024 * 1024,
-        int metadataCapacity = 8192)
+        int metadataCapacity = 8192, int pixelCapacity = 4096, long preparedSourceByteCapacity = 64L * 1024 * 1024)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(diskBudgetBytes);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(metadataCapacity);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(pixelCapacity);
+        ArgumentOutOfRangeException.ThrowIfNegative(preparedSourceByteCapacity);
         _catalog = catalog;
         _root = Path.GetFullPath(root);
         _diskBudget = diskBudgetBytes;
         _metadataCapacity = metadataCapacity;
+        _pixelCapacity = pixelCapacity;
+        _preparedSourceByteCapacity = Math.Min(preparedSourceByteCapacity, AssetImagePolicy.MaxDecodedBytes);
         _workers = Task.WhenAll(Task.Run(async () => { TrimDisk(); await Work().ConfigureAwait(false); }), Task.Run(BuildWork));
     }
 
@@ -122,8 +130,8 @@ public sealed class StampDerivedAssetStore : IDisposable, IAsyncDisposable
             if (_disposed) return Task.FromResult<Header?>(null);
             if (_requests.TryGetValue(sha, out var existing))
             {
-                if (!_failedHeaders.TryGetValue(sha, out var failed) || Environment.TickCount64 - failed < 2000) return existing.Task;
-                _requests.TryRemove(sha, out _); _previews.TryRemove(sha, out _); _failedHeaders.TryRemove(sha, out _);
+                if (!_failedHeaders.TryGetValue(sha, out var failed) || Environment.TickCount64 < failed.RetryAt) return existing.Task;
+                _requests.TryRemove(sha, out _); _previews.TryRemove(sha, out _);
             }
             if (_catalog.Find(sha) is null) return Task.FromResult<Header?>(null);
             var completion = new TaskCompletionSource<Header?>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -156,6 +164,7 @@ public sealed class StampDerivedAssetStore : IDisposable, IAsyncDisposable
             _requests.Clear(); _previews.Clear(); _completedHeaders.Clear(); _failedHeaders.Clear();
             foreach (var request in _mips.Values) Retire(request);
             _mips.Clear();
+            SignalCapacity();
         }
     }
 
@@ -179,7 +188,12 @@ public sealed class StampDerivedAssetStore : IDisposable, IAsyncDisposable
         {
             if (_requests.TryGetValue(sha, out var active) && ReferenceEquals(active, completion))
             {
-                if (header is null) _failedHeaders[sha] = Environment.TickCount64;
+                if (header is null)
+                {
+                    var attempts = _failedHeaders.GetValueOrDefault(sha).Attempts + 1;
+                    _failedHeaders[sha] = (attempts, attempts >= 4 ? long.MaxValue
+                        : Environment.TickCount64 + (2000L << (attempts - 1)));
+                }
                 else _failedHeaders.TryRemove(sha, out _);
                 _completedHeaders.Enqueue((sha, completion));
                 while ((_requests.Count > _metadataCapacity || _completedHeaders.Count > _metadataCapacity)
@@ -195,26 +209,38 @@ public sealed class StampDerivedAssetStore : IDisposable, IAsyncDisposable
 
     public Task<Mip> RequestPixels(Header header, int step, int level)
     {
-        if (_disposed) return Task.FromResult(new Mip(null, 0, 0, false, Cancelled: true));
+        TryRequestPixels(header, step, level, out var task);
+        return task;
+    }
+
+    /// <summary>Refuses new keys when full; callers share one capacity notification, never evict current demand.</summary>
+    public bool TryRequestPixels(Header header, int step, int level, out Task<Mip> task)
+    {
         var key = new PixelKey(header.Sha.ToLowerInvariant(), step, level);
         lock (_requestsGate)
         {
-            if (_disposed) return Task.FromResult(new Mip(null, 0, 0, false, Cancelled: true));
-            if (_mips.TryGetValue(key, out var held)) return held.Task;
-            if (_mips.Count >= 4096)
+            if (_disposed) { task = Task.FromResult(new Mip(null, 0, 0, false, Cancelled: true)); return false; }
+            if (_mips.TryGetValue(key, out var held)) { task = held.Task; return true; }
+            if (_mips.Count >= _pixelCapacity)
             {
-                // A rapid wheel gesture must not grow a task per asset per abandoned zoom.
-                var oldest = _mips.Where(pair => !pair.Value.Started).MinBy(pair => pair.Value.Order);
-                if (oldest.Value is not null && _mips.TryRemove(oldest.Key, out var removed))
-                {
-                    Retire(removed); Interlocked.Increment(ref _discardedMips);
-                }
+                task = _capacityAvailable.Task;
+                return false;
             }
-            var request = new MipRequest(CancellationTokenSource.CreateLinkedTokenSource(_stop.Token), ++_requestSequence);
+            var request = new MipRequest(CancellationTokenSource.CreateLinkedTokenSource(_stop.Token));
             request.Task = Task.Run(() => ReadRequestedMip(header, key, request));
             _mips[key] = request;
-            return request.Task;
+            task = request.Task;
+            return true;
         }
+    }
+
+    // Called under _requestsGate after removing one or more entries.
+    private void SignalCapacity()
+    {
+        if (_mips.Count >= _pixelCapacity) return;
+        var waiting = _capacityAvailable;
+        _capacityAvailable = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        waiting.TrySetResult(new Mip(null, 0, 0, false, Cancelled: true));
     }
 
     public void CancelUnwantedMips(IReadOnlySet<(string Sha, int Level)> wanted)
@@ -284,6 +310,7 @@ public sealed class StampDerivedAssetStore : IDisposable, IAsyncDisposable
             mip = null;
             if (!_mips.TryGetValue(key, out var request) || !request.Task.IsCompletedSuccessfully) return false;
             if (!_mips.TryRemove(key, out request)) return false;
+            SignalCapacity();
             mip = request.Task.Result;
             if (mip.Reserved) _mipSlots.Release();
             if (mip.LargeReserved) _largeSlot.Release();
@@ -352,6 +379,10 @@ public sealed class StampDerivedAssetStore : IDisposable, IAsyncDisposable
         var recursive = path.StartsWith(root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
         if (!recursive)
             root = Path.GetDirectoryName(path)!;
+        // A linked file or its parent can be temporarily absent. Watch the nearest
+        // existing ancestor so a later restore wakes stopped retries as well.
+        while (!Directory.Exists(root) && Path.GetDirectoryName(root) is { } parent)
+        { root = parent; recursive = true; }
         lock (_watchers)
         {
             if (_disposed || _watchers.ContainsKey(root)) return;
@@ -392,6 +423,7 @@ public sealed class StampDerivedAssetStore : IDisposable, IAsyncDisposable
             _failedHeaders.TryRemove(sha, out _);
             foreach (var key in _mips.Keys.Where(key => string.Equals(key.Sha, sha, StringComparison.OrdinalIgnoreCase)))
                 if (_mips.TryRemove(key, out var request)) Retire(request);
+            SignalCapacity();
             _invalidated[sha] = 0;
         }
         SourceChanged?.Invoke();
@@ -561,8 +593,9 @@ public sealed class StampDerivedAssetStore : IDisposable, IAsyncDisposable
             || _preparedOriginal?.Matches() != true || _preparedWorking?.Matches() != true
             || !string.Equals(_preparedWorking.Path, workingPath, StringComparison.OrdinalIgnoreCase))
         {
-            _preparedSource?.Dispose(); _preparedSource = null;
+            ClearPreparedSource();
             _preparedSource = ReadSource(record, key.Step, header, out _preparedOriginal, out _preparedWorking);
+            Interlocked.Exchange(ref _preparedSourceBytes, _preparedSource is { } decoded ? (long)decoded.Width * decoded.Height * 4 : 0);
             _preparedKey = sourceKey;
         }
         if (_preparedSource is not { } source) return null;
@@ -588,13 +621,28 @@ public sealed class StampDerivedAssetStore : IDisposable, IAsyncDisposable
                 current = next;
             }
             cancellation.ThrowIfCancellationRequested();
-            // A separate SKImage wrapper owns the immutable pixels while the worker moves
-            // to the next source; creation and any necessary copy happen off the canvas.
-            using var retained = SKBitmap.FromImage(current);
-            retained.SetImmutable();
-            return SKImage.FromBitmap(retained);
+            // Transfer ownership rather than copying a full master (or the last mip).
+            // The result owns its pixels; the source cache never aliases a transferred image.
+            var result = current;
+            if (ReferenceEquals(current, source))
+            {
+                _preparedSource = null;
+                Interlocked.Exchange(ref _preparedSourceBytes, 0);
+            }
+            current = source; // result is now owned by the caller, not the finally block
+            return result;
         }
-        finally { if (!ReferenceEquals(current, source)) current.Dispose(); }
+        finally
+        {
+            if (!ReferenceEquals(current, source)) current.Dispose();
+            if (PreparedSourceBytes > _preparedSourceByteCapacity) ClearPreparedSource();
+        }
+    }
+
+    private void ClearPreparedSource()
+    {
+        _preparedSource?.Dispose(); _preparedSource = null;
+        Interlocked.Exchange(ref _preparedSourceBytes, 0);
     }
 
     private static long FileBytes(string path)
@@ -688,7 +736,7 @@ public sealed class StampDerivedAssetStore : IDisposable, IAsyncDisposable
             _shutdown = Task.Run(async () =>
             {
                 await Task.WhenAll(retiring.Append(_workers)).ConfigureAwait(false);
-                _preparedSource?.Dispose(); _preparedSource = null;
+                ClearPreparedSource();
                 lock (_memoryGate) { _memoryPixels.Clear(); _memoryBytes = 0; }
                 _mipReader.Dispose(); _mipSlots.Dispose(); _largeSlot.Dispose(); _stop.Dispose();
             });

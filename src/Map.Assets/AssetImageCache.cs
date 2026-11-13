@@ -11,7 +11,7 @@ public sealed class AssetImageCache : IDisposable
         public required SKImage Image { get; init; }
         public required long DecodedBytes { get; init; }
         public required long ResidentBytes { get; init; }
-        public long LastUsed { get; set; }
+        public LinkedListNode<string>? Recency { get; set; }
         public Dictionary<int, SKImage> Mips { get; } = [];
         public SKImage? FallbackImage { get; set; }
         public long MipBytes { get; set; }
@@ -31,7 +31,17 @@ public sealed class AssetImageCache : IDisposable
     private readonly int _capacity;
     private readonly long _decodedByteCapacity;
     private readonly Func<byte[], SKImage?> _decode;
-    private long _clock;
+    private readonly LinkedList<string> _recency = new();
+
+    private void Touch(string key, Entry entry)
+    {
+        if (entry.Recency is { } node)
+        {
+            _recency.Remove(node);
+            _recency.AddLast(node);
+        }
+        else entry.Recency = _recency.AddLast(key);
+    }
 
     public AssetImageCache(
         int capacity = 64,
@@ -75,6 +85,7 @@ public sealed class AssetImageCache : IDisposable
     public SKImage? GetFallbackImage(string key)
     {
         if (!_entries.TryGetValue(key, out var entry)) return null;
+        Touch(key, entry);
         if (entry.FallbackImage is not null) return entry.FallbackImage;
         using var pixels = entry.Image.PeekPixels();
         return pixels is null ? entry.Image : entry.FallbackImage = SKImage.FromPixels(pixels);
@@ -119,7 +130,7 @@ public sealed class AssetImageCache : IDisposable
     {
         if (_entries.TryGetValue(key, out var existing))
         {
-            existing.LastUsed = ++_clock;
+            Touch(key, existing);
             Hits++;
             return existing.Image;
         }
@@ -155,7 +166,7 @@ public sealed class AssetImageCache : IDisposable
     {
         if (_entries.TryGetValue(key, out var existing))
         {
-            existing.LastUsed = ++_clock;
+            Touch(key, existing);
             Hits++;
             return existing.Image;
         }
@@ -193,7 +204,7 @@ public sealed class AssetImageCache : IDisposable
     {
         if (_entries.TryGetValue(key, out var existing))
         {
-            existing.LastUsed = ++_clock;
+            Touch(key, existing);
             Hits++;
             return existing.Image;
         }
@@ -226,8 +237,8 @@ public sealed class AssetImageCache : IDisposable
             Image = image,
             DecodedBytes = metadata.DecodedBytes,
             ResidentBytes = incomingResidentBytes,
-            LastUsed = ++_clock,
         };
+        Touch(key, _entries[key]);
         DecodedBytes += metadata.DecodedBytes;
         ResidentBytes += incomingResidentBytes;
         return image;
@@ -242,14 +253,15 @@ public sealed class AssetImageCache : IDisposable
         if (_entries.TryGetValue(key, out var existing))
         {
             image.Dispose();
-            existing.LastUsed = ++_clock;
+            Touch(key, existing);
             Hits++;
             return existing.Image;
         }
         var bytes = checked((long)image.Width * image.Height * 4);
         if (bytes > _decodedByteCapacity) { image.Dispose(); return null; }
         TrimForIncoming(bytes);
-        _entries[key] = new Entry { Image = image, DecodedBytes = bytes, ResidentBytes = bytes, LastUsed = ++_clock };
+        _entries[key] = new Entry { Image = image, DecodedBytes = bytes, ResidentBytes = bytes };
+        Touch(key, _entries[key]);
         DecodedBytes += bytes;
         ResidentBytes += bytes;
         Misses++;
@@ -282,8 +294,8 @@ public sealed class AssetImageCache : IDisposable
             Image = image,
             DecodedBytes = metadata.DecodedBytes,
             ResidentBytes = incomingResidentBytes,
-            LastUsed = ++_clock,
         };
+        Touch(key, _entries[key]);
         DecodedBytes += metadata.DecodedBytes;
         ResidentBytes += incomingResidentBytes;
         return image;
@@ -296,6 +308,8 @@ public sealed class AssetImageCache : IDisposable
     {
         if (_entries.Remove(key, out var entry))
         {
+            if (entry.Recency is { } node) _recency.Remove(node);
+            entry.Recency = null;
             DecodedBytes -= entry.DecodedBytes;
             ResidentBytes -= entry.ResidentBytes + entry.MipBytes;
             Release(entry);
@@ -319,14 +333,14 @@ public sealed class AssetImageCache : IDisposable
 
     private string? OldestUnpinned(string? except)
     {
-        string? key = null; long used = long.MaxValue;
-        foreach (var (candidate, entry) in _entries)
+        for (var node = _recency.First; node is not null; node = node.Next)
         {
-            if (entry.LastUsed >= used || except is not null && string.Equals(candidate, except, StringComparison.OrdinalIgnoreCase)
-                || IsPinned(entry)) continue;
-            key = candidate; used = entry.LastUsed;
+            var candidate = node.Value;
+            if (except is not null && string.Equals(candidate, except, StringComparison.OrdinalIgnoreCase)
+                || IsPinned(_entries[candidate])) continue;
+            return candidate;
         }
-        return key;
+        return null;
     }
 
     /// <summary>Power-of-two minification of an already verified source, charged to the same LRU
@@ -334,7 +348,7 @@ public sealed class AssetImageCache : IDisposable
     public SKImage? GetForPixelSize(string key, double pixelWidth, double pixelHeight)
     {
         if (!_entries.TryGetValue(key, out var entry)) return null;
-        entry.LastUsed = ++_clock;
+        Touch(key, entry);
         var image = entry.Image;
         var ratio = Math.Min(image.Width / Math.Max(1, pixelWidth), image.Height / Math.Max(1, pixelHeight));
         var level = Math.Clamp((int)Math.Floor(Math.Log2(Math.Max(1, ratio))), 0, 15);
@@ -385,6 +399,7 @@ public sealed class AssetImageCache : IDisposable
         }
 
         _entries.Clear();
+        _recency.Clear();
         foreach (var entry in _retired) entry.Dispose();
         _retired.Clear();
         _pins.Clear();

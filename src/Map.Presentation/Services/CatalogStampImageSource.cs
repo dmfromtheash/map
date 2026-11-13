@@ -25,6 +25,7 @@ public sealed class CatalogStampImageSource(
     private readonly HashSet<StampDerivedAssetStore.PixelKey> _wantedMips = [];
     private readonly HashSet<StampDerivedAssetStore.PixelKey> _latePixels = [];
     private readonly Dictionary<string, long> _pixelRetryAt = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, int> _pixelFailures = new(StringComparer.OrdinalIgnoreCase);
     private long _sourceRevision;
     public long SourceRevision => Interlocked.Read(ref _sourceRevision);
     // A background lease can resolve between the render-thread lookup and its state read.
@@ -163,7 +164,7 @@ public sealed class CatalogStampImageSource(
             _validatedThisFrame.Clear();
             _missingSteps.Clear();
             _decodeFailed.Clear();
-            _latePixels.Clear(); _pixelRetryAt.Clear();
+            _latePixels.Clear(); _pixelRetryAt.Clear(); _pixelFailures.Clear();
             _derivedNotifications.Clear();
             _resolved.Clear();
         }
@@ -514,6 +515,9 @@ public sealed class CatalogStampImageSource(
         Enter();
         _latePixels.RemoveWhere(key => string.Equals(key.Sha, sha, StringComparison.OrdinalIgnoreCase));
         _overviewColors.Remove(sha); _workingDimensions.Remove(sha); _resolved.Remove(sha);
+        foreach (var key in _pixelFailures.Keys.Where(key => key.StartsWith(sha + "#", StringComparison.OrdinalIgnoreCase)
+            || key.StartsWith(sha + "@", StringComparison.OrdinalIgnoreCase)).ToArray())
+        { _pixelFailures.Remove(key); _pixelRetryAt.Remove(key); _decodeFailed.Remove(key); }
         foreach (var key in _sampleDimensions.Keys.Where(key => key.Equals(sha, StringComparison.OrdinalIgnoreCase)
             || key.StartsWith(sha + "@", StringComparison.OrdinalIgnoreCase)).ToArray())
         {
@@ -723,12 +727,16 @@ public sealed class CatalogStampImageSource(
         return _samples.Get(name, null) ?? _cache.Get(name, null);
     }
 
-    private void FailedPixels(string name)
+    private void FailedPixels(string name, bool permanent = false)
     {
         _decodeFailed.Add(name);
         if (_pixelRetryAt.ContainsKey(name)) return;
-        _pixelRetryAt[name] = Environment.TickCount64 + 2100;
-        _ = Task.Delay(2100).ContinueWith(_ => { if (!_disposed) _derivedReady?.Invoke(); }, TaskScheduler.Default);
+        var attempts = _pixelFailures.GetValueOrDefault(name) + 1;
+        _pixelFailures[name] = attempts;
+        if (permanent || attempts >= 4) { _pixelRetryAt[name] = long.MaxValue; return; }
+        var delay = 2100 << (attempts - 1);
+        _pixelRetryAt[name] = Environment.TickCount64 + delay;
+        _ = Task.Delay(delay).ContinueWith(_ => { if (!_disposed) _derivedReady?.Invoke(); }, TaskScheduler.Default);
     }
 
     // Only BeginFrame adopts completed rasters, under its 2 ms budget. A preflight may
@@ -740,7 +748,8 @@ public sealed class CatalogStampImageSource(
         if (!header.IsCompleted) { NotifyDerived(key.Sha, header, ready); return false; }
         if (header.IsCompletedSuccessfully && header.Result is { } prepared)
         {
-            NotifyDerived(PixelName(key), _derived.RequestPixels(prepared, key.Step, key.Level), ready);
+            var accepted = _derived.TryRequestPixels(prepared, key.Step, key.Level, out var pixels);
+            NotifyDerived(accepted ? PixelName(key) : "queue-capacity", pixels, ready);
             return false;
         }
         FailedPixels(PixelName(key));
@@ -755,7 +764,8 @@ public sealed class CatalogStampImageSource(
         if (mip?.Image is { } image)
         {
             var target = Math.Max(image.Width, image.Height) <= 256 ? _samples : _cache;
-            if (target.AdoptPixels(key, image) is null && !target.Contains(key)) FailedPixels(key);
+            if (target.AdoptPixels(key, image) is null && !target.Contains(key)) FailedPixels(key, permanent: true);
+            else { _pixelFailures.Remove(key); _pixelRetryAt.Remove(key); _decodeFailed.Remove(key); }
         }
         else if (mip?.Pixels is { } pixels)
         {

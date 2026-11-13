@@ -480,6 +480,86 @@ public sealed class StampDerivedAssetStoreTests : IDisposable
         Assert.NotNull(await store.Request(first.Sha256).WaitAsync(TimeSpan.FromSeconds(10)));
     }
 
+    [Fact]
+    public async Task Full_pixel_queue_preserves_current_demand_and_wakes_refused_requests()
+    {
+        await using var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));
+        var records = Enumerable.Range(1, 3).Select(n => ImportOwner(catalog, n)).ToArray();
+        await using var store = new StampDerivedAssetStore(catalog, Path.Combine(_root, "derived"), pixelCapacity: 2);
+        var headers = (await Task.WhenAll(records.Select(r => store.Request(r.Sha256)))).Select(h => h!).ToArray();
+        Assert.True(store.TryRequestPixels(headers[0], 0, headers[0].FirstMip, out var a));
+        Assert.True(store.TryRequestPixels(headers[1], 0, headers[1].FirstMip, out var b));
+        Assert.False(store.TryRequestPixels(headers[2], 0, headers[2].FirstMip, out var capacity));
+        Assert.False(store.TryRequestPixels(headers[2], 0, headers[2].FirstMip + 1, out var sameCapacity));
+        Assert.Same(capacity, sameCapacity);
+        Assert.False(capacity.IsCompleted);
+        Assert.Equal(2, store.PendingMips);
+        Assert.True(store.TryRequestPixels(headers[0], 0, headers[0].FirstMip, out var original));
+        Assert.Same(a, original);
+        await a.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.True(store.TryTakeMip(headers[0].Sha, headers[0].FirstMip, out _));
+        await capacity.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.True(store.TryRequestPixels(headers[2], 0, headers[2].FirstMip, out var c));
+        Assert.NotNull((await b.WaitAsync(TimeSpan.FromSeconds(10))).Pixels);
+        Assert.NotNull((await c.WaitAsync(TimeSpan.FromSeconds(10))).Pixels);
+        Assert.Equal(0, store.DiscardedMips);
+    }
+
+    [Fact]
+    public async Task Persistent_missing_source_stops_retries_until_watched_file_is_restored()
+    {
+        await using var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));
+        var record = ImportOwner(catalog, 1);
+        var path = catalog.SourcePath(record)!;
+        var bytes = File.ReadAllBytes(path);
+        File.Delete(path);
+        await using var store = new StampDerivedAssetStore(catalog, Path.Combine(_root, "derived"));
+        var previous = store.Request(record.Sha256);
+        Assert.Null(await previous.WaitAsync(TimeSpan.FromSeconds(10)));
+        foreach (var delay in new[] { 2100, 4100, 8100 })
+        {
+            await Task.Delay(delay);
+            var retry = store.Request(record.Sha256);
+            Assert.NotSame(previous, retry);
+            Assert.Null(await retry.WaitAsync(TimeSpan.FromSeconds(10)));
+            previous = retry;
+        }
+        await Task.Delay(2100);
+        Assert.Same(previous, store.Request(record.Sha256));
+        File.WriteAllBytes(path, bytes);
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (ReferenceEquals(previous, store.Request(record.Sha256)) && DateTime.UtcNow < deadline)
+            await Task.Delay(20);
+        Assert.NotNull(await store.Request(record.Sha256).WaitAsync(TimeSpan.FromSeconds(10)));
+    }
+
+    [Fact]
+    public async Task Raster_ownership_transfer_keeps_exact_pixels_without_retaining_an_unbudgeted_master()
+    {
+        await using var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));
+        var record = ImportOwner(catalog, 1);
+        await using var store = new StampDerivedAssetStore(catalog, Path.Combine(_root, "derived"), preparedSourceByteCapacity: 0);
+        var header = (await store.Request(record.Sha256))!;
+        using var expected = new AssetImageCache();
+        var original = expected.Get(record.Sha256, catalog.SourcePath(record))!;
+        await store.RequestPixels(header, 0, 0).WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.True(store.TryTakePixels(new(record.Sha256, 0, 0), out var result));
+        using var owned = result!.Image!;
+        Assert.NotNull(owned);
+        Assert.Equal(0, store.PreparedSourceBytes);
+        using var a = SKBitmap.FromImage(original);
+        using var b = SKBitmap.FromImage(owned);
+        Assert.Equal(a.Bytes, b.Bytes);
+        // Moving to a different source must not free the transferred original.
+        var second = ImportOwner(catalog, 2);
+        var h2 = (await store.Request(second.Sha256))!;
+        await store.RequestPixels(h2, 0, 0).WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.True(store.TryTakePixels(new(second.Sha256, 0, 0), out var other));
+        other!.Image?.Dispose();
+        Assert.NotEqual(IntPtr.Zero, owned.Handle);
+        Assert.Equal(0, store.PreparedSourceBytes);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_root)) Directory.Delete(_root, recursive: true);
