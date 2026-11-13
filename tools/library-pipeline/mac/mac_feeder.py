@@ -184,18 +184,32 @@ def fetch(job_id):
 
 
 def main():
+    global REFS, PRIORITY
     p = argparse.ArgumentParser()
     p.add_argument('--job', type=int, default=60)
     p.add_argument('--ahead', type=int, default=2)
     p.add_argument('--limit', type=int)
+    p.add_argument('--refs-root', type=Path, default=REFS)
+    p.add_argument('--list', type=Path, default=LIB / 'lists/all.txt')
+    p.add_argument('--dry-run', action='store_true', help='local queue summary; no locks, writes or SSH')
     a = p.parse_args()
+    REFS = a.refs_root
+    # mac_priority contains refs paths; a different queue must not take those from a different root.
+    if a.list != LIB / 'lists/all.txt':
+        PRIORITY = LIB / 'lists/refs2-mac-priority.txt'
+    with a.list.open(encoding='utf-8-sig') as stream:
+        rels = [l.strip() for l in stream if l.strip()]
+    if a.dry_run:
+        done = ok_set(MAN_PC) | ok_set(MAN_MAC) | rejected_set(MAN_MAC)
+        todo = [r for r in reversed(rels) if key(r) not in done and (REFS / r).is_file()]
+        log(f'dry-run: listed {len(rels)} todo {len(todo)} missing {sum(not (REFS / r).is_file() for r in rels)}')
+        return 0
     import msvcrt
     LOCK.parent.mkdir(parents=True, exist_ok=True)
     lock = LOCK.open('a+b')
     lock.seek(0)
     msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
 
-    rels = [l.strip() for l in (LIB / 'lists/all.txt').open(encoding='utf-8-sig') if l.strip()]
     # A quality rejection on the Mac is final for the same recipe (13.11: ~1 600 shop previews were sent again after
     # every restart and failed again); errors of transfer or of the PC check are tried again.
     done = ok_set(MAN_PC) | ok_set(MAN_MAC) | rejected_set(MAN_MAC)

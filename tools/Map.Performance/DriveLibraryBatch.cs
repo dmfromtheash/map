@@ -55,6 +55,7 @@ internal static class DriveLibraryBatch
 
     /// <summary>The owner's reference folder: textures are imported from their originals (already 2048-4096 px).</summary>
     private const string RefsRoot = @"C:\Users\Leshe\Pictures\refs";
+    private const string Refs2Root = @"C:\Users\Leshe\Pictures";
 
     private sealed class State
     {
@@ -319,8 +320,10 @@ internal static class DriveLibraryBatch
             trimmed = Path.Combine(library, "trimmed", rel + ".webp");
             if (File.Exists(trimmed)) return trimmed;
         }
-        return set.Source == "refs" ? Path.Combine(RefsRoot, rel)
-            : Path.Combine(library, "upscaled", Path.ChangeExtension(rel, ".webp"));
+        if (set.Source == "refs") return Path.Combine(RefsRoot, rel);
+        // refs2 rels already include "refs2/". Only textures read originals; shop previews require x4 output.
+        if (set.Source == "refs2" && set.Catalog == "textures-2") return Path.Combine(Refs2Root, rel);
+        return Path.Combine(library, "upscaled", Path.ChangeExtension(rel, ".webp"));
     }
 
     private static HashSet<string> ReadOptionalFiles(string path, bool cropBoxes)

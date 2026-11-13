@@ -1,7 +1,13 @@
 # Builds H:\MapLibrary\plan\sets.json: every upscaled object/shop file assigned to one library set.
 #   plan.py <scratch_dir_with_chunks> <inventory.json>
-import json, os, re, sys, collections
-S, INV = sys.argv[1], sys.argv[2]
+import argparse, json, os, re, sys, collections
+import refs2_source
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('classification')
+parser.add_argument('inventory')
+refs2_source.add_arguments(parser, classifications=True)
+args = parser.parse_args()
+S, INV = args.classification, args.inventory
 LIB = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # deployed: H:\MapLibrary\pipeline\plan.py
 if not os.path.exists(os.path.join(LIB, 'map-library.json')):  # repository copy: tools/library-pipeline/plan
     LIB = os.environ.get('MAP_LIBRARY_ROOT', r'H:\MapLibrary')
@@ -190,6 +196,11 @@ os.makedirs(os.path.join(LIB, 'plan'), exist_ok=True)
 import apply_fixes  # reviewed corrections from plan/fixes (names, tags, use); see apply_fixes.py
 fix_counts, fix_skipped = apply_fixes.apply(out, LIB)
 print('fixes applied', fix_counts, 'skipped', fix_skipped)
+if args.refs2_inventory:
+    # Keep refs catalog splits, reviewed fixes and applied.json exactly as in the refs-only run.
+    extra, stats = refs2_source.build(args, cls, globals(), done)
+    out.extend(extra)
+    print('refs2', stats)
 json.dump(out, open(os.path.join(LIB, 'plan', 'sets.json'), 'w', encoding='utf-8'), ensure_ascii=False, indent=1)
 json.dump(dict(unclassified.most_common()), open(os.path.join(LIB, 'plan', 'unclassified.json'), 'w', encoding='utf-8'), ensure_ascii=False, indent=1)
 print('sets', len(out), 'ready', sum(s['ready'] for s in out), 'files', sum(len(s['files']) for s in out),

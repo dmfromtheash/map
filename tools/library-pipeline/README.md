@@ -90,6 +90,27 @@
 4. `powershell -NoProfile -ExecutionPolicy Bypass -File tools\library-pipeline\Compare-Deployed.ps1` — нужная строка
    должна стать `same`. `finish_asset.py` на ПК и Mac обязан совпадать (DEC-104 п. 2).
 
+## Дополнительный источник refs2 (DEC-108)
+
+`plan.py` и `make_lists.py` принимают необязательные `--refs2-inventory <inventory.json>` и
+`--refs2-files <files.json>`. Для плана добавить по одному `--refs2-classification <json>` для
+`names/refs2_shop.json` и `names/refs2_tex.json`; известные имена берутся из классификации refs.
+По умолчанию `--refs2-prefix refs2`, `--refs2-root C:\Users\Leshe\Pictures`.
+`--check-refs2-sources` сверяет SHA оригиналов, `--refs2-pixel-duplicates <json>` задаёт отдельный
+проверенный список перекодированных копий. Совпадение пути само по себе не исключает файл.
+
+Наборы refs2 добавляются после всех правок refs в `shop-surfaces`, `shop-effects`, `textures-2`;
+старые ключи, каталоги, правки и списки `all.txt`/`trial.txt` сохраняются. Новый список — `lists/refs2.txt`.
+Магазин — штампы ×4, включая `overlay`; текстуры импортируются из оригиналов. Все rel имеют `refs2\`.
+`upscale/small_pc_runner.py --refs-root <Pictures> --list <lists/refs2.txt>` обрабатывает малые превью сразу
+рецептом `cycle_rgb`; `run_upscale2.py` и обновлённый `mac_worker.py` выбирают его для refs2 автоматически.
+Обычный рецепт refs не меняется. Метка в manifest — `recipe: cycle_rgb`; проверка `verify` прежняя.
+`mac_feeder.py` также принимает `--refs-root` и `--list`; у обоих runner/feeder есть `--dry-run`
+без записи, GPU и SSH. Перед сменой корня feeder закончить/забрать старые Mac-задания refs.
+Worker и `finish_asset.py` на Mac обновляются вместе, в согласованную паузу; живой worker не трогать.
+
+Тесты: `py -3.13 -B -m unittest discover -s tools/library-pipeline/plan -p test_refs2.py -v`.
+
 ## Где данные (не в репозитории)
 
 - `H:\MapLibrary`: `upscaled\` (WebP + `manifest*.jsonl`, `failed*.jsonl`), `lists\`, `plan\` (`sets.json`,

@@ -44,6 +44,7 @@ class Config:
     anime_weight: float = 0.6
     grain: float | None = None
     rerun: bool = False
+    cycle_small: bool = False
 
     @property
     def manifest(self):
@@ -170,8 +171,10 @@ def finish_one(root, rel, i, bdir, config):
         os.close(fd)
         normal_grain = 0.15 if rel.startswith('Battlemaps Classic') else 0.6
         grain = normal_grain if config.grain is None else min(config.grain, normal_grain)
+        cycle = recipe.refs2_cycle(rel, src.size) or (config.cycle_small and max(src.size) <= 256)
+        finish_options = {'cycle_rgb': True} if cycle else {}
         size = recipe.finish(src, Path(bdir) / 'a' / f'{i}.png', Path(bdir) / 'b' / f'{i}.png',
-                             temp_path, factor, wa=config.anime_weight, grain_k=grain)
+                             temp_path, factor, wa=config.anime_weight, grain_k=grain, **finish_options)
         ok, msg, da, dc = recipe.verify(src, temp_path, factor)
         if not math.isfinite(da) or not math.isfinite(dc):
             raise ValueError('non-finite verification metrics')
@@ -182,6 +185,8 @@ def finish_one(root, rel, i, bdir, config):
                 'srcSha256': src_sha, 'alphaD': round(da, 2), 'colourD': round(dc, 2),
                 'bytes': size_bytes, 'sec': round(time.perf_counter() - t0, 2), 'msg': msg,
                 'animeWeight': config.anime_weight, 'grain': grain}
+        if cycle:
+            row['recipe'] = 'cycle_rgb'
         if config.rerun and target.exists() and not ok:
             # Compare against the actual installed output, not a rejected attempt
             # in the manifest. Failed reruns must not silently degrade this file.

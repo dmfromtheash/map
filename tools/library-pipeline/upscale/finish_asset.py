@@ -27,7 +27,7 @@ def _resize_f(channel, size, method):
     return np.asarray(Image.fromarray(np.ascontiguousarray(channel, dtype=np.float32), 'F').resize(size, method), np.float32)
 
 
-def finish(src_rgba, a_path, b_path, out_path, factor, wa=0.6, grain_k=0.6):
+def finish(src_rgba, a_path, b_path, out_path, factor, wa=0.6, grain_k=0.6, cycle_rgb=False):
     src = np.asarray(src_rgba, np.float32) / 255
     A = np.asarray(Image.open(a_path).convert('RGB'), np.float32) / 255
     B = np.asarray(Image.open(b_path).convert('RGB'), np.float32) / 255
@@ -55,6 +55,13 @@ def finish(src_rgba, a_path, b_path, out_path, factor, wa=0.6, grain_k=0.6):
     n = nd.gaussian_filter(np.random.default_rng(1408).standard_normal((H, W)).astype(np.float32), 0.9)
     n /= n.std() + 1e-6
     rgb = np.clip(rgb + (grain_k * missing * n)[..., None], 0, 1)
+    if cycle_rgb:
+        # DEC-108: one colour-cycle correction of the usual mix0; alpha is handled separately.
+        w, h = src_rgba.size
+        back = np.dstack([_resize_f(rgb[..., c], (w, h), Image.BOX) for c in range(3)])
+        delta = src[..., :3] - back
+        rgb = np.clip(rgb + np.dstack([_resize_f(delta[..., c], (W, H), Image.LANCZOS)
+                                      for c in range(3)]), 0, 1)
     out = np.dstack([rgb, al]).astype(np.float32)
     if factor != 4:
         w, h = src_rgba.size
@@ -68,6 +75,10 @@ def finish(src_rgba, a_path, b_path, out_path, factor, wa=0.6, grain_k=0.6):
     img = Image.fromarray((out * 255 + 0.5).astype(np.uint8), 'RGBA')
     img.save(out_path, 'WEBP', lossless=True, quality=80, method=4)
     return img.size
+
+
+def refs2_cycle(rel, size):
+    return rel.replace('/', '\\').startswith('refs2\\_Магазин') and max(size) <= 256
 
 
 def verify(src_rgba, out_path, factor):

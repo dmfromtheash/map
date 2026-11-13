@@ -86,7 +86,10 @@ def finish_one(job, it):
         factor = factor_for(max(src.size))
         grain = 0.15 if rel.startswith('Battlemaps Classic') else 0.6
         tmp = job / 'out' / f'{i}.webp.tmp'
-        size = recipe.finish(src, job / 'a' / f'{i}.png', job / 'b' / f'{i}.png', str(tmp), factor, wa=0.6, grain_k=grain)
+        cycle = recipe.refs2_cycle(rel, src.size)
+        finish_options = {'cycle_rgb': True} if cycle else {}
+        size = recipe.finish(src, job / 'a' / f'{i}.png', job / 'b' / f'{i}.png', str(tmp), factor,
+                             wa=0.6, grain_k=grain, **finish_options)
         ok, msg, da, dc = recipe.verify(src, str(tmp), factor)
         if not (math.isfinite(da) and math.isfinite(dc)):
             raise ValueError('non-finite verification metrics')
@@ -96,10 +99,13 @@ def finish_one(job, it):
         with source.open('rb') as s:
             sha = hashlib.file_digest(s, 'sha256').hexdigest()
         os.replace(tmp, job / 'out' / f'{i}.webp')
-        return {'i': i, 'rel': rel, 'ok': bool(ok), 'factor': factor, 'src': list(src.size), 'out': list(size),
+        row = {'i': i, 'rel': rel, 'ok': bool(ok), 'factor': factor, 'src': list(src.size), 'out': list(size),
                 'srcSha256': sha, 'alphaD': round(da, 2), 'colourD': round(dc, 2), 'blockMax': round(bm, 1),
                 'bytes': (job / 'out' / f'{i}.webp').stat().st_size, 'sec': round(time.perf_counter() - t0, 2),
                 'msg': msg, 'animeWeight': 0.6, 'grain': grain, 'host': 'mac'}
+        if cycle:
+            row['recipe'] = 'cycle_rgb'
+        return row
     except Exception as exc:
         return {'i': i, 'rel': rel, 'ok': False, 'msg': 'ERR ' + str(exc)[:300], 'host': 'mac'}
 
