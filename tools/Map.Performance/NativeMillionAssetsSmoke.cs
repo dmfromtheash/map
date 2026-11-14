@@ -112,6 +112,12 @@ public sealed partial class ZoomAssetsApplication
         Checkpoint();
         var open = Stopwatch.StartNew();
         OpenEditor(document);
+        if (Environment.GetEnvironmentVariable("MAP_PERF_BLUR_REVIEW") == "1")
+        {
+            await ExecuteBlurReview(scenario, objects);
+            Checkpoint();
+            return;
+        }
         if (matrix.Functions.Length > 0)
         {
             await ExecuteMillionMatrix(scenario, matrix, anchor);

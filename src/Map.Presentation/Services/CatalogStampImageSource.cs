@@ -171,6 +171,54 @@ public sealed class CatalogStampImageSource(
     }
     public (int Entries, long Bytes, long Evictions) SampleStatistics
     { get { lock (_gate) return (_samples.Count, _samples.ResidentBytes, _samples.Evictions); } }
+
+    public sealed record MipDiagnostic(string Sha, int Step, int Level, bool RequestedLastFrame, bool Pending,
+        bool Resident, int Width, int Height, bool CacheableMissing, bool DecodeFailed);
+
+    public sealed record MipSelectionDiagnostic(string Sha, double RequestedWidth, double RequestedHeight,
+        int ImageWidth, int ImageHeight, string Path, long Frame);
+    private readonly Dictionary<string, MipSelectionDiagnostic> _diagnosticSelections = new(StringComparer.OrdinalIgnoreCase);
+    private long _diagnosticFrame;
+    public bool CaptureMipSelections { get; set; }
+    public object ReadMipSelections()
+    {
+        lock (_gate) return new { Frame = _diagnosticFrame, LastPerSha = _diagnosticSelections.Values.ToArray() };
+    }
+    private SKImage? ObserveMipSelection(string sha, double width, double height, SKImage? image, string path)
+    {
+        if (CaptureMipSelections)
+            _diagnosticSelections[sha] = new(sha, width, height, image?.Width ?? 0, image?.Height ?? 0, path, _diagnosticFrame);
+        return image;
+    }
+
+    /// <summary>Explicit probe only: describes requested/pending mip keys without loading or touching LRU recency.
+    /// Resident means accepted into a pixel cache, not necessarily the mip selected by the last draw.</summary>
+    public IReadOnlyList<MipDiagnostic> ReadMipDiagnostics()
+    {
+        lock (_gate)
+        {
+            var resident = _samples.ReadResidentSizes().Concat(_cache.ReadResidentSizes())
+                .GroupBy(item => item.Key, StringComparer.OrdinalIgnoreCase).ToDictionary(group => group.Key,
+                    group => group.First(), StringComparer.OrdinalIgnoreCase);
+            var keys = _wantedMips.Concat(_latePixels).ToHashSet();
+            foreach (var name in resident.Keys)
+            {
+                var parts = name.Split('#'); var source = parts[0].Split('@');
+                if (source[0].Length != 64) continue;
+                keys.Add(new(source[0], source.Length > 1 ? int.Parse(source[1], System.Globalization.CultureInfo.InvariantCulture) : 0,
+                    parts.Length > 1 ? int.Parse(parts[1], System.Globalization.CultureInfo.InvariantCulture) : 0));
+            }
+            return keys.Select(key =>
+            {
+                var name = PixelName(key);
+                var found = resident.TryGetValue(name, out var size);
+                if (!found && key.Level == 0) found = resident.TryGetValue(SourceName(key), out size);
+                return new MipDiagnostic(key.Sha, key.Step, key.Level, _wantedMips.Contains(key), _latePixels.Contains(key),
+                    found, size.Width, size.Height, _cacheableMissing.Contains(key) || _cacheableMissingShas.ContainsKey(key.Sha),
+                    _decodeFailed.Contains(name));
+            }).ToArray();
+        }
+    }
     private readonly Dictionary<string, (string Path, long Length, DateTime LastWriteUtc)> _resolved =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _missingSteps = new(StringComparer.OrdinalIgnoreCase);
@@ -433,7 +481,8 @@ public sealed class CatalogStampImageSource(
                 var key = new StampDerivedAssetStore.PixelKey(wanted.Sha, step, level - step);
                 if (ReadyPixels(key) is not { } image) return null;
                 var name = PixelName(key);
-                return _samples.GetFallbackImage(name) ?? _cache.GetFallbackImage(name) ?? image;
+                var result = _samples.GetFallbackImage(name) ?? _cache.GetFallbackImage(name) ?? image;
+                return CaptureMipSelections ? ObserveMipSelection(sha256, width, height, result, "ready-fallback/" + name) : result;
             }
         }
     }
@@ -457,7 +506,7 @@ public sealed class CatalogStampImageSource(
             }
             _lastImageRequestCacheableMissing = _cacheableMissing.Contains(key);
             if (ready is null && !_lastImageRequestCacheableMissing) _unresolvedRequestVersion++;
-            return ready;
+            return CaptureMipSelections ? ObserveMipSelection(sha256, width, height, ready, "exact-request/" + PixelName(key)) : ready;
         }
         // Prepared raw pixels have already passed the worker's source-stamp and SHA checks.
         // Do not reopen/stat the original merely to draw a resident derived sample.
@@ -532,6 +581,7 @@ public sealed class CatalogStampImageSource(
             _derived?.ObserveCanvasThread();
             _validatedThisFrame.Clear();
             _wantedMips.Clear();
+            if (CaptureMipSelections) _diagnosticFrame++;
             if (_derived is not null)
                 foreach (var sha in _derived.TakeInvalidated()) InvalidateDerived(sha);
             // Consume completed work even if the camera moved away from its request. Otherwise

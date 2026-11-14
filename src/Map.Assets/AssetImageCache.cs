@@ -298,6 +298,11 @@ public sealed class AssetImageCache : IDisposable
 
     public bool Contains(string key) => _entries.ContainsKey(key);
 
+    /// <summary>Explicit diagnostic snapshot of primary images. Caller supplies synchronization;
+    /// unlike Get, this does not change hit counts, recency, decoding or ownership.</summary>
+    public IReadOnlyList<(string Key, int Width, int Height)> ReadResidentSizes()
+        => _entries.Select(pair => (pair.Key, pair.Value.Image.Width, pair.Value.Image.Height)).ToArray();
+
     /// <summary>Takes ownership of already verified, derived raster pixels. They have their own
     /// LRU lifetime, so evicting a large decoded source need not discard a small sampled image.</summary>
     public SKImage? AdoptPixels(string key, SKImage image)
