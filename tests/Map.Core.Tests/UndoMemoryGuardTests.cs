@@ -35,30 +35,16 @@ public sealed class UndoMemoryGuardTests
         ReorderTwoObjects,
     }
 
-    // ca390da (= 027892d) removed the two full object arrays: 919 432 -> 16 618 872 bytes before,
-    // 7 312 -> 40 632 after (Windows, 2026-11-14). The rest still scales: x5.56 > 3.
-    private const string ReorderCopies = "SceneObjectList.SplicePositions copies the chunk directory, starts and chunk-start dictionary (O(N/256), ~33 KB at 200k) for a two-object swap; ReorderObjectsCommand itself keeps ids and positions only. Proposal: persistent chunk directory with rank lookup for splices.";
-    private const string ChunkDirectories = "1M violation: structural splices (insert/remove) in SceneObjectList copy chunk directories, starts and chunk-position dictionaries (O(N/256)); replacements no longer do. Proposal: persistent chunk directory/rank lookup, updating only affected chunks.";
-    private const string PathSnapshots = "1M violation: PlacementPathEditing.cs:111,225 retains before/after documents, including SceneObjectList.cs:89-97 chunk directories. Proposal: owner/member deltas instead of document snapshots, plus a persistent chunk directory.";
+    private const string PathSnapshots = "PlacementPathEditing.cs:111,225 retains before/after documents. Persistent chunk directories are shared; owner/member deltas instead of document snapshots remain out of scope.";
 
-    // Measured on Windows 2026-11-14 on claude/onfix-c (same numbers within 0.2 % without onfix-c):
-    // the small 10k entries are only 10-16 KB, so the ~33 KB O(N/256) directory part dominates.
-    private const string PlaceDirectories = "Place10: 10 816 -> 44 520 bytes (x4.12 > 3). InsertRange/structural splice rebuilds the chunk directory, starts and chunk-start dictionary (O(N/256)). Proposal: persistent chunk directory with rank lookup for splices.";
-    private const string PathDirectories = "Path: 15 312 -> 46 944 bytes (x3.07 > 3; x4.88 before onfix-c). Regenerated path members are spliced into the layer, rebuilding the chunk directory (O(N/256)). Proposal: as for Place10.";
-
-    private static bool IsViolation(Edit edit) => edit is Edit.ReorderTwoObjects or Edit.Place10 or Edit.Path;
-    // Move10/Style10 at 1M: 31 672 -> 31 672 bytes (x1.00) since onfix-c's persistent replace directory.
-    // Still O(N/256) at 1M (Windows 2026-11-14): Place10 x15.7, Delete10 x6.3, Path x11.2, reorder x22.7.
-    private static bool IsHugeViolation(Edit edit) => edit is Edit.Place10 or Edit.Delete10 or Edit.Path;
+    private static bool IsViolation(Edit edit) => false;
+    private static bool IsHugeViolation(Edit edit) => edit is Edit.Path;
 
     public static IEnumerable<object[]> BoundedCases() => Enum.GetValues<Edit>()
         .Where(edit => !IsViolation(edit)).Select(edit => new object[] { edit });
 
     [Theory]
     [MemberData(nameof(BoundedCases))]
-    [InlineData(Edit.ReorderTwoObjects, Skip = ReorderCopies)]
-    [InlineData(Edit.Place10, Skip = PlaceDirectories)]
-    [InlineData(Edit.Path, Skip = PathDirectories)]
     public void One_entry_retained_bytes_do_not_scale_with_map(Edit edit) => Compare(edit, enforce: true);
 
     public static IEnumerable<object[]> HugeBoundedCases() => Enum.GetValues<Edit>()
@@ -75,9 +61,6 @@ public sealed class UndoMemoryGuardTests
 
     [HugeTheory]
     [MemberData(nameof(HugeBoundedCases))]
-    [InlineData(Edit.ReorderTwoObjects, Skip = ReorderCopies)]
-    [InlineData(Edit.Place10, Skip = ChunkDirectories)]
-    [InlineData(Edit.Delete10, Skip = ChunkDirectories)]
     [InlineData(Edit.Path, Skip = PathSnapshots)]
     public void One_entry_retained_bytes_at_one_million_objects(Edit edit) => CompareHuge(edit, enforce: true);
 
