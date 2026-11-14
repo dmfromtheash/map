@@ -48,6 +48,35 @@ public sealed class ChangePackageTests
     }
 
     [Fact]
+    public void History_reuses_prepared_content_and_preserves_the_live_map_settings()
+    {
+        var label = Label("place", 10, 20);
+        var before = Doc([label], []);
+        DocumentDerivedIndexes.Prepare(before);
+        var after = DocumentEditor.ReplaceObject(before, SceneObjectClone.At(label, 40, label.Y))
+            .WithNotes([new MapNote(NoteId.New(), "note", "", NoteAnchorKind.World)]);
+        DocumentDerivedIndexes.Prepare(after);
+        var live = before with { Title = "live", Handout = MapHandout.Found, Timeline = before.Timeline with { Year = 1200 } };
+        var command = new ApplyChangePackageCommand(before, after);
+        for (var i = 0; i < 3; i++)
+        {
+            live = command.Apply(live);
+            Assert.Same(after.Layers, live.Layers);
+            Assert.Same(after.Notes, live.Notes);
+            Assert.Same(after.Assets, live.Assets);
+            Assert.True(DocumentDerivedIndexes.IsPrepared(live));
+            Assert.Equal(40, DocumentEditor.FindObject(live, label.Id)!.X);
+            live = command.Revert(live);
+            Assert.Same(before.Layers, live.Layers);
+            Assert.True(DocumentDerivedIndexes.IsPrepared(live));
+            Assert.Equal(10, DocumentEditor.FindObject(live, label.Id)!.X);
+            Assert.Equal("live", live.Title);
+            Assert.Equal(MapHandout.Found, live.Handout);
+            Assert.Equal(1200, live.Timeline.Year);
+        }
+    }
+
+    [Fact]
     public void Nothing_changed_makes_an_empty_package()
     {
         var version = Doc([Label("Ильград", 1, 1)], []);

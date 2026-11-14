@@ -219,5 +219,8 @@ public sealed class ApplyChangePackageCommand(MapDocument before, MapDocument af
     public MapDocument Apply(MapDocument document) => Take(document, after);
     public MapDocument Revert(MapDocument document) => Take(document, before);
     private static MapDocument Take(MapDocument document, MapDocument from) =>
-        document.WithLayers(from.Layers).WithNotes(from.Notes).WithAssets(from.Assets) with { Entities = from.Entities };
+        // These are the document-owned immutable lists of an already validated snapshot.
+        // Like checkpoint restore, reuse their identity and all prepared derivatives rather
+        // than validating every object again. Map-wide settings/history still belong to document.
+        document with { Layers = from.Layers, Notes = from.Notes, Assets = from.Assets, Entities = from.Entities };
 }

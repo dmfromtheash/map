@@ -142,8 +142,7 @@ public sealed class EditCostGuardTests(EditCostGuardTests.Maps maps) : IClassFix
         C(f => new SetMapHandoutCommand(f.Document.Handout, MapHandout.Found)),
         C(f => new SetMapScaleCommand(f.Document.Canvas.Scale, new MapScale(1, "km"))),
         C(f => new ApplyStylePackCommand("pack", f.Document, f.Document with { Style = new MapStyle() })),
-        C(f => new ApplyChangePackageCommand(f.Document, f.SmallChange),
-            linear: "ChangePackages.cs:222 -> WithLayers: the big layer arrives as another storage; its 200k objects exceed the layer-delta bound (MapDocument.MaxDeltaObjects) and take the whole-document validation"),
+        C(f => new ApplyChangePackageCommand(f.Document, f.SmallChange)),
         C(f => new MapVariantCommand("variant", f.Document, f.Document with { Handout = MapHandout.Found, Style = new MapStyle() })),
         C(f => new ResizeCanvasCommand(f.Document, f.SmallChange)),
         C(f => new ReplaceCityCommand(f.Target, f.Target with { Objects = f.Added }, f.Document.Notes, f.Document.Notes)),
@@ -209,7 +208,9 @@ public sealed class EditCostGuardTests(EditCostGuardTests.Maps maps) : IClassFix
         {
             var previous = before.FindLayer(layer.Id) as ObjectLayer;
             if (previous is not null && !ReferenceEquals(previous.Objects, layer.Objects))
-                Assert.True(ObjectLayerChanges.TryGet(layer, out _), "Changed storage lost ObjectLayerChanges");
+                // Reusing the saved layer list of a fully prepared snapshot needs no forward delta.
+                Assert.True(ObjectLayerChanges.TryGet(layer, out _) || DocumentDerivedIndexes.IsPrepared(after),
+                    "Changed storage lost ObjectLayerChanges and has no prepared snapshot index");
             var spatial = ObjectSpatialIndex.For(layer);
             if (previous is not null && ReferenceEquals(previous.Objects, layer.Objects))
                 Assert.Same(ObjectSpatialIndex.For(previous), spatial);
@@ -307,7 +308,7 @@ public sealed class EditCostGuardTests(EditCostGuardTests.Maps maps) : IClassFix
     [Fact]
     public void Known_SetMapScaleCommand() => Compare(Find("SetMapScaleCommand"), maps.Small, maps.Large, enforce: true);
 
-    [Fact(Skip = "O(N): ChangePackages.cs:222 -> WithLayers: the big layer arrives as another storage; its 200k objects exceed the layer-delta bound (MapDocument.MaxDeltaObjects) and take the whole-document validation")]
+    [Fact]
     public void Known_ApplyChangePackageCommand() => Compare(Find("ApplyChangePackageCommand"), maps.Small, maps.Large, enforce: true);
 
     [Fact]
