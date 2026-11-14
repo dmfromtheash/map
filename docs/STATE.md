@@ -31,7 +31,9 @@
   доработать) + исследование очереди картинок. `claude/image-queue` 21f9e9a — Б.1 защита нужных картинок (не замерено).
 - Пакет 5: `on-guards`, `onfix-c`, `version-keys`, `zoom-800`, `settings-storage`, `perf-compare`, `refine-flag`, `mip-churn`,
   `frame-budget`, `mem-caches`, `reserve`; WIP Sol `onfix-b/d`, `skia-alloc-audit`, `pyramid-core/raster`.
-- Патчи Sol 15.11 (frameplan, splice, pyramid, onrest, demandq, on-all, xcheck): `docs/perf/research/sol-15-11/`.
+- Mac 15.11: `claude/image-queue-sol` (Б.1 + 5 исправлений Sol + Б.2 + планировщик очереди), `claude/on-all` 48c00b4 (все
+  правки O(N) сведены) — обе не прогнаны на Windows; патчи frameplan/pyramid — `docs/perf/research/sol-15-11/`.
+- USER: `review/sol-user-1` 25a34ec (инструменты Sol, база — ветка Astra).
 
 ## Библиотека (DEC-103/104/108)
 - `H:\MapLibrary` (16 208 ассетов в каталогах перф-прогона ПК); копия на USER `D:\MapLibrary` (1 804 SHA).
