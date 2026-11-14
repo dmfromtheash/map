@@ -452,17 +452,23 @@ public sealed class ObjectOverviewCache : IDisposable
     }
 
     /// <summary>
-    /// Lower ranks go first. 0 - an entry the last frame did not use; 1 - such a page/seed fallback;
-    /// 2 - an older overview level the last frame drew in place of a chunk still on its way; 3 - the last
-    /// frame's own tiles and chunks; 4 - a seed or fallback the last frame drew or prepared (the view
-    /// completes only with its seed kept, so inside the working set the old preference stays). Without
-    /// frames (no <see cref="BeginFrame"/> yet) only the fallback preference applies, as before.
+    /// A page/seed fallback no frame has drawn or prepared for this many frames (about a second) belongs to
+    /// a view the camera has left: it no longer outranks the current view's own pictures.
+    /// </summary>
+    internal const int StaleFallbackFrames = 60;
+
+    /// <summary>
+    /// Lower ranks go first. 0 - an ordinary entry the last frame did not use; 1 - a stale fallback
+    /// (<see cref="StaleFallbackFrames"/>); 2 - an older overview level the last frame drew in place of a
+    /// chunk still on its way; 3 - the other ordinary entries, the view's own tiles and chunks among them;
+    /// 4 - a recent fallback (as before: it covers cold tiles while a view larger than the cache churns, and
+    /// a refining view completes only with its seed kept). Without frames nothing is stale or a stand-in.
     /// </summary>
     private int EvictionRank(Key key, Entry entry)
     {
-        var used = _frame > 0 && entry.LastFrame == _frame;
-        if (!used) return entry.Fallback ? 1 : 0;
-        return entry.Fallback ? 4 : _standIns.Contains(key) ? 2 : 3;
+        if (entry.Fallback) return _frame - entry.LastFrame >= StaleFallbackFrames ? 1 : 4;
+        if (_frame == 0 || entry.LastFrame != _frame) return 0;
+        return _standIns.Contains(key) ? 2 : 3;
     }
 
     private bool Remove(Key key, bool eviction)
