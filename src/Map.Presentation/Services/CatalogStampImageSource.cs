@@ -56,6 +56,8 @@ public sealed class CatalogStampImageSource(
         => (_derived?.DiskHits ?? 0, _derived?.Builds ?? 0, _derived?.DiskBytes ?? 0,
             _derived?.DiskEvictions ?? 0, _derived?.MetadataEntries ?? 0, _derived?.PendingMips ?? 0, _derived?.DiscardedMips ?? 0);
 
+    public StampDerivedAssetStore.IoSnapshot DerivedIoDiagnostics => _derived?.IoDiagnostics ?? default;
+
     public bool PrepareOverview(IEnumerable<string> assets, Action ready)
     {
         if (_derived is null) return true;
@@ -501,6 +503,7 @@ public sealed class CatalogStampImageSource(
         {
             if (_disposed) return null;
             _frameThread = Environment.CurrentManagedThreadId;
+            _derived?.ObserveCanvasThread();
             _validatedThisFrame.Clear();
             _wantedMips.Clear();
             if (_derived is not null)

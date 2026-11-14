@@ -822,6 +822,7 @@ public sealed partial class ZoomAssetsApplication : Application
     private async Task BurstRoute(ZoomScenarioReport scenario, string name, int steps, Action<int> step)
     {
         TraceMark(name);
+        var diagnostic = StartPanDiagnostic();
         var target = new ZoomRouteReport { Name = name, ScaleStart = _editor.Session.Viewport.Scale };
         var canvas = _view.Canvas;
         var sceneTimes = new List<double>();
@@ -834,6 +835,7 @@ public sealed partial class ZoomAssetsApplication : Application
                 var revision = canvas.CompletedSceneRevision;
                 if (revision <= lastRevision) return; // compositor replays are not fresh input frames
                 lastRevision = revision;
+                diagnostic?.Frame(canvas);
                 sceneTimes.Add(canvas.LastSceneRenderMilliseconds);
                 target.FrameWorkMs.Add(Map.App.Controls.MapCanvasControl.LastFrameWorkMilliseconds);
                 target.CameraCaptureBudgetRejections += canvas.LastRenderStats.CameraCapturesRejectedByBudget;
@@ -906,6 +908,7 @@ public sealed partial class ZoomAssetsApplication : Application
         target.WallMs = frames.Count > 0 ? (frames[^1].Stamp - inputStamps[0].Stamp) * 1000.0 / Stopwatch.Frequency : watch.Elapsed.TotalMilliseconds;
         target.ScaleEnd = _editor.Session.Viewport.Scale;
         Complete(scenario, target, burst: true);
+        diagnostic?.Complete(target, inputStamps);
         await Settled(target);
     }
 

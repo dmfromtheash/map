@@ -94,6 +94,7 @@ public sealed partial class StampDerivedAssetStore
         {
             var path = PortablePath(record);
             if (!File.Exists(path) || IsRejectedPortable(record.Sha256, path)) return null;
+            CountIo(ref _portableHeaderReads);
             using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
             var (manifest, _) = ReadPortableManifest(file);
             var held = manifest.Header;
@@ -137,6 +138,7 @@ public sealed partial class StampDerivedAssetStore
         }
         // A portable file is not a machine-local proof of the source identity. Verify
         // the master once, and each ladder's exact bytes, without decoding any image.
+        CountIo(ref _sourceVerifications);
         if (_catalog.ReadVerified(record).Status != AssetResolutionStatus.Available) return false;
         for (var i = 0; i < sources.Length; i++)
         {
@@ -201,6 +203,7 @@ public sealed partial class StampDerivedAssetStore
         {
             if (IsRejectedPortable(key.Sha, header.PortablePath!)) return null;
             if (!header.Original.Matches() || !header.Working.Matches()) throw new InvalidDataException("Portable source changed.");
+            CountIo(ref _portablePixelReads);
             using var file = new FileStream(header.PortablePath!, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
             var (manifest, start) = ReadPortableManifest(file);
             if (!string.Equals(manifest.Header.Sha, key.Sha, StringComparison.OrdinalIgnoreCase)
@@ -216,7 +219,9 @@ public sealed partial class StampDerivedAssetStore
             file.ReadExactly(compressed);
             var pixels = new byte[checked(entry.Width * entry.Height * 4)];
             using var decoder = new BrotliDecoder();
+            var decodeStarted = System.Diagnostics.Stopwatch.GetTimestamp();
             var status = decoder.Decompress(compressed, pixels, out var consumed, out var written);
+            Interlocked.Add(ref _portableDecompressTicks, System.Diagnostics.Stopwatch.GetTimestamp() - decodeStarted);
             if (status != System.Buffers.OperationStatus.Done || consumed != compressed.Length || written != pixels.Length
                 || !string.Equals(Convert.ToHexStringLower(SHA256.HashData(pixels)), entry.Hash, StringComparison.Ordinal))
                 throw new InvalidDataException("Portable pixels hash or size.");

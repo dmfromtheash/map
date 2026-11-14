@@ -112,6 +112,12 @@ public sealed partial class ZoomAssetsApplication
             await Finish(scenario); Checkpoint(); return;
         }
         var fit = _editor.Session.Viewport.Scale;
+        if (Environment.GetEnvironmentVariable("MAP_PERF_PAN100_ONLY") is "1" or "legacy")
+        {
+            await Pan100Diagnostic(scenario, anchor);
+            Checkpoint();
+            return;
+        }
         foreach (var scale in new[] { .25, 1d, 4d })
         {
             await Route(scenario, "scale-" + scale, 1, _ => SetScale(anchor, scale));

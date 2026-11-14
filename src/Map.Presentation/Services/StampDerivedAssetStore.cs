@@ -594,6 +594,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
     private SKImage? ReadSource(AssetRecord record, int step, Header? trusted,
         out FileStamp? original, out FileStamp? working)
     {
+        CountIo(ref _sourcePreparations);
         original = FileStamp.Read(_catalog.SourcePath(record));
         working = original;
         if (original is null) return null;
@@ -619,7 +620,9 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
             encoded = bytes;
         }
         _ = AssetImagePolicy.Inspect(encoded);
+        var decodeStarted = System.Diagnostics.Stopwatch.GetTimestamp();
         var image = AssetImageCache.DecodeOwned(encoded);
+        Interlocked.Add(ref _sourceDecodeTicks, System.Diagnostics.Stopwatch.GetTimestamp() - decodeStarted);
         if (!original.Matches() || !working.Matches()) { image?.Dispose(); return null; }
         return image;
     }
@@ -750,6 +753,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
 
     private byte[] ReadCompressedPixels(Header header)
     {
+        CountIo(ref _localMipReads);
         using var file = new FileStream(Stem(header.Sha) + ".pixels", FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
         using var compressed = new BrotliStream(file, CompressionMode.Decompress);
         using var raw = new MemoryStream();
