@@ -1,4 +1,3 @@
-using System.Collections.Immutable;
 using Map.Core.Documents;
 
 namespace Map.Core.Editing;
@@ -15,13 +14,22 @@ public static class ControlledAreaGeneration
             area.SizeVariationPercent, area.JoinEdges);
         var command = new PlacementAreaCommand(layerId, areaId,
             area with { GenerationRecipe = recipe, Rules = (area.Rules ?? new()) with { Revision = (area.Rules?.Revision ?? 0) + 1 } }, "Перегенерация области", cancellationToken: token, forestEcology: forestEcology);
-        var generated = (ObjectLayer)command.Apply(document).FindLayer(layerId)!;
+        var generatedDocument = command.Apply(document);
+        var generated = (ObjectLayer)generatedDocument.FindLayer(layerId)!;
         var next = generated.PlacementAreas.Single(a => a.Id == areaId);
-        var generatedIds = next.Members.Where(m => area.GenerationProtection?.Contains(m.Slot) != true).Select(m => m.ObjectId).ToHashSet();
+        var index = DocumentRevisionIndex.For(generatedDocument);
+        var generatedObjects = next.Members.Where(m => area.GenerationProtection?.Contains(m.Slot) != true)
+            .Select(m => index.FindObject(m.ObjectId)!).ToArray();
+        if (generatedObjects.Length == 0)
+        {
+            token.ThrowIfCancellationRequested();
+            return UpdateLayerCommand.FromDelta(layerId, new CompositeCommand("Применить генерацию области", [command]));
+        }
         // The command already preserved protected members; keep their draw order as well.
-        var after = generated with { Objects = generated.Objects.Select(o => generatedIds.Contains(o.Id)
-            ? o with { GenerationReason = "Расстановка внутри выбранной области по её плотности, рисунку и ограничениям местности." } : o).ToImmutableArray() };
+        var reasons = new ReplaceObjectsCommand(generatedObjects,
+            generatedObjects.Select(o => o with { GenerationReason = "Расстановка внутри выбранной области по её плотности, рисунку и ограничениям местности." }).ToArray(),
+            "Применить генерацию области");
         token.ThrowIfCancellationRequested();
-        return UpdateLayerCommand.Replace(before, after, "Применить генерацию области");
+        return UpdateLayerCommand.FromDelta(layerId, new CompositeCommand("Применить генерацию области", [command, reasons]));
     }
 }

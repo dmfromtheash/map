@@ -48,6 +48,35 @@ public sealed class MapDecorationsTests
     }
 
     [Fact]
+    public void Legend_first_variant_follows_deletion_visibility_layer_order_and_asset_names()
+    {
+        var a = new string('a', 64); var b = new string('b', 64); var c = new string('c', 64);
+        SceneObject Stamp(string hash, bool visible = true) => new(ObjectId.New(), SceneObjectKind.Stamp, "stamp",
+            1, 2, 20, 20, 0, "#FFFFFFFF", "#00000000", 0, visible, false) { Stamp = new StampStyle(hash) };
+        var first = Stamp(a); var hidden = Stamp(c, false); var second = Stamp(b); var last = Stamp(a);
+        var layer = new ObjectLayer(LayerId.New(), "objects", true, false, 1, [first, hidden, second, last]);
+        var other = new ObjectLayer(LayerId.New(), "other", true, false, 1, [Stamp(c)]);
+        var document = new MapDocument(DocumentId.New(), "legend", DateTimeOffset.UnixEpoch,
+            new CanvasDefinition(100, 100, "px", "#FFFFFFFF"), [Base(), layer, other],
+            [Asset(a, "Ель 1"), Asset(b, "Ель 2"), Asset(c, "Дуб")]);
+        DocumentDerivedIndexes.Prepare(document);
+        string?[] Hashes(MapDocument doc) => MapDecorations.BuildLegend(doc)
+            .Where(e => e.Kind == LegendEntryKind.Asset).Select(e => e.AssetSha256).ToArray();
+        Assert.Equal(new[] { a, c }, Hashes(document));
+        var command = new RemoveObjectsCommand(document, layer.Id, [first.Id]);
+        var removed = command.Apply(document);
+        Assert.Equal(new[] { b, c }, Hashes(removed));
+        Assert.Equal(new[] { a, c }, Hashes(command.Revert(removed)));
+        var reordered = removed.WithLayers([removed.BaseColor, other, removed.FindLayer(layer.Id)!]);
+        Assert.Equal(new[] { c, b }, Hashes(reordered));
+        var renamed = removed.WithAssets([Asset(a, "Сосна"), Asset(b, "Ель"), Asset(c, "Дуб")]);
+        Assert.Equal(new[] { b, a, c }, Hashes(renamed));
+        var invisible = UpdateLayerCommand.SetVisible((ObjectLayer)removed.FindLayer(layer.Id)!, false).Apply(removed);
+        Assert.Equal(new[] { c }, Hashes(invisible));
+        Assert.Equal(new[] { a, c }, Hashes(document));
+    }
+
+    [Fact]
     public void The_scale_bar_follows_the_map_scale_and_rounds_to_a_nice_length()
     {
         var bar = new SceneObject(ObjectId.New(), SceneObjectKind.Decoration, "Линейка", 0, 0, 400, 60, 0,
