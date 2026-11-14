@@ -36,6 +36,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
     private readonly ConcurrentDictionary<string, TaskCompletionSource<Header?>> _requests = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, (int Attempts, long RetryAt)> _failedHeaders = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, byte> _quietMissing = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, SKColor> _deliveredPreviews = new(StringComparer.OrdinalIgnoreCase);
     private readonly TimeProvider _retryClock;
     internal void SetCacheableMissing(string sha, bool missing)
     {
@@ -65,10 +66,12 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
     private long _overviewColorRevision;
     public long OverviewColorRevision => Interlocked.Read(ref _overviewColorRevision);
 
-    private void OverviewColorChanged()
+    // A miss leaves the colour unknown, so the canvas has nothing new to draw: it only bumps the
+    // revision (the overview re-reads which misses are now final) without waking a frame.
+    private void OverviewColorChanged(bool colorArrived = true)
     {
         Interlocked.Increment(ref _overviewColorRevision);
-        OverviewChanged?.Invoke();
+        if (colorArrived) OverviewChanged?.Invoke();
     }
     public long DiskHits => Interlocked.Read(ref _diskHits);
     public long Builds => Interlocked.Read(ref _builds);
@@ -193,7 +196,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
         {
             Interlocked.Increment(ref _generation);
             _requests.Clear(); _previews.Clear(); _completedHeaders.Clear(); _failedHeaders.Clear();
-            _quietMissing.Clear();
+            _quietMissing.Clear(); _deliveredPreviews.Clear();
             _portableTrust.Clear(); _rejectedPortable.Clear();
             Interlocked.Increment(ref _overviewColorRevision);
             foreach (var request in _mips.Values) Retire(request);
@@ -219,10 +222,14 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
 
     private void CompleteHeader(string sha, TaskCompletionSource<Header?> completion, Header? header)
     {
+        // A recovered miss is announced once by the image source's missing revision; waking the
+        // canvas here as well would draw the same recovery twice.
+        var recovered = false;
         lock (_requestsGate)
         {
             if (_requests.TryGetValue(sha, out var active) && ReferenceEquals(active, completion))
             {
+                recovered = header is not null && _failedHeaders.ContainsKey(sha);
                 if (header is null)
                 {
                     var attempts = _failedHeaders.GetValueOrDefault(sha).Attempts + 1;
@@ -238,7 +245,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
             }
         }
         completion.TrySetResult(header);
-        OverviewColorChanged();
+        OverviewColorChanged(header is not null && !recovered);
     }
 
     public Task<Mip> RequestMip(Header header, int level) => RequestPixels(header, 0, level);
@@ -401,7 +408,10 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
             }
             catch (Exception ex) { ReportFailure("metadata " + sha, ex); }
             previewCompletion.TrySetResult(preview);
-            OverviewColorChanged();
+            // A slow retry of a missing source re-reads the same thumbnail colour: nothing to redraw.
+            var arrived = preview is { } shown && (!_deliveredPreviews.TryGetValue(sha, out var known) || known != shown);
+            if (preview is { } delivered) _deliveredPreviews[sha] = delivered;
+            OverviewColorChanged(arrived);
             if (_disposed || held is not null) CompleteHeader(sha, completion, held);
             else
             {
@@ -499,6 +509,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
                     { Interlocked.Decrement(ref _journalPixels); Retire(request); }
             SignalCapacity();
             if (quiet) return;
+            _deliveredPreviews.TryRemove(sha, out _);
             _invalidated[sha] = 0;
         }
         Interlocked.Increment(ref _overviewColorRevision);

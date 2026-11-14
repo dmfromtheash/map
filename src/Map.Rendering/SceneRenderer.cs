@@ -5820,12 +5820,11 @@ public static partial class SceneRenderer
         // legacy image source for every distant color can itself decode the whole library.
         // It gets its own small palette, so it does not thrash the layer's cached one.
         OverviewPalette palette;
-        string[]? localShas = null;
         if (fallbackScale is { } localScale)
         {
             var localAssets = ObjectSpatialIndex.For(layer).Query(Expand(view, 1 / Math.Max(.001, localScale)))
                 .Where(item => item.Stamp is not null).Select(item => item.Stamp!.AssetSha256).ToHashSet(StringComparer.Ordinal);
-            var shas = localShas = document.Assets.Where(asset => plan.UsesAsset(asset.Sha256) && localAssets.Contains(asset.Sha256))
+            var shas = document.Assets.Where(asset => plan.UsesAsset(asset.Sha256) && localAssets.Contains(asset.Sha256))
                 .Select(asset => asset.Sha256).ToArray();
             if (options.RequestRefinedFrame is { } ready && options.Stamps is { } source
                 && !source.PrepareOverview(shas, ready)
@@ -5834,6 +5833,7 @@ public static partial class SceneRenderer
             foreach (var sha in shas)
                 if (options.Stamps?.TryGetOverviewColor(sha) is { } color) local[sha] = color;
             palette = new OverviewPalette(local.ToImmutable());
+            palette.Unresolved = shas.Any(sha => !palette.Colors.ContainsKey(sha) && options.Stamps?.IsMissingCacheable(sha) != true);
         }
         else palette = plan.GetPalette(document.Assets, options);
         var zoomBucket = OverviewZoomBucket(fallbackScale ?? options.ViewScale);
@@ -5998,9 +5998,8 @@ public static partial class SceneRenderer
             stats.ObjectsDrawn += overviewObjects + exact.Count;
             stats.OverviewObjects += overviewObjects;
             stats.MissingAssets += Math.Max(0, overviewMissing);
-            // Only reached while some overview colour is absent; a cacheable miss is final, not pending.
-            if (overviewMissing > 0 && (localShas ?? document.Assets.Where(asset => plan.UsesAsset(asset.Sha256)).Select(asset => asset.Sha256))
-                .Any(sha => !palette.Colors.ContainsKey(sha) && options.Stamps?.IsMissingCacheable(sha) != true)) stats.UnresolvedImages++;
+            // A cacheable miss is final, not pending: the palette scan already told them apart.
+            if (overviewMissing > 0 && palette.Unresolved) stats.UnresolvedImages++;
             stats.OverviewChunks += overviewChunks;
             stats.OverviewBatches += overviewBatches;
             stats.ExactObjects += exact.Count;
@@ -6137,6 +6136,9 @@ public static partial class SceneRenderer
     {
         public static readonly OverviewPalette Empty = new(ImmutableDictionary<string, SKColor>.Empty);
         public ImmutableDictionary<string, SKColor> Colors { get; } = colors;
+        /// <summary>Some used asset still lacks a colour and its miss is not final. Statistics only:
+        /// refreshed with the palette scan, so an unchanged frame never walks the assets.</summary>
+        public volatile bool Unresolved;
     }
 
     private sealed class OverviewColors
@@ -6146,7 +6148,8 @@ public static partial class SceneRenderer
         private long? _revision;
         private long _sourceRevision;
         private bool _pending;
-        private OverviewPalette _palette = OverviewPalette.Empty;
+        // Own instance, never the shared Empty: Unresolved is written on it.
+        private OverviewPalette _palette = new(ImmutableDictionary<string, SKColor>.Empty);
 
         public OverviewPalette Get(IReadOnlyList<MapAssetReference> assets,
             IReadOnlyDictionary<string, int> used, IStampImageSource source, RenderOptions options)
@@ -6179,6 +6182,7 @@ public static partial class SceneRenderer
                         else colors.Remove(sha);
                     var snapshot = colors.ToImmutable();
                     if (!ReferenceEquals(snapshot, _palette.Colors)) _palette = new(snapshot);
+                    _palette.Unresolved = _used.Any(sha => !snapshot.ContainsKey(sha) && !source.IsMissingCacheable(sha));
                     _revision = revision;
                     _sourceRevision = sourceRevision;
                 }
