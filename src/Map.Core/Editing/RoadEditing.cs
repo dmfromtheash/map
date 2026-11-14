@@ -438,18 +438,19 @@ public sealed class RoadCommand : IEditCommand
         var removed = new[] { (Guid?)_roadId, _absorbed, _additional?.Id }
             .OfType<Guid>().Distinct().Where(layer.ContainsRoad).ToArray();
         var addedIds = new[] { _requested?.Id, _additional?.Id }.OfType<Guid>().Distinct().ToArray();
-        _before = document; _after = WithRoads(document, layer, roads, order, removed, addedIds);
+        _before = document; _after = WithRoads(document, layer, roads, order, removed, addedIds,
+            new[] { _requested, _additional }.OfType<Road>().ToArray());
         return _after;
     }
 
     public MapDocument Revert(MapDocument document) => _before ?? throw new InvalidOperationException("Команда дороги ещё не выполнена.");
 
     internal static MapDocument WithRoads(MapDocument document, ObjectLayer layer, IReadOnlyList<Road> roads, ImmutableArray<Guid> order,
-        IReadOnlyList<Guid>? removed = null, IReadOnlyList<Guid>? added = null)
+        IReadOnlyList<Guid>? removed = null, IReadOnlyList<Guid>? added = null, IReadOnlyList<Road>? changed = null)
     {
         var layers = document.Layers.ToArray(); var li = Array.FindIndex(layers, l => l.Id == layer.Id);
         var targetLayer = layer with { Roads = roads.ToImmutableArray(), SurfaceOrder = order }; layers[li] = targetLayer;
-        if (removed is not null && added is not null) targetLayer.RegisterRoadDelta(layer, removed, added);
+        if (removed is not null && added is not null && changed is not null) targetLayer.RegisterRoadDelta(layer, removed, added, changed);
         var target = document.WithRevisedLayers(layers);
         DocumentRevisionIndex.RegisterReplacements(document, target, []); ObjectNameIndex.Share(document, target);
         ObjectLayerChanges.Register(layer, targetLayer, [], []);

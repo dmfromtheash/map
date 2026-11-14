@@ -150,6 +150,13 @@ public sealed record ObjectLayer : MapLayer
     private System.Collections.Immutable.ImmutableArray<Road> _roads = [];
     private FeatureIdentityIndex _riverIds = FeatureIdentityIndex.Create<River>([], static r => r.Id);
     private FeatureIdentityIndex _roadIds = FeatureIdentityIndex.Create<Road>([], static r => r.Id);
+    private Lazy<FeatureSpatialIndex<River>> _placementRivers = RiverPlacementIndex([]);
+    private Lazy<FeatureSpatialIndex<Road>> _placementRoads = RoadPlacementIndex([]);
+
+    private static Lazy<FeatureSpatialIndex<River>> RiverPlacementIndex(IEnumerable<River> rivers) =>
+        new(() => FeatureSpatialIndex<River>.Build(rivers.Where(r => r.Visible), r => r.Id, r => Editing.RiverGeometry.Evaluate(r).Bounds));
+    private static Lazy<FeatureSpatialIndex<Road>> RoadPlacementIndex(IEnumerable<Road> roads) =>
+        new(() => FeatureSpatialIndex<Road>.Build(roads.Where(r => r.Visible), r => r.Id, r => Editing.RoadGeometry.Evaluate(r).Bounds));
 
     public ObjectLayer(
         LayerId id, string name, bool visible, bool locked, double opacity,
@@ -184,6 +191,7 @@ public sealed record ObjectLayer : MapLayer
             if (_rivers == value) return;
             _rivers = value;
             _riverIds = FeatureIdentityIndex.Create(value, static r => r.Id);
+            _placementRivers = RiverPlacementIndex(value);
         }
     }
 
@@ -196,6 +204,7 @@ public sealed record ObjectLayer : MapLayer
             if (_roads == value) return;
             _roads = value;
             _roadIds = FeatureIdentityIndex.Create(value, static r => r.Id);
+            _placementRoads = RoadPlacementIndex(value);
         }
     }
 
@@ -205,21 +214,40 @@ public sealed record ObjectLayer : MapLayer
 
     internal FeatureIdentityIndex RiverIds => _riverIds;
     internal FeatureIdentityIndex RoadIds => _roadIds;
+    internal FeatureSpatialIndex<River> PlacementRivers => _placementRivers.Value;
+    internal FeatureSpatialIndex<Road> PlacementRoads => _placementRoads.Value;
+    internal bool PlacementFeaturesPrepared => _placementRivers.IsValueCreated && _placementRoads.IsValueCreated;
 
-    internal void RegisterRiverDelta(ObjectLayer source, IReadOnlyList<Guid> removed, IReadOnlyList<Guid> added)
+    internal void RegisterRiverDelta(ObjectLayer source, IReadOnlyList<Guid> removed, IReadOnlyList<Guid> added,
+        IReadOnlyList<River>? changed = null)
     {
         var ids = source._riverIds.Derive(removed, added);
         if (ids.Count != Rivers.Length)
             throw new InvalidOperationException($"River content delta does not explain index version {ids.Version}.");
         _riverIds = ids;
+        if (changed is not null && source._placementRivers.IsValueCreated)
+        {
+            var derived = source.PlacementRivers.Change(removed, changed.Where(r => r.Visible),
+                r => r.Id, r => Editing.RiverGeometry.Evaluate(r).Bounds);
+            _placementRivers = new(() => derived);
+            _ = _placementRivers.Value;
+        }
     }
 
-    internal void RegisterRoadDelta(ObjectLayer source, IReadOnlyList<Guid> removed, IReadOnlyList<Guid> added)
+    internal void RegisterRoadDelta(ObjectLayer source, IReadOnlyList<Guid> removed, IReadOnlyList<Guid> added,
+        IReadOnlyList<Road>? changed = null)
     {
         var ids = source._roadIds.Derive(removed, added);
         if (ids.Count != Roads.Length)
             throw new InvalidOperationException($"Road content delta does not explain index version {ids.Version}.");
         _roadIds = ids;
+        if (changed is not null && source._placementRoads.IsValueCreated)
+        {
+            var derived = source.PlacementRoads.Change(removed, changed.Where(r => r.Visible),
+                r => r.Id, r => Editing.RoadGeometry.Evaluate(r).Bounds);
+            _placementRoads = new(() => derived);
+            _ = _placementRoads.Value;
+        }
     }
 
     // Derived membership is deliberately absent from document equality/hash codes. Preparing an

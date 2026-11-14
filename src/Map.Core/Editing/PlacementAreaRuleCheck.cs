@@ -1,52 +1,29 @@
 using System.Collections.Immutable;
-using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 using Map.Core.Documents;
 
 namespace Map.Core.Editing
 {
     /// <summary>
-    /// The map queries behind <see cref="PlacementAreaRules"/>. Immutable feature arrays share
-    /// spatial lookups across commands and object-only edits; probes evaluate local candidates.
+    /// The map queries behind <see cref="PlacementAreaRules"/>. Prepared feature grids restrict
+    /// each point probe to nearby rivers and roads; exact geometry predicates are unchanged.
     /// </summary>
     public sealed class PlacementAreaRuleCheck
     {
         private readonly MapDocument _document;
         private readonly PlacementAreaRules _rules;
         private readonly bool _hasLand;
-        private readonly ObjectLayer[] _layers;
-        private static readonly ConditionalWeakTable<River[], Lazy<ObjectSpatialIndex.BoundsGrid<RiverGeometrySet>>> Rivers = new();
-        private static readonly ConditionalWeakTable<Road[], Lazy<ObjectSpatialIndex.BoundsGrid<RoadGeometrySet>>> Roads = new();
-
-        private static ObjectSpatialIndex.BoundsGrid<RiverGeometrySet> RiverIndex(ImmutableArray<River> rivers) =>
-            Rivers.GetValue(ImmutableCollectionsMarshal.AsArray(rivers)!, static items => new(() => new(items
-                .Where(r => r.Visible).Select(r => { var g = RiverGeometry.Evaluate(r); return (g, g.Bounds); })))).Value;
-
-        private static ObjectSpatialIndex.BoundsGrid<RoadGeometrySet> RoadIndex(ImmutableArray<Road> roads) =>
-            Roads.GetValue(ImmutableCollectionsMarshal.AsArray(roads)!, static items => new(() => new(items
-                .Where(r => r.Visible).Select(r => { var g = RoadGeometry.Evaluate(r); return (g, g.Bounds); })))).Value;
-
-        internal static void Prepare(ObjectLayer layer)
-        {
-            if (!layer.Rivers.IsDefaultOrEmpty) _ = RiverIndex(layer.Rivers);
-            if (!layer.Roads.IsDefaultOrEmpty) _ = RoadIndex(layer.Roads);
-        }
-
-        internal static bool IsPrepared(ObjectLayer layer) =>
-            (layer.Rivers.IsDefaultOrEmpty || Rivers.TryGetValue(ImmutableCollectionsMarshal.AsArray(layer.Rivers)!, out var rivers) && rivers.IsValueCreated)
-            && (layer.Roads.IsDefaultOrEmpty || Roads.TryGetValue(ImmutableCollectionsMarshal.AsArray(layer.Roads)!, out var roads) && roads.IsValueCreated);
+        private readonly FeatureSpatialIndex<River>[] _rivers;
+        private readonly FeatureSpatialIndex<Road>[] _roads;
 
         public PlacementAreaRuleCheck(MapDocument document, PlacementAreaRules rules)
         {
             _document = document;
             _rules = rules;
             _hasLand = document.Layers.OfType<LandLayer>().Any(l => l.Visible);
-            _layers = document.Layers.OfType<ObjectLayer>().Where(l => l.Visible).ToArray();
-            foreach (var layer in _layers)
-            {
-                if ((rules.AvoidWater || rules.OnlyOnWater) && !layer.Rivers.IsDefaultOrEmpty) _ = RiverIndex(layer.Rivers);
-                if (rules.AvoidRoads && !layer.Roads.IsDefaultOrEmpty) _ = RoadIndex(layer.Roads);
-            }
+            var layers = document.Layers.OfType<ObjectLayer>().Where(l => l.Visible).ToArray();
+            _rivers = rules.AvoidWater || rules.OnlyOnWater
+                ? [.. layers.Select(l => l.PlacementRivers)] : [];
+            _roads = rules.AvoidRoads ? [.. layers.Select(l => l.PlacementRoads)] : [];
         }
 
         /// <summary>
@@ -72,7 +49,8 @@ namespace Map.Core.Editing
         private bool AllowsAvoidance(double x, double y)
         {
             if (_rules.AvoidWater && IsWater(x, y)) return false;
-            if (_rules.AvoidRoads && OnRoad(x, y)) return false;
+            if (_rules.AvoidRoads)
+                if (OnRoad(x, y)) return false;
             return true;
         }
 
@@ -90,37 +68,33 @@ namespace Map.Core.Editing
                 if (land is null && _hasLand || _rules.LandLayerId is { } id && land?.Id != id) return false;
             }
 
-            if (_rules.AvoidRoads && OnRoad(x, y)) return false;
+            if (_rules.AvoidRoads)
+                if (OnRoad(x, y)) return false;
             return true;
         }
 
         private bool OnRoad(double x, double y)
         {
-            var probe = new WorldBounds(x - _rules.RoadMargin, y - _rules.RoadMargin, x + _rules.RoadMargin, y + _rules.RoadMargin);
-            foreach (var layer in _layers)
-                if (!layer.Roads.IsDefaultOrEmpty)
-                    foreach (var road in RoadIndex(layer.Roads).Query(probe))
-                        if (RoadGeometry.TryClosest(road, x, y, _rules.RoadMargin, out _, out _, out _, out _, out _)) return true;
+            var bounds = new WorldBounds(x - _rules.RoadMargin, y - _rules.RoadMargin, x + _rules.RoadMargin, y + _rules.RoadMargin);
+            foreach (var index in _roads)
+                if (index.Any(bounds, (x, y, _rules.RoadMargin), static (road, point) =>
+                    RoadGeometry.TryClosest(RoadGeometry.Evaluate(road), point.x, point.y, point.RoadMargin,
+                        out _, out _, out _, out _, out _))) return true;
             return false;
         }
 
         /// <summary>A river, a lake, or the open sea - the page where no land lies (on maps that have land).</summary>
         public bool IsWater(double x, double y)
         {
-            // IsWater historically consults rivers only when a water rule was requested.
-            if (_rules.AvoidWater || _rules.OnlyOnWater)
-            {
-                var probe = new WorldBounds(x - 1, y - 1, x + 1, y + 1);
-                foreach (var layer in _layers)
+            foreach (var index in _rivers)
+                if (index.Any(new WorldBounds(x - 1, y - 1, x + 1, y + 1), (x, y), static (candidate, point) =>
                 {
-                    if (layer.Rivers.IsDefaultOrEmpty) continue;
-                    foreach (var river in RiverIndex(layer.Rivers).Query(probe))
-                    {
-                        if (RiverGeometry.TryClosest(river, x, y, 0, out _, out _, out _, out _, out _)) return true;
-                        if (river.Channels.Values.Any(g => RiverGeometry.InsideLake(g, x, y))) return true;
-                    }
-                }
-            }
+                    var river = RiverGeometry.Evaluate(candidate);
+                    if (RiverGeometry.TryClosest(river, point.x, point.y, 0, out _, out _, out _, out _, out _)) return true;
+                    foreach (var channel in river.Channels.Values)
+                        if (RiverGeometry.InsideLake(channel, point.x, point.y)) return true;
+                    return false;
+                })) return true;
 
             return _hasLand && TerrainOrder.LandAt(_document, x, y) is null;
         }

@@ -551,18 +551,19 @@ public sealed class RiverCommand : IEditCommand
         var removed = new[] { (Guid?)_riverId, _absorbed, _additional?.Id }
             .OfType<Guid>().Distinct().Where(layer.ContainsRiver).ToArray();
         var added = new[] { _requested?.Id, _additional?.Id }.OfType<Guid>().Distinct().ToArray();
-        _before = document; _after = WithRivers(document, layer, rivers, removed, added);
+        _before = document; _after = WithRivers(document, layer, rivers, removed, added,
+            new[] { _requested, _additional }.OfType<River>().ToArray());
         return _after;
     }
 
     public MapDocument Revert(MapDocument document) => _before ?? throw new InvalidOperationException("Команда реки ещё не выполнена.");
 
     internal static MapDocument WithRivers(MapDocument document, ObjectLayer layer, IReadOnlyList<River> rivers,
-        IReadOnlyList<Guid>? removed = null, IReadOnlyList<Guid>? added = null)
+        IReadOnlyList<Guid>? removed = null, IReadOnlyList<Guid>? added = null, IReadOnlyList<River>? changed = null)
     {
         var layers = document.Layers.ToArray(); var li = Array.FindIndex(layers, l => l.Id == layer.Id);
         var targetLayer = layer with { Rivers = rivers.ToImmutableArray() }; layers[li] = targetLayer;
-        if (removed is not null && added is not null) targetLayer.RegisterRiverDelta(layer, removed, added);
+        if (removed is not null && added is not null && changed is not null) targetLayer.RegisterRiverDelta(layer, removed, added, changed);
         var target = document.WithRevisedLayers(layers);
         DocumentRevisionIndex.RegisterReplacements(document, target, []); ObjectNameIndex.Share(document, target);
         ObjectLayerChanges.Register(layer, targetLayer, [], []);

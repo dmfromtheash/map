@@ -226,6 +226,29 @@ public sealed class LabelPriorityTests
         }
     }
 
+    [Fact]
+    public void Clearance_bounds_keep_the_original_order_and_boxes_across_chunk_and_layer_boundaries()
+    {
+        var random = new Random(111);
+        var document = Document(
+            new ObjectLayer(LayerId.New(), "first", true, false, 1,
+                Enumerable.Range(0, 800).Select(_ => RandomObject(random)).ToArray()),
+            new ObjectLayer(LayerId.New(), "hidden", false, false, 1, [Label(1, 2, 3, 24)]),
+            new ObjectLayer(LayerId.New(), "last", true, false, 1, [Label(4, 5, 6, 24)]))
+            with { Labels = new() { ClearUnderLabels = true } };
+        void Check(MapDocument current) => Assert.Equal(current.Layers.OfType<ObjectLayer>().Where(l => l.Visible)
+            .SelectMany(l => l.Objects).Where(o => o.Kind == SceneObjectKind.Text && o.Visible && o.Text is not null)
+            .Select(SceneGeometry.BoundsOf), LabelPriority.LabelBounds(current));
+        Check(document);
+        var label = document.Layers.OfType<ObjectLayer>().First().Objects.First(o => o.Kind == SceneObjectKind.Text);
+        var session = new EditingSession(document);
+        session.Execute(new TransformObjectCommand(label, SceneObjectClone.At(label, label.X + 300, label.Y)));
+        Check(session.Document);
+        Assert.True(session.Undo()); Check(session.Document);
+        Assert.True(session.Redo()); Check(session.Document);
+        Assert.Empty(LabelPriority.LabelBounds(document with { Labels = new() }));
+    }
+
     // Frozen reference: the original production algorithm, including its 4000-label cap.
     internal static HashSet<ObjectId> Original(MapDocument document, double scale)
     {

@@ -46,7 +46,7 @@ public sealed class HotPathCostGuardTests : IClassFixture<HotPathCostGuardTests.
     [EnvironmentFact("MAP_RENDER_GUARDS_AUDIT")]
     public void Audit_documented_linear_paths()
     {
-        foreach (var key in new[] { "label-bounds", "placement-features", "preview-replace" }) Compare(key, 200_000, false);
+        Compare("preview-replace", 200_000, false);
     }
 
     [EnvironmentFact("MAP_RENDER_GUARDS_HUGE")]
@@ -166,13 +166,22 @@ public sealed class HotPathCostGuardTests : IClassFixture<HotPathCostGuardTests.
         internal PlacementArea Area { get; } = new() { Nodes = [new(Guid.NewGuid(), 100, 100), new(Guid.NewGuid(), 400, 100),
             new(Guid.NewGuid(), 400, 400), new(Guid.NewGuid(), 100, 400)] };
         private MapDocument? _features;
-        internal MapDocument Features => _features ??= Document.WithLayer(Layer.Id, _ => Layer with
+        internal MapDocument Features
         {
-            Objects = [],
-            // N total features, half rivers/half roads. Local obstacles are LAST: no early-hit shortcut.
-            Rivers = [.. Enumerable.Range(1, N / 2 - 1).Select(i => RiverEditor.Translate(River, 8192 + i % 1000 * 48, 8192 + i / 1000 * 48) with { Id = Guid.NewGuid() }), River],
-            Roads = [.. Enumerable.Range(1, N / 2 - 1).Select(i => RoadEditor.Translate(Road, 8192 + i % 1000 * 48, 8192 + i / 1000 * 48) with { Id = Guid.NewGuid() }), Road],
-        });
+            get
+            {
+                if (_features is not null) return _features;
+                var features = Document.WithLayer(Layer.Id, _ => Layer with
+                {
+                    Objects = [],
+                    // N total features, half rivers/half roads. Local obstacles are LAST: no early-hit shortcut.
+                    Rivers = [.. Enumerable.Range(1, N / 2 - 1).Select(i => RiverEditor.Translate(River, 8192 + i % 1000 * 48, 8192 + i / 1000 * 48) with { Id = Guid.NewGuid() }), River],
+                    Roads = [.. Enumerable.Range(1, N / 2 - 1).Select(i => RoadEditor.Translate(Road, 8192 + i % 1000 * 48, 8192 + i / 1000 * 48) with { Id = Guid.NewGuid() }), Road],
+                });
+                DocumentDerivedIndexes.Prepare(features);
+                return _features = features;
+            }
+        }
 
         internal Fixture(int n)
         {
