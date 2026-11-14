@@ -10,7 +10,7 @@ public readonly record struct WorkingMemorySnapshot(long PhysicalBytes, long Ava
 /// <summary>Shared admission for live documents/history and overlapping native operations.
 /// It measures private commitment across Map processes; it is not a replacement allocator or
 /// a claim that driver allocations can be hard-capped by a managed application.</summary>
-public sealed class WorkingMemoryBudget
+public sealed partial class WorkingMemoryBudget
 {
     public const long MiB = 1024L * 1024;
     public const long EditReserveBytes = 16 * MiB;

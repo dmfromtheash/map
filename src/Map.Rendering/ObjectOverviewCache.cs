@@ -30,6 +30,8 @@ public sealed class ObjectOverviewCache : IDisposable
         public required SKImage Image { get; init; }
         public required long Bytes { get; init; }
         public long LastUsed { get; set; }
+        public long LastFrame { get; set; }
+        public long LastTick { get; set; }
         public int ObjectCount { get; init; }
         public int CulledCount { get; init; }
         public bool Fallback { get; set; }
@@ -56,13 +58,74 @@ public sealed class ObjectOverviewCache : IDisposable
     private double _overviewBuildMilliseconds;
     private int _overviewBuilds;
 
+    private readonly Map.Core.Resources.CacheMemoryAccount? _account;
+    private long _pressureRetryFrame;
+
+    /// <summary>Under memory pressure a tile drawn in this many recent frames is never trimmed.</summary>
+    public int PressureProtectedFrames { get; init; } = 120;
+    /// <summary>... nor one drawn within this time, so a fast frame rate does not shorten the protection.</summary>
+    public long PressureProtectedMilliseconds { get; init; } = 2000;
+    public long PressureTrims { get; private set; }
+
+    private void Touch(Entry entry)
+    {
+        entry.LastUsed = ++_clock;
+        entry.LastFrame = _frame;
+        entry.LastTick = Environment.TickCount64;
+    }
+
+    /// <summary>
+    /// Owner thread, between frames: while Windows is short of memory, falls to the account's watermark by releasing
+    /// tiles nobody drew recently, the oldest first and the page fallbacks last (a whole-page rebuild is the dearest).
+    /// The visible set and the refining view stay; at most 2 ms per frame. With nothing left to free, the next scan
+    /// waits until the oldest protected tile can leave (by frames), or 15 frames while only the time guard holds.
+    /// </summary>
+    private void TrimForMemoryPressure()
+    {
+        if (_account is null || _frame < _pressureRetryFrame) return;
+        var target = _account.TargetBytes;
+        if (Bytes <= target) return;
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        var now = Environment.TickCount64;
+        var candidates = new List<KeyValuePair<Key, Entry>>();
+        var retry = long.MaxValue;
+        foreach (var pair in _entries)
+        {
+            if (Refining(pair.Key)) continue;
+            if (_frame - pair.Value.LastFrame < PressureProtectedFrames)
+                retry = Math.Min(retry, pair.Value.LastFrame + PressureProtectedFrames);
+            else if (now - pair.Value.LastTick < PressureProtectedMilliseconds) retry = Math.Min(retry, _frame + 15);
+            else candidates.Add(pair);
+        }
+        candidates.Sort(static (a, b) => a.Value.Fallback != b.Value.Fallback
+            ? a.Value.Fallback.CompareTo(b.Value.Fallback) : a.Value.LastUsed.CompareTo(b.Value.LastUsed));
+        var before = Bytes;
+        var items = 0;
+        var exhausted = true;
+        foreach (var pair in candidates)
+        {
+            if (Bytes <= target) break;
+            if (System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds >= 2) { exhausted = false; break; }
+            if (Remove(pair.Key, eviction: true)) items++;
+        }
+        if (exhausted && Bytes > target) _pressureRetryFrame = retry == long.MaxValue ? _frame + 15 : retry;
+        if (items > 0) { PressureTrims++; _account.RecordTrim(before - Bytes, items); }
+    }
+
     internal void BeginOverviewPass()
     {
-        if (!_frameOpen) { _overviewBuildMilliseconds = 0; _overviewBuilds = 0; }
+        if (!_frameOpen) { _overviewBuildMilliseconds = 0; _overviewBuilds = 0; _adoptedPixels = 0; }
     }
 
     // One indivisible chunk is allowed to make progress even if it alone exceeds the budget.
     internal bool CanBuildOverview => _overviewBuilds == 0 || _overviewBuildMilliseconds < _overviewBuildBudgetMilliseconds;
+    // Taking a ready background raster costs microseconds here, but its first draw uploads it to
+    // the GPU. Bound the new pixels per frame too (at least one picture always goes through).
+    internal const long AdoptedPixelsPerFrame = 8L * 1024 * 1024;
+    private long _adoptedPixels;
+    internal bool CanAcceptPreparedOverview => _overviewBuildMilliseconds < _overviewBuildBudgetMilliseconds
+        && _adoptedPixels < AdoptedPixelsPerFrame;
+    internal void RecordAdoption(SKImage image) => _adoptedPixels += (long)image.Width * image.Height;
 
     internal double RecordOverviewBuild(long started)
     {
@@ -73,9 +136,20 @@ public sealed class ObjectOverviewCache : IDisposable
     }
 
     internal ObjectOverviewCacheResult GetOrCreateOverview(LayerId layer, int x, int y, int zoom, ulong hash,
-        SceneRenderer.OverviewVariant variant, StampForegroundSurface? foreground, RenderOptions options)
+        SceneRenderer.OverviewVariant variant, StampForegroundSurface? foreground, RenderOptions options, SKImage? prepared = null)
     {
-        var result = GetOrCreate(layer, x, y, zoom, hash, () => variant.BuildImage(foreground, options));
+        var adopted = false;
+        ObjectOverviewCacheResult result;
+        try
+        {
+            result = GetOrCreate(layer, x, y, zoom, hash, () =>
+            {
+                if (prepared is null) return variant.BuildImage(foreground, options);
+                adopted = true;
+                return prepared;
+            });
+        }
+        finally { if (!adopted) prepared?.Dispose(); }
         if (_entries.TryGetValue(new(new(layer, x, y, zoom), hash), out var entry))
         {
             entry.Overview = variant;
@@ -103,7 +177,7 @@ public sealed class ObjectOverviewCache : IDisposable
         }
         if (retained is { } key && _entries.TryGetValue(key, out var entry) && entry.Overview is { } previous)
         {
-            entry.LastUsed = ++_clock;
+            Touch(entry);
             if (_frameOpen) _framePins.Add(key);
             variant = previous;
             result = new(entry.Image, true, false);
@@ -132,6 +206,7 @@ public sealed class ObjectOverviewCache : IDisposable
         _frame++;
         _overviewBuildMilliseconds = 0;
         _overviewBuilds = 0;
+        _adoptedPixels = 0;
         _framePins.Clear();
         // A neighbouring level can serve this frame and be evicted by the new detail it
         // builds. Keep the page fallback available too, even before that frame needs it.
@@ -149,10 +224,13 @@ public sealed class ObjectOverviewCache : IDisposable
         Trim(null);
         foreach (var image in _retired) { image.Dispose(); Disposals++; }
         _retired.Clear();
+        TrimForMemoryPressure();
+        _account?.Report(Bytes);
     }
 
     public ObjectOverviewCache(int itemBudget = 1_024, long byteBudget = 64L * 1024 * 1024,
-        Map.Core.Resources.WorkingMemoryBudget? memoryBudget = null, double overviewBuildBudgetMilliseconds = 4)
+        Map.Core.Resources.WorkingMemoryBudget? memoryBudget = null, double overviewBuildBudgetMilliseconds = 4,
+        string? memoryAccount = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(itemBudget);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(byteBudget);
@@ -162,6 +240,8 @@ public sealed class ObjectOverviewCache : IDisposable
         _itemBudget = itemBudget;
         _byteBudget = byteBudget;
         _memory = memoryBudget ?? Map.Core.Resources.WorkingMemoryBudget.Shared;
+        if (memoryAccount is not null)
+            _account = _memory.RegisterCache(memoryAccount, Map.Core.Resources.CacheRebuildCost.Expensive, byteBudget);
     }
 
     public int Count => _entries.Count;
@@ -173,7 +253,10 @@ public sealed class ObjectOverviewCache : IDisposable
     public long Disposals { get; private set; }
 
     private long CurrentByteBudget => _memory.IsUnderPressure
-        ? Math.Min(_byteBudget, 16L * 1024 * 1024) : _byteBudget;
+        ? Math.Min(ByteLimit, 16L * 1024 * 1024) : ByteLimit;
+
+    /// <summary>The own limit, or the share of the working-memory budget when that is smaller.</summary>
+    private long ByteLimit => _account is null ? _byteBudget : Math.Min(_byteBudget, _account.LimitBytes);
 
     /// <summary>
     /// Retains the current detail view between its bounded refinement frames, up to the normal
@@ -188,7 +271,7 @@ public sealed class ObjectOverviewCache : IDisposable
         var tiles = (long)(detail.Right - detail.Left + 1) * (detail.Bottom - detail.Top + 1);
         var fallbacks = _entries.Values.Where(entry => entry.Fallback).ToArray();
         var fits = tiles + fallbacks.Length <= _itemBudget
-            && tiles * tileBytes + fallbacks.Sum(entry => entry.Bytes) <= _byteBudget;
+            && tiles * tileBytes + fallbacks.Sum(entry => entry.Bytes) <= ByteLimit;
         if (fits) _refiningViews[layer] = detail;
         else _refiningViews.Remove(layer);
         return fits;
@@ -211,7 +294,7 @@ public sealed class ObjectOverviewCache : IDisposable
         var key = new Key(new(layer, x, y, zoom), revision);
         if (_entries.TryGetValue(key, out var entry))
         {
-            entry.LastUsed = ++_clock;
+            Touch(entry);
             if (_frameOpen) _framePins.Add(key);
             result = new(entry.Image, true, false, entry.ObjectCount, entry.CulledCount);
             return true;
@@ -238,7 +321,7 @@ public sealed class ObjectOverviewCache : IDisposable
         if (_entries.TryGetValue(key, out var existing))
         {
             Hits++;
-            existing.LastUsed = ++_clock;
+            Touch(existing);
             existing.Fallback |= fallback;
             if (_frameOpen) _framePins.Add(key);
             return new ObjectOverviewCacheResult(existing.Image, Hit: true, InvalidatedPrevious: false,
@@ -268,8 +351,16 @@ public sealed class ObjectOverviewCache : IDisposable
 
         var bytes = Math.Max(1L, checked((long)image.Width * image.Height * 4));
         var counts = objectCounts?.Invoke() ?? default;
-        _entries.Add(key, new Entry { Image = image, Bytes = bytes, LastUsed = ++_clock,
-            ObjectCount = counts.Objects, CulledCount = counts.Culled, Fallback = fallback });
+        var added = new Entry
+        {
+            Image = image,
+            Bytes = bytes,
+            ObjectCount = counts.Objects,
+            CulledCount = counts.Culled,
+            Fallback = fallback
+        };
+        Touch(added);
+        _entries.Add(key, added);
         _latest[logical] = key;
         Bytes += bytes;
         if (_frameOpen) _framePins.Add(key);
@@ -299,7 +390,7 @@ public sealed class ObjectOverviewCache : IDisposable
         var budget = CurrentByteBudget;
         while (_entries.Count > _itemBudget || Bytes > budget)
         {
-            var retainView = Bytes <= _byteBudget && _entries.Count <= _itemBudget;
+            var retainView = Bytes <= ByteLimit && _entries.Count <= _itemBudget;
             var eligible = _entries.Where(pair => pair.Key != protectedKey && !_framePins.Contains(pair.Key)
                 && !(retainView && (Refining(pair.Key) || _refiningViews.Count > 0 && pair.Value.Fallback))).ToArray();
             if (eligible.Length == 0)
@@ -359,5 +450,6 @@ public sealed class ObjectOverviewCache : IDisposable
         _refiningViews.Clear();
         Bytes = 0;
         _ownerThread = null;
+        _account?.Dispose();
     }
 }

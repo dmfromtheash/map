@@ -14,7 +14,11 @@ if (int.TryParse(Environment.GetEnvironmentVariable("MAP_PERF_FREE_MB"), out var
         512 * Map.Core.Resources.WorkingMemoryBudget.MiB));
 object report;
 bool gatePassed;
-if (options.Profile == "derived-build")
+if (options.Profile == "mem-pressure")
+{
+    report = MemoryPressureProbe.Run(options); gatePassed = true;
+}
+else if (options.Profile == "derived-build")
 {
     report = await DerivedBuildProbe.RunAsync(options); gatePassed = true;
 }

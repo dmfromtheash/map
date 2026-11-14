@@ -15,6 +15,7 @@ public sealed class AssetImageCache : IDisposable
         public Dictionary<int, SKImage> Mips { get; } = [];
         public SKImage? FallbackImage { get; set; }
         public long MipBytes { get; set; }
+        public long LastTick { get; set; }
         public void Dispose()
         {
             FallbackImage?.Dispose();
@@ -33,8 +34,59 @@ public sealed class AssetImageCache : IDisposable
     private readonly Func<byte[], SKImage?> _decode;
     private readonly LinkedList<string> _recency = new();
 
+    private Map.Core.Resources.CacheMemoryAccount? _account;
+
+    /// <summary>Under memory pressure an image used within this time is never trimmed.</summary>
+    public long PressureProtectedMilliseconds { get; set; } = 2000;
+    public long PressureTrims { get; private set; }
+
+    /// <summary>Reports this cache's bytes to the shared working-memory budget and follows its pressure target.</summary>
+    public void TrackMemory(Map.Core.Resources.WorkingMemoryBudget budget, string name,
+        Map.Core.Resources.CacheRebuildCost cost)
+    {
+        ArgumentNullException.ThrowIfNull(budget);
+        if (_account is not null) throw new InvalidOperationException("The cache already reports to a budget.");
+        _account = budget.RegisterCache(name, cost, _decodedByteCapacity);
+    }
+
+    /// <summary>The own byte limit, or this cache's share of the working-memory budget when that is smaller.</summary>
+    private long ByteLimit => _account is null ? _decodedByteCapacity : Math.Min(_decodedByteCapacity, _account.LimitBytes);
+
+    /// <summary>
+    /// Called by the owner between frames, under whatever guards this cache. While Windows is short of memory it
+    /// releases the least recently used images nobody touched within <see cref="PressureProtectedMilliseconds"/>,
+    /// down to the budget's watermark, for at most <paramref name="sliceMilliseconds"/>. Pinned images stay; with
+    /// <see cref="DeferDisposal"/> the released ones wait for <see cref="DisposeRetired"/> as any eviction does.
+    /// Returns the bytes released.
+    /// </summary>
+    public long TrimForMemoryPressure(double sliceMilliseconds = 2)
+    {
+        if (_account is null) return 0;
+        _account.Report(ResidentBytes);
+        var target = _account.TargetBytes;
+        if (ResidentBytes <= target) return 0;
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        var now = Environment.TickCount64;
+        var before = ResidentBytes;
+        var items = 0;
+        for (var node = _recency.First; node is not null && ResidentBytes > target;)
+        {
+            var next = node.Next;
+            var entry = _entries[node.Value];
+            // The recency list is oldest first: the first protected image means every later one is protected too.
+            if (now - entry.LastTick < PressureProtectedMilliseconds) break;
+            if (!IsPinned(entry)) { Remove(node.Value); Evictions++; items++; }
+            if (System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds >= sliceMilliseconds) break;
+            node = next;
+        }
+        if (items > 0) { PressureTrims++; _account.RecordTrim(before - ResidentBytes, items); }
+        _account.Report(ResidentBytes);
+        return before - ResidentBytes;
+    }
+
     private void Touch(string key, Entry entry)
     {
+        entry.LastTick = Environment.TickCount64;
         if (entry.Recency is { } node)
         {
             _recency.Remove(node);
@@ -323,7 +375,7 @@ public sealed class AssetImageCache : IDisposable
     private void TrimForIncoming(long incomingResidentBytes)
     {
         while (_entries.Count >= _capacity
-            || ResidentBytes > _decodedByteCapacity - incomingResidentBytes)
+            || ResidentBytes > ByteLimit - incomingResidentBytes)
         {
             if (OldestUnpinned(null) is not { } oldest) return;
             Remove(oldest);
@@ -361,7 +413,7 @@ public sealed class AssetImageCache : IDisposable
         for (var n = 1; n <= level; n++)
             if (!entry.Mips.ContainsKey(n)) bytes += (long)Math.Max(1, image.Width >> n) * Math.Max(1, image.Height >> n) * 4;
         // The bitmap and immutable image may overlap during construction.
-        while (ResidentBytes + bytes * 2 > _decodedByteCapacity)
+        while (ResidentBytes + bytes * 2 > ByteLimit)
         {
             if (OldestUnpinned(key) is not { } oldest) return image;
             Remove(oldest); Evictions++;
@@ -405,5 +457,6 @@ public sealed class AssetImageCache : IDisposable
         _pins.Clear();
         DecodedBytes = 0;
         ResidentBytes = 0;
+        _account?.Dispose();
     }
 }

@@ -16,6 +16,21 @@ public sealed class StampImageLeaseTests : IDisposable
     private readonly string _root = Path.Combine(Path.GetTempPath(), "map-lease-tests", Guid.NewGuid().ToString("N"));
 
     [Fact]
+    public async Task Background_overview_lease_returns_the_same_owner_tint_as_the_canvas()
+    {
+        var (images, shas) = Source();
+        using var lifetime = images;
+        var expected = images.TryGetOverviewColor(shas[0]);
+        var actual = await Task.Run(() =>
+        {
+            using var lease = images.Lease();
+            return lease.TryGetOverviewColor(shas[0]);
+        });
+        Assert.NotNull(expected);
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
     public void Sampled_owner_pixels_and_tints_survive_source_eviction_within_the_same_budget()
     {
         const long budget = 2L * 1024 * 1024;

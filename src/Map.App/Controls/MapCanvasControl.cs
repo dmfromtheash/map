@@ -25,6 +25,7 @@ namespace Map.App.Controls;
 public sealed partial class MapCanvasControl : Control
 {
     private EditorViewModel? _editor;
+    private readonly SceneRenderer.OverviewPreparation _overviewPreparation = new();
     private CanvasInputRouter? _input;
     private Point? _lastPointer;
     private long _sceneRevision;
@@ -145,7 +146,8 @@ public sealed partial class MapCanvasControl : Control
                 // the frames of the zoom find a complete kept bucket instead of rebuilding tiles of
                 // 50 000 objects in the frame (64 MiB held about one and a half buckets). Under memory
                 // pressure the cache still drops to 16 MiB.
-                _contexts[thread] = context = (new(4096, 256L * 1024 * 1024), new(1024, 256L * 1024 * 1024), new(), new(8), new(6), new(6, 192L * 1024 * 1024), new(), new(), new());
+                _contexts[thread] = context = (new(4096, 256L * 1024 * 1024), new(1024, 256L * 1024 * 1024, memoryAccount: "object-overview"),
+                    new(), new(8), new(6), new(6, 192L * 1024 * 1024, memoryAccount: "object-atlas"), new(), new(), new());
             return context;
         }
         public (int Tiles, int Objects, long Bytes, long Disposals) Counts()
@@ -320,6 +322,7 @@ public sealed partial class MapCanvasControl : Control
     /// <summary>Own-process native-smoke hook; normal lifetime calls the same path on detach.</summary>
     public void DisposeRenderCaches()
     {
+        _overviewPreparation.Reset();
         lock (_renderResources.Gate)
         {
             _renderResources.Dispose();
@@ -513,6 +516,7 @@ public sealed partial class MapCanvasControl : Control
         _editor.SceneInvalidated += OnSceneInvalidated;
         _editor.CanvasGestureCancelled += OnCanvasGestureCancelled;
         _editor.HexTileLanded += OnHexTileLanded;
+        PrepareOverview();
         QueueVisualInvalidation();
     }
 
@@ -529,13 +533,23 @@ public sealed partial class MapCanvasControl : Control
         QueueVisualInvalidation();
     }
 
-    private void OnSceneChanged(object? sender, EventArgs e) =>
+    private void OnSceneChanged(object? sender, EventArgs e)
+    {
+        PrepareOverview();
         QueueVisualInvalidation();
+    }
+
+    private void PrepareOverview()
+    {
+        if (_editor is { } editor)
+            _overviewPreparation.UpdateDocument(editor.RenderDocument, editor.StampImages, QueueRefinedFrame);
+    }
 
     private void OnSceneInvalidated(object? sender, EditorSceneInvalidatedEventArgs e)
     {
         if (e.Has(EditorChangeReason.CanvasInvalidation))
         {
+            PrepareOverview();
             QueueVisualInvalidation();
         }
     }
@@ -643,7 +657,7 @@ public sealed partial class MapCanvasControl : Control
             // the land and the water exactly as the idle frame draws them.
             _input is { ActiveGesture: CanvasInputGesture.Pan } || CameraMoving
                 || _editor.IsDraggingRiver || _editor.IsDraggingRoad,
-            QueueRefinedFrame,
+            QueueRefinedFrame, _overviewPreparation,
             (surface, canvas) => CompleteGpuCapture(surface, canvas, sceneRevision),
             ShowFpsBadge ? DrawFpsBadge : null,
             (tier, elapsedMilliseconds, document, fastTerrain, styledHits, styledMisses, terrainHits, terrainMisses, gpu) =>
@@ -766,7 +780,7 @@ public sealed partial class MapCanvasControl : Control
 
     private sealed class SceneDrawOperation(
         Rect bounds, EditorViewModel editor, CanvasRenderResources resources, RenderStats renderStats,
-        CanvasPerformanceMode performanceMode, bool fastPreview, bool cameraMoving, Func<bool> cameraMotionNow, bool fastTerrain, Action requestRefinedFrame, Action<SKSurface, SKCanvas> captureFrame,
+        CanvasPerformanceMode performanceMode, bool fastPreview, bool cameraMoving, Func<bool> cameraMotionNow, bool fastTerrain, Action requestRefinedFrame, SceneRenderer.OverviewPreparation overviewPreparation, Action<SKSurface, SKCanvas> captureFrame,
         Action<SKCanvas, float, float>? drawBadge,
         Action<RenderLodTier, double, Map.Core.Documents.MapDocument, bool, long, long, long, long, bool> frameRendered,
         Map.Rendering.BrushCursorPreview? brushCursor, bool hexAmbient, Action requestAmbientFrame) : ICustomDrawOperation
@@ -925,6 +939,7 @@ public sealed partial class MapCanvasControl : Control
                 PlacementInvalid = editor.PendingPlacement?.InvalidReason is not null,
                 TileCache = tileCache,
                 ObjectCache = objectCache,
+                OverviewPreparation = overviewPreparation,
                 AtlasCache = atlasCache,
                 CarvedLand = carvedLandCache,
                 StyledLand = styledLandCache,

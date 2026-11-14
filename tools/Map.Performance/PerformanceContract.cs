@@ -73,13 +73,14 @@ internal sealed record PerformanceOptions(
         if (normalizedProfile is not ("drive-library" or "derived-build") && (catalogs.Count > 0 || dryRun))
             throw new ArgumentException("--catalogs и --dry-run доступны только для drive-library и derived-build.");
         var objectCount = requestedObjectCount ?? (normalizedProfile == "drive-library" ? 100
-            : normalizedProfile == "native-million-assets" ? 1_000_000 : 50_000);
+            : normalizedProfile is "native-million-assets" or "mem-pressure" ? 1_000_000 : 50_000);
         var isLargestMapStress = normalizedProfile is
             "native-largest-map-stress" or "native-largest-map-assets-only";
         var minimumObjectCount = isLargestMapStress ? 4 : 1;
         var maximumObjectCount = isLargestMapStress
             ? int.MaxValue
-            : normalizedProfile == "native-million-assets" ? 2_000_000 : 100_000;
+            : normalizedProfile == "native-million-assets" ? 2_000_000
+            : normalizedProfile == "mem-pressure" ? 1_000_000 : 100_000;
         if (objectCount < minimumObjectCount || objectCount > maximumObjectCount)
         {
             throw new ArgumentOutOfRangeException(nameof(objectCount),

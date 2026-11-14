@@ -46,6 +46,10 @@ public sealed class PerformanceJournalTests(ITestOutputHelper output) : IDisposa
         Assert.Equal(.75, window.GetProperty("cacheHitRate").GetDouble());
         Assert.Equal(600, window.GetProperty("cacheHits").GetInt32());
         Assert.Equal(200, window.GetProperty("cacheMisses").GetInt32());
+        var memory = window.GetProperty("memory");
+        Assert.True(memory.GetProperty("cacheBudgetBytes").GetInt64() >= 256L * 1024 * 1024);
+        Assert.Equal(JsonValueKind.Array, memory.GetProperty("caches").ValueKind);
+        Assert.Contains(memory.GetProperty("pressure").ValueKind, new[] { JsonValueKind.True, JsonValueKind.False });
         Assert.Equal(400, window.GetProperty("cacheInvalidations").GetInt32());
         Assert.Equal(200, window.GetProperty("maxDetailTilesPending").GetInt32());
         Assert.Equal(201, window.GetProperty("maxUnresolvedImages").GetInt32());

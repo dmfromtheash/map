@@ -238,6 +238,7 @@ public sealed class PerformanceJournal : IDisposable
             maxGestureIntervalMs = _intervalCount == 0 ? (double?)null : _intervals[_intervalCount - 1],
             cacheHits = _hits, cacheMisses = _misses, cacheInvalidations = _invalidations,
             cacheHitRate = _hits + _misses == 0 ? (double?)null : _hits / (double)(_hits + _misses),
+            memory = MemorySnapshot(),
             gestures = new { pan = _pan, zoom = _zoom, idle = _idle, edit = _edit },
             maxQueues = _queues, maxDetailTilesPending = _detail, maxUnresolvedImages = _unresolved,
             maxMissingAssets = _missing, maxTerrainRefinementsPending = _refinements, maxHexChunksPending = _hex,
@@ -253,6 +254,18 @@ public sealed class PerformanceJournal : IDisposable
     }
 
     private double Percentile(double fraction) => _work[(int)Math.Ceiling(_workCount * fraction) - 1];
+
+    // Background writer only: the shared derived-cache budget, its pressure state and each cache's bytes and trims.
+    private static object MemorySnapshot()
+    {
+        var budget = Map.Core.Resources.WorkingMemoryBudget.Shared;
+        return new
+        {
+            cacheBudgetBytes = budget.CacheBudgetBytes, pressure = budget.CachesUnderPressure,
+            pressureStage = budget.CachePressureStage, pressureEventsSession = budget.CachePressureEvents,
+            caches = budget.ReadCacheStatistics(),
+        };
+    }
 
     private void Write(DateTimeOffset utc, object record)
     {

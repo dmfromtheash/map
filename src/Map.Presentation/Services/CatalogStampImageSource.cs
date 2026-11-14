@@ -131,13 +131,20 @@ public sealed class CatalogStampImageSource(
     // working steps of a whole set and the masters of the few objects a close view shows.
     // Many distinct small stamps must fit as well as a few large masters. The byte budget,
     // not a 64-image thumbnail limit, bounds their memory. Ladder steps count as entries too.
-    private readonly AssetImageCache _cache = new(imageCapacity, retainSamples || derivedRoot is not null ? cacheBytes * 3 / 4 : cacheBytes);
+    private readonly AssetImageCache _cache = Tracked(new(imageCapacity, retainSamples || derivedRoot is not null ? cacheBytes * 3 / 4 : cacheBytes),
+        "asset-images", Map.Core.Resources.CacheRebuildCost.Moderate);
+    private static AssetImageCache Tracked(AssetImageCache cache, string name, Map.Core.Resources.CacheRebuildCost cost)
+    {
+        cache.TrackMemory(Map.Core.Resources.WorkingMemoryBudget.Shared, name, cost);
+        return cache;
+    }
     // The total remains 512 MiB. Copies of the exact sampled pixels survive source churn;
     // neither the resampling algorithm nor the chosen detail level changes.
     // One SHA can need several exact mips in the current view plus the fallback view.
     // A 4096-entry ceiling evicted tiny pixels below the byte limit before a 1804-asset
     // preflight could become resident. Keep the 128 MiB budget, allow all sixteen levels.
-    private readonly AssetImageCache _samples = new(Math.Max(imageCapacity, 4096) * 16, Math.Max(1, cacheBytes / 4));
+    private readonly AssetImageCache _samples = Tracked(new(Math.Max(imageCapacity, 4096) * 16, Math.Max(1, cacheBytes / 4)),
+        "asset-samples", Map.Core.Resources.CacheRebuildCost.Cheap);
     private readonly Dictionary<string, (int Width, int Height)> _sampleDimensions = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, (int Width, int Height)> _workingDimensions = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, SKColor> _overviewColors = new(StringComparer.OrdinalIgnoreCase);
@@ -559,6 +566,10 @@ public sealed class CatalogStampImageSource(
             _samples.DeferDisposal = false;
             _cache.DisposeRetired();
             _samples.DisposeRetired();
+            // Only while Windows is short of memory: images nobody drew for two seconds, on the frame's own thread
+            // after it, within 2 ms together. Sampled steps (cheap to remake) go before decoded sources.
+            _samples.TrimForMemoryPressure(1);
+            _cache.TrimForMemoryPressure(1);
         }
     }
 
@@ -665,6 +676,11 @@ public sealed class CatalogStampImageSource(
         internal readonly HashSet<string> Failed = new(StringComparer.OrdinalIgnoreCase);
         internal bool Closed;
         public SKImage? TryGetImage(string sha256) => source.LeaseGet(this, () => source.WorkingImage(sha256));
+        // Derived tints are cheap metadata. Legacy/embedded images decode through the lease,
+        // outside the shared source gate, so background overview work cannot hold up a frame.
+        public SKColor? TryGetOverviewColor(string sha256) => source.HasDerivedOverview(sha256)
+            ? source.TryGetOverviewColor(sha256)
+            : TryGetImage(sha256) is { } image ? SceneRenderer.StampOverviewColor(image) : null;
         public SKImage? TryGetImageForPixelSize(string sha256, double width, double height) =>
             source.LeaseGet(this, () => source.ForPixelSize(sha256, width, height));
         // A lease draws what it asks for on its own thread, so every image is ready when asked.
@@ -672,6 +688,8 @@ public sealed class CatalogStampImageSource(
         public IStampImageLease Lease() => source.Lease();
         public void Dispose() => source.EndLease(this);
     }
+
+    private bool HasDerivedOverview(string sha256) => _derived is not null && catalog.Find(sha256) is not null;
 
     private sealed class FrameScope(CatalogStampImageSource source) : IDisposable
     {
