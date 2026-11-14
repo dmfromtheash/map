@@ -16,6 +16,13 @@ public static partial class MapProjectStore
 
         public int EntryCount { get; private set; }
         public long CheckpointBytes => _budget.CheckpointPayloadBytes;
+        public long FileLength { get; set; }
+        public string FileSha256 { get; set; } = "";
+        public Dictionary<string, (long Length, string Sha256)> Entries { get; } = new(StringComparer.Ordinal);
+        public ArrayBufferWriter<byte> ObjectBuffer { get; } = new(64 * 1024);
+        public List<int> ObjectLengths { get; } = new(MapProjectFormat.ObjectChunkTargetObjects);
+
+        public void Record(string name, long length, string sha256) => Entries.Add(name, (length, sha256));
 
         public void Add(string name, long length)
         {
@@ -28,7 +35,7 @@ public static partial class MapProjectStore
 
             // Write-time admission uses the same uncompressed/category envelope as the reader.
             // Using length as the compressed size only disables a ratio check which is meaningful
-            // after ZipArchive has closed; the full read-back performs that check before publish.
+            // after ZipArchive has closed; the streaming read-back checks it before publish.
             _budget.Add(name, length, length);
         }
     }
@@ -38,6 +45,7 @@ public static partial class MapProjectStore
         private readonly IncrementalHash _hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
 
         public long BytesWritten { get; private set; }
+        public List<int>? RecordedWrites { get; set; }
         public override bool CanRead => false;
         public override bool CanSeek => false;
         public override bool CanWrite => true;
@@ -49,7 +57,11 @@ public static partial class MapProjectStore
         }
 
         public string CompleteHash() => Convert.ToHexStringLower(_hash.GetHashAndReset());
-        public override void Flush() => destination.Flush();
+        public override void Flush()
+        {
+            RecordedWrites?.Add(-1);
+            destination.Flush();
+        }
         public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
         public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
         public override void SetLength(long value) => throw new NotSupportedException();
@@ -59,6 +71,7 @@ public static partial class MapProjectStore
 
         public override void Write(ReadOnlySpan<byte> buffer)
         {
+            RecordedWrites?.Add(buffer.Length);
             _hash.AppendData(buffer);
             destination.Write(buffer);
             BytesWritten = checked(BytesWritten + buffer.Length);
@@ -85,9 +98,9 @@ public static partial class MapProjectStore
         {
             var layerId = layer.Id.ToString();
             var descriptors = new List<ObjectChunkDescriptorDto>();
-            var objectIndex = 0;
             var ordinal = 0;
-            while (objectIndex < layer.Objects.Count)
+            using var cursor = new ObjectByteCursor(layer.ObjectStorage.StorageChunks);
+            while (cursor.HasMore)
             {
                 var entryName = ObjectChunkEntry(entryRoot, layerId, ordinal);
                 var entry = archive?.CreateEntry(entryName, CompressionLevel.Optimal);
@@ -98,58 +111,47 @@ public static partial class MapProjectStore
 
                 using var destination = entry?.Open() ?? Stream.Null;
                 using var hashing = new HashingWriteStream(destination);
-                using var writer = new Utf8JsonWriter(hashing, new JsonWriterOptions
+                var buffer = state.ObjectBuffer;
+                buffer.ResetWrittenCount();
+                state.ObjectLengths.Clear();
+                using var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions
                 {
                     Indented = false,
                     SkipValidation = false,
                 });
-
                 writer.WriteStartArray();
                 var chunkCount = 0;
-                long projectedBytes = 2; // '[' + ']'
+                long projectedBytes = 2;
                 WorldBounds? chunkBounds = null;
-                while (objectIndex < layer.Objects.Count
+                while (cursor.HasMore
                        && chunkCount < MapProjectFormat.ObjectChunkTargetObjects)
                 {
-                    var sceneObject = layer.Objects[objectIndex];
-                    var objectBytes = JsonSerializer.SerializeToUtf8Bytes(ToObjectDto(sceneObject), JsonOptions);
-                    var nextBytes = checked(projectedBytes + objectBytes.LongLength + (chunkCount == 0 ? 0 : 1));
-                    if (nextBytes > MapProjectFormat.ObjectChunkTargetBytes)
-                    {
-                        if (chunkCount == 0)
-                        {
-                            throw new MapProjectResourceLimitException(
-                                $"Object {sceneObject.Id} needs {nextBytes} bytes and cannot fit the "
-                                + $"{MapProjectFormat.ObjectChunkTargetBytes}-byte object-chunk budget.");
-                        }
-                        break;
-                    }
-
-                    // These bytes just came from our own JsonSerializer. Avoid a second syntax
-                    // parse here; the completed container still receives full semantic read-back.
-                    writer.WriteRawValue(objectBytes, skipInputValidation: true);
-                    projectedBytes = nextBytes;
-                    chunkBounds = Union(chunkBounds, SceneGeometry.BoundsOf(sceneObject));
-                    chunkCount++;
-                    objectIndex++;
+                    // Reserve the closing bracket and (after the first run) its leading comma.
+                    var available = MapProjectFormat.ObjectChunkTargetBytes - projectedBytes
+                        - (chunkCount == 0 ? 0 : 1);
+                    var count = cursor.WriteNext(writer, MapProjectFormat.ObjectChunkTargetObjects - chunkCount,
+                        available, state.ObjectLengths, out var runBytes, out var runBounds);
+                    if (count == 0) break;
+                    projectedBytes += runBytes + (chunkCount == 0 ? 0 : 1);
+                    chunkBounds = Union(chunkBounds, runBounds);
+                    chunkCount += count;
                 }
-
                 writer.WriteEndArray();
                 writer.Flush();
+                WriteCanonicalObjectChunk(hashing, buffer.WrittenSpan, state.ObjectLengths);
                 if (hashing.BytesWritten != projectedBytes)
-                {
                     throw new InvalidOperationException("Object chunk byte accounting diverged from the JSON writer.");
-                }
-
                 state.Add(entryName, hashing.BytesWritten);
                 var bounds = chunkBounds
                     ?? throw new InvalidOperationException("An object chunk cannot be empty.");
+                var sha256 = hashing.CompleteHash();
+                if (archive is not null) state.Record(entryName, hashing.BytesWritten, sha256);
                 descriptors.Add(new ObjectChunkDescriptorDto
                 {
                     Ordinal = ordinal,
                     Count = chunkCount,
                     ByteLength = hashing.BytesWritten,
-                    Sha256 = hashing.CompleteHash(),
+                    Sha256 = sha256,
                     Bounds = ToChunkBounds(bounds),
                     Entry = entryName,
                     RepresentationVersion = MapProjectFormat.ObjectChunkRepresentationVersion,
@@ -390,6 +392,7 @@ public static partial class MapProjectStore
         state.Add(name, bytes.LongLength);
         if (archive is not null)
         {
+            state.Record(name, bytes.LongLength, Sha256Hex(bytes));
             WriteEntry(archive, name, bytes);
         }
     }

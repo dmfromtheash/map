@@ -74,6 +74,10 @@ public sealed class SceneObjectList : IReadOnlyList<SceneObject>
 
     public const int ChunkSize = 256;
 
+    // Persistence keys derived bytes by immutable chunk identity, never by layer id or position.
+    // Friend assemblies must treat these arrays as read-only, just like the storage itself.
+    internal IReadOnlyList<SceneObject[]> StorageChunks => _chunks;
+
     private static readonly SceneObjectList EmptyInstance = new([], 0);
     private readonly SceneObject[][] _chunks;
     private readonly int[] _starts;

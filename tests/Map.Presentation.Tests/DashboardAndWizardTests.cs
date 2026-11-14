@@ -161,7 +161,7 @@ public class DashboardViewModelTests
     }
 
     [Fact]
-    public void Recovery_cards_surface_candidates_and_discard_removes_them()
+    public async Task Recovery_cards_surface_candidates_and_discard_removes_them()
     {
         var (dashboard, store, _) = New();
         var candidate = new RecoveryCandidate
@@ -175,12 +175,49 @@ public class DashboardViewModelTests
         store.Candidates.Add(candidate);
 
         dashboard.Refresh();
+        await dashboard.RecoveryScan;
         var card = Assert.Single(dashboard.RecoveryCards);
         Assert.Contains("почти потерянная", card.Description);
 
         dashboard.Discard(card);
+        await dashboard.RecoveryScan;
         Assert.Empty(dashboard.RecoveryCards);
         Assert.Empty(store.Candidates);
+    }
+
+    [Fact]
+    public async Task Recovery_scan_returns_before_file_validation_and_obsolete_results_are_not_published()
+    {
+        var (dashboard, store, _) = New();
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var candidate = new RecoveryCandidate
+        {
+            DocumentId = Guid.NewGuid(), TargetPath = "map", CandidatePath = "temp",
+            UpdatedUtc = DateTimeOffset.UnixEpoch, Title = "obsolete",
+        };
+        var calls = 0;
+        store.OnFindRecovery = () =>
+        {
+            if (Interlocked.Increment(ref calls) != 1) return [];
+            entered.Set();
+            Assert.True(release.Wait(TimeSpan.FromSeconds(10)));
+            return [candidate];
+        };
+        try
+        {
+            dashboard.Refresh();
+            var first = dashboard.RecoveryScan;
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
+            Assert.False(first.IsCompleted);
+            dashboard.Refresh();
+            release.Set();
+            await first;
+            await dashboard.RecoveryScan;
+            Assert.Empty(dashboard.RecoveryCards);
+            Assert.Equal(2, calls);
+        }
+        finally { release.Set(); }
     }
 
     [Fact]

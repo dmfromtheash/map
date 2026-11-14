@@ -272,7 +272,8 @@ public static class AutosaveSnapshots
         try
         {
             return Path.GetDirectoryName(Path.GetFullPath(path)) is not null
-                && MapProjectStore.Open(path).Document.Id.Value == documentId;
+                && (MapProjectStore.IsKnownWrittenSnapshot(path, documentId)
+                    || MapProjectStore.Open(path).Document.Id.Value == documentId);
         }
         catch (Exception ex) when (ex is MapProjectException or IOException or UnauthorizedAccessException)
         {

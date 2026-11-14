@@ -1153,9 +1153,10 @@ public sealed partial class EditorViewModel : ViewModelBase
             Raise(nameof(PrimaryAutosaveSummary));
             try
             {
-                using var imageSource = new ExportStampImageSource(snapshot, path, _assetCatalog);
+                var catalog = _assetCatalog?.CaptureReadSnapshot();
                 var thumbnail = await RunResourceOperationAsync(() => Task.Run(() =>
                 {
+                    using var imageSource = ExportStampImageSource.FromSnapshot(snapshot, path, catalog);
                     var thumbnail = ThumbnailRenderer.RenderPng(snapshot, stamps: imageSource);
                     _store.Save(AtlasSnapshot(snapshot, path), path, metadata, thumbnail);
                     return thumbnail;
@@ -1210,9 +1211,10 @@ public sealed partial class EditorViewModel : ViewModelBase
             try
             {
                 var sourcePath = DocumentPath;
-                using var imageSource = new ExportStampImageSource(snapshot, sourcePath, _assetCatalog);
+                var catalog = _assetCatalog?.CaptureReadSnapshot();
                 await RunResourceOperationAsync(() => Task.Run(() =>
                 {
+                    using var imageSource = ExportStampImageSource.FromSnapshot(snapshot, sourcePath, catalog);
                     var thumbnail = ThumbnailRenderer.RenderPng(snapshot, stamps: imageSource);
                     _store.SaveAutosave(AtlasSnapshot(snapshot, sourcePath), sourcePath, metadata, thumbnail);
                     return true;
@@ -1344,9 +1346,11 @@ public sealed partial class EditorViewModel : ViewModelBase
             try
             {
                 savedSnapshot = AtlasSnapshot(snapshot, path);
-                using var imageSource = new ExportStampImageSource(snapshot, DocumentPath, _assetCatalog);
+                var sourcePath = DocumentPath;
+                var catalog = _assetCatalog?.CaptureReadSnapshot();
                 thumbnail = await RunResourceOperationAsync(() => Task.Run(() =>
                 {
+                    using var imageSource = ExportStampImageSource.FromSnapshot(snapshot, sourcePath, catalog);
                     // The thumbnail comes from the same scene evaluator as the canvas, without
                     // selection or any editor chrome.
                     var thumbnail = ThumbnailRenderer.RenderPng(snapshot, stamps: imageSource);

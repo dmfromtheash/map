@@ -111,6 +111,14 @@ public sealed partial class AssetCatalog : IAsyncDisposable
 
     public string Root => _root;
 
+    /// <summary>O(1) immutable read view for workers, including the routing of attached libraries.</summary>
+    public AssetCatalogReadSnapshot CaptureReadSnapshot()
+    {
+        var snapshot = _snapshot;
+        return new(_root, () => snapshot.View.Records,
+            record => snapshot.MountForRecord(record.Sha256)?._root ?? _root);
+    }
+
     private AssetCatalog(AssetCatalog source, CatalogSnapshot snapshot)
     {
         _root = source._root;

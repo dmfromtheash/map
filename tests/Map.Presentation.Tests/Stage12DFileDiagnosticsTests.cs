@@ -157,7 +157,61 @@ public sealed class Stage12DFileDiagnosticsTests
         store.OnInspect = _ => Inspection(ProjectFileStatus.Corrupted, "FILE_CORRUPTED", "Проект повреждён");
 
         Assert.Null(await dashboard.TryOpenAsync(@"C:\private\bad.mapproj"));
+        await dashboard.RecoveryScan;
         Assert.Single(dashboard.RecoveryCards);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Stage12D_unrelated_open_failure_preserves_visible_cards_when_recovery_scan_fails(bool accessDenied)
+    {
+        var (dashboard, store, _, _, _, log) = Create();
+        store.Candidates.Add(new RecoveryCandidate
+        {
+            DocumentId = Guid.NewGuid(),
+            TargetPath = @"C:\private\target.mapproj",
+            CandidatePath = @"C:\private\candidate.mapproj",
+            UpdatedUtc = DateTimeOffset.UnixEpoch,
+            Title = "recoverable",
+        });
+        dashboard.Refresh();
+        await dashboard.RecoveryScan;
+        var visibleCards = dashboard.RecoveryCards;
+        Assert.Single(visibleCards);
+
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        store.OnFindRecovery = () =>
+        {
+            entered.SetResult();
+            release.Task.GetAwaiter().GetResult();
+            if (accessDenied) throw new UnauthorizedAccessException("recovery unavailable");
+            throw new IOException("recovery unavailable");
+        };
+        store.OnInspect = _ => Inspection(ProjectFileStatus.Corrupted, "FILE_CORRUPTED", "Проект повреждён");
+        var recoveryChanges = 0;
+        dashboard.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(DashboardViewModel.RecoveryCards)) recoveryChanges++;
+        };
+
+        try
+        {
+            Assert.Null(await dashboard.TryOpenAsync(@"C:\private\bad.mapproj"));
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.False(dashboard.RecoveryScan.IsCompleted);
+            Assert.Same(visibleCards, dashboard.RecoveryCards);
+        }
+        finally
+        {
+            release.TrySetResult();
+            await dashboard.RecoveryScan;
+        }
+
+        Assert.Same(visibleCards, dashboard.RecoveryCards);
+        Assert.Equal(0, recoveryChanges);
+        Assert.Contains(log.Lines, line => line.Contains("Recovery scan failed", StringComparison.Ordinal));
     }
 
     private static (

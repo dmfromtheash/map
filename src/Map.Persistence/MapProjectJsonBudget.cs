@@ -51,7 +51,7 @@ public static class MapProjectJsonBudget
         public int Count { get; set; }
     }
 
-    public static void Validate(ReadOnlySpan<byte> utf8Json, string entryName)
+    public static void Validate(ReadOnlySpan<byte> utf8Json, string entryName, int maxDepth = 64)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(entryName);
 
@@ -59,7 +59,7 @@ public static class MapProjectJsonBudget
         {
             AllowTrailingCommas = false,
             CommentHandling = JsonCommentHandling.Disallow,
-            MaxDepth = 64,
+            MaxDepth = maxDepth,
         });
         var arrays = new Stack<ArrayFrame>();
         var aggregates = new long[Enum.GetValues<AggregateKind>().Length];

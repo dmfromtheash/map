@@ -314,14 +314,32 @@ public sealed partial class DashboardViewModel : ViewModelBase
         Raise(nameof(FolderCount)); Raise(nameof(ExportCount)); Raise(nameof(FavoriteCount));
         Raise(nameof(Folders)); Raise(nameof(Exports)); Raise(nameof(LatestCards)); Raise(nameof(MapTypes));
 
+        RecoveryScan = RefreshRecoveryAsync();
+    }
+
+    private int _recoveryScanGeneration;
+    private readonly SemaphoreSlim _recoveryScanGate = new(1, 1);
+    public Task RecoveryScan { get; private set; } = Task.CompletedTask;
+
+    private async Task RefreshRecoveryAsync()
+    {
+        var generation = Interlocked.Increment(ref _recoveryScanGeneration);
+        await _recoveryScanGate.WaitAsync();
         try
         {
-            RecoveryCards = _store.FindRecoveryCandidates().Select(c => new RecoveryCard(c)).ToList();
+            if (generation != Volatile.Read(ref _recoveryScanGeneration)) return;
+            var cards = await Task.Run(() => _store.FindRecoveryCandidates().Select(c => new RecoveryCard(c)).ToList());
+            if (generation == Volatile.Read(ref _recoveryScanGeneration)) RecoveryCards = cards;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            RecoveryCards = [];
+            // A failed scan cannot prove that previously offered recovery copies are gone.
+            // Keep them visible until a successful scan supplies a new snapshot.
             _log.Error("Recovery scan failed", ex);
+        }
+        finally
+        {
+            _recoveryScanGate.Release();
         }
     }
 
