@@ -22,6 +22,7 @@ public sealed partial class ZoomAssetsApplication
         _catalog.SetMounts(Directory.GetDirectories(root).Where(p => File.Exists(Path.Combine(p, "catalog.json"))).Order().ToArray());
         var records = _catalog.Records.OrderBy(r => r.Sha256, StringComparer.Ordinal).ToArray();
         if (records.Length == 0) throw new InvalidOperationException("No mounted images.");
+        records = await PreparePortableFixture(records);
         var kind = System.Environment.GetEnvironmentVariable("MAP_MILLION_CASE") ?? "giant";
         var count = Options.ObjectCount;
         var random = new Random(Options.Seed);

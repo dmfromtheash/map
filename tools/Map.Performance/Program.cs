@@ -14,7 +14,11 @@ if (int.TryParse(Environment.GetEnvironmentVariable("MAP_PERF_FREE_MB"), out var
         512 * Map.Core.Resources.WorkingMemoryBudget.MiB));
 object report;
 bool gatePassed;
-if (options.Profile == "stamp-cache-probe")
+if (options.Profile == "derived-build")
+{
+    report = await DerivedBuildProbe.RunAsync(options); gatePassed = true;
+}
+else if (options.Profile == "stamp-cache-probe")
 {
     report = StampCacheProbe.Run(options); gatePassed = true;
 }

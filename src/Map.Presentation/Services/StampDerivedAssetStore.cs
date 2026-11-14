@@ -13,7 +13,7 @@ namespace Map.Presentation.Services;
 /// decode, resampling or waits are performed by Request/TryReady on the canvas thread.
 /// One worker bounds native decode memory and avoids competing with the frame for all cores.
 /// </summary>
-public sealed class StampDerivedAssetStore : IDisposable, IAsyncDisposable
+public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposable
 {
     // Bump when the working-image choice, overview evaluator or mip sampling changes.
     private const int Version = 1;
@@ -112,7 +112,8 @@ public sealed class StampDerivedAssetStore : IDisposable, IAsyncDisposable
     }
 
     public sealed record Header(int Version, string Sha, int Width, int Height, uint Color,
-        FileStamp Original, FileStamp Working, int FirstMip, int MipCount, string PixelHash);
+        FileStamp Original, FileStamp Working, int FirstMip, int MipCount, string PixelHash,
+        string? PortablePath = null);
 
     public StampDerivedAssetStore(AssetCatalog catalog, string root, long diskBudgetBytes = 2L * 1024 * 1024 * 1024,
         int metadataCapacity = 8192, int pixelCapacity = 4096, long preparedSourceByteCapacity = 64L * 1024 * 1024,
@@ -286,11 +287,21 @@ public sealed class StampDerivedAssetStore : IDisposable, IAsyncDisposable
             try
             {
                 lock (_requestsGate) { request.Stop.Token.ThrowIfCancellationRequested(); request.Started = true; }
-                if (!small)
+                if (header.PortablePath is not null && TryReadPortablePixels(header, key) is { } portable)
+                {
+                    using var bitmap = new SKBitmap(new SKImageInfo(portable.Width, portable.Height, SKColorType.Rgba8888, SKAlphaType.Premul));
+                    System.Runtime.InteropServices.Marshal.Copy(portable.Pixels, 0, bitmap.GetPixels(), portable.Pixels.Length);
+                    bitmap.SetImmutable();
+                    return new Mip(null, portable.Width, portable.Height, reserved, Image: SKImage.FromBitmap(bitmap), LargeReserved: largeReserved);
+                }
+                // A portable header does not imply that the machine-local mip file exists.
+                // Missing/corrupt portable chunks recover directly from the verified source
+                // on this worker; retrying LoadOrBuild would select the same portable header.
+                if (!small || header.PortablePath is not null)
                 {
                     var image = PrepareRaster(header, key, request.Stop.Token);
-                    return new Mip(null, image?.Width ?? 0, image?.Height ?? 0, false,
-                        Image: image, LargeReserved: true);
+                    return new Mip(null, image?.Width ?? 0, image?.Height ?? 0, reserved,
+                        Image: image, LargeReserved: largeReserved);
                 }
                 byte[]? pixels; int width, height;
                 try { pixels = ReadMip(header, key.Level, out width, out height); }
@@ -461,6 +472,7 @@ public sealed class StampDerivedAssetStore : IDisposable, IAsyncDisposable
             if (AssetCatalog.DetailLadderDepth(record.Width, record.Height) > 0)
                 Watch(record, Path.Combine(_catalog.RootFor(record), "ladder", record.Sha256.ToLowerInvariant(), "1.png"));
             if (_catalog.TryDetailLevelPath(record, 1, out var step)) currentWorking = step;
+            if (TryReadPortableHeader(record) is { } portable) return portable;
             var info = new FileInfo(stem + ".json");
             if (info.Exists && info.Length <= 16 * 1024)
             {
