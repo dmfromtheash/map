@@ -5820,11 +5820,12 @@ public static partial class SceneRenderer
         // legacy image source for every distant color can itself decode the whole library.
         // It gets its own small palette, so it does not thrash the layer's cached one.
         OverviewPalette palette;
+        string[]? localShas = null;
         if (fallbackScale is { } localScale)
         {
             var localAssets = ObjectSpatialIndex.For(layer).Query(Expand(view, 1 / Math.Max(.001, localScale)))
                 .Where(item => item.Stamp is not null).Select(item => item.Stamp!.AssetSha256).ToHashSet(StringComparer.Ordinal);
-            var shas = document.Assets.Where(asset => plan.UsesAsset(asset.Sha256) && localAssets.Contains(asset.Sha256))
+            var shas = localShas = document.Assets.Where(asset => plan.UsesAsset(asset.Sha256) && localAssets.Contains(asset.Sha256))
                 .Select(asset => asset.Sha256).ToArray();
             if (options.RequestRefinedFrame is { } ready && options.Stamps is { } source
                 && !source.PrepareOverview(shas, ready)
@@ -5997,8 +5998,9 @@ public static partial class SceneRenderer
             stats.ObjectsDrawn += overviewObjects + exact.Count;
             stats.OverviewObjects += overviewObjects;
             stats.MissingAssets += Math.Max(0, overviewMissing);
-            if (overviewMissing > 0 && assets.Any(asset => !colors.ContainsKey(asset.Sha256)
-                && options.Stamps?.IsMissingCacheable(asset.Sha256) != true)) stats.UnresolvedImages++;
+            // Only reached while some overview colour is absent; a cacheable miss is final, not pending.
+            if (overviewMissing > 0 && (localShas ?? document.Assets.Where(asset => plan.UsesAsset(asset.Sha256)).Select(asset => asset.Sha256))
+                .Any(sha => !palette.Colors.ContainsKey(sha) && options.Stamps?.IsMissingCacheable(sha) != true)) stats.UnresolvedImages++;
             stats.OverviewChunks += overviewChunks;
             stats.OverviewBatches += overviewBatches;
             stats.ExactObjects += exact.Count;
