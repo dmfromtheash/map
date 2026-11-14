@@ -283,6 +283,60 @@ public sealed class StampDerivedAssetStoreTests : IDisposable
         return catalog.Import(Path.Combine(fixture!.FullName, "tests", "fixtures", "assets", $"owner-mountain-{number:00}.png"), new(), DateTimeOffset.UnixEpoch);
     }
 
+    /// <summary>
+    /// Pixel regression 32768/500k (2026-11-14): kept overview rasters were built off the frame through an ordinary
+    /// lease, which answered with ad-hoc samples or the original, while the settled frame drew prepared mips. The exact
+    /// lease waits for the very pixels the frame draws, cold, from a worker thread, without loading or sampling.
+    /// </summary>
+    [Fact]
+    public async Task Exact_lease_on_a_worker_waits_for_the_pixels_the_settled_frame_draws()
+    {
+        await using var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));
+        var records = Enumerable.Range(1, 6).Select(n => ImportOwner(catalog, n)).ToArray();
+        var document = new MapDocument(DocumentId.New(), "Exact lease", DateTimeOffset.UnixEpoch,
+            new CanvasDefinition(512, 512, "px", "#FFFFFFFF"),
+            [new BaseColorLayer(LayerId.New(), "Page", true, false, 1, "#FFFFFFFF")]);
+        using var source = new CatalogStampImageSource(catalog, () => document, () => null,
+            derivedRoot: Path.Combine(_root, "derived")) { MeasureTimings = true };
+        var sizes = new[] { 16d, 64d, 256d, 512d, 4096d };
+        // Cold: nothing prepared or resident yet.
+        var leased = await Task.Run(() =>
+        {
+            using var lease = source.ExactLease();
+            var result = new Dictionary<(string, double), byte[]>();
+            foreach (var pixels in sizes)
+                foreach (var record in records)
+                {
+                    var image = lease.TryGetImageForPixelSize(record.Sha256, pixels, pixels);
+                    Assert.NotNull(image);
+                    using var bitmap = SKBitmap.FromImage(image);
+                    result[(record.Sha256, pixels)] = bitmap.Bytes;
+                }
+            Assert.Equal(0, lease.PreparingLookups);
+            return result;
+        }).WaitAsync(TimeSpan.FromMinutes(2));
+        foreach (var pixels in sizes)
+        {
+            var ready = false;
+            var deadline = DateTime.UtcNow.AddSeconds(30);
+            while (!ready && DateTime.UtcNow < deadline)
+            {
+                using (source.BeginFrame())
+                    ready = source.PrepareForPixelSizes(records.Select(r => (r.Sha256, pixels, pixels)), () => { });
+                if (!ready) await Task.Delay(10);
+            }
+            Assert.True(ready);
+            using (source.BeginFrame())
+                foreach (var record in records)
+                {
+                    using var frame = SKBitmap.FromImage(source.TryGetImageForPixelSize(record.Sha256, pixels, pixels)!);
+                    Assert.Equal(frame.Bytes, leased[(record.Sha256, pixels)]);
+                }
+        }
+        Assert.Equal(0, source.Timings.LoadCalls);
+        Assert.Equal(0, source.Timings.SampleCalls);
+    }
+
     [Fact]
     public async Task Every_owner_zoom_is_prepared_off_frame_with_exact_pixels_and_no_sync_load_or_sample()
     {

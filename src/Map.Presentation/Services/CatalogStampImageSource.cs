@@ -480,6 +480,28 @@ public sealed class CatalogStampImageSource(
             Enter();
             if (_planning || _derived is null || _frameThread != Environment.CurrentManagedThreadId
                 || catalog.Find(sha256) is not { } record) return WorkingImage(sha256);
+            return ReadyFallback(record, sha256, width, height);
+        }
+    }
+
+    /// <summary>The frame's resident fallback for an exact lease whose key will not arrive (failed / missing).</summary>
+    private SKImage? LeaseReadyFallback(ExactImageLease lease, string sha256, double width, double height)
+    {
+        lock (_gate)
+        {
+            if (_disposed || lease.Closed || catalog.Find(sha256) is not { } record) return null;
+            Enter();
+            if (ReadyFallback(record, sha256, width, height) is not { } image) return null;
+            _cache.Pin(image);
+            _samples.Pin(image);
+            lease.Held.Add(image);
+            return image;
+        }
+    }
+
+    private SKImage? ReadyFallback(AssetRecord record, string sha256, double width, double height)
+    {
+        {
             var wanted = PixelKey(record, width, height);
             var depth = AssetCatalog.DetailLadderDepth(record.Width, record.Height);
             var desired = wanted.Step + wanted.Level;
@@ -626,6 +648,8 @@ public sealed class CatalogStampImageSource(
             // then no pixel task exists to deliver a cancellation back to BeginFrame.
             _latePixels.RemoveWhere(key => !_wantedMips.Contains(key));
             _wantedMips.UnionWith(_cacheableMissing);
+            // Kept overview rasters wait for these exact keys: a frame that did not draw them must not cancel them.
+            _wantedMips.UnionWith(_leaseWanted.Keys);
             _derived?.CancelUnwantedPixels(_wantedMips);
             if (_disposed) { DisposeIfUnused(); return; }
             _cache.DeferDisposal = false;
@@ -735,20 +759,161 @@ public sealed class CatalogStampImageSource(
         }
     }
 
-    private sealed class ImageLease(CatalogStampImageSource source) : IStampImageLease
+    /// <inheritdoc cref="IStampImageSource.ExactLease"/>
+    public IStampImageLease ExactLease(CancellationToken cancellation = default)
+    {
+        lock (_gate)
+        {
+            if (_derived is null) return Lease();
+            _leases++;
+            return new ExactImageLease(this, cancellation);
+        }
+    }
+
+    // A kept raster (one exact lease) waits at most this long for all its images together; past it the lookup gives
+    // up (counted, raster not kept) and the rest of that raster no longer waits.
+    internal static TimeSpan ExactWaitLimit { get; set; } = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// The pixels a settled frame draws for this request (<see cref="ForPixelSize"/> / <see cref="WorkingImage"/> on
+    /// the frame thread), from a worker thread: ready ones are pinned to the lease; missing ones are requested from
+    /// the derived store, kept wanted across frames, and waited for here (the caller is a background worker, as the
+    /// lease that decoded synchronously was). False when the record has no prepared pixels: the lease then answers
+    /// as an ordinary one. True with a null image when the key failed or is cacheable-missing (the frame draws its
+    /// resident fallback then, and so does the lease) or when the wait was cancelled / timed out (counted).
+    /// </summary>
+    private bool TryExactPixels(ExactImageLease lease, string sha256, StampDerivedAssetStore.PixelKey? requested,
+        out SKImage? image)
+    {
+        image = null;
+        StampDerivedAssetStore.PixelKey? interest = null;
+        try
+        {
+            while (true)
+            {
+                Task wait;
+                lock (_gate)
+                {
+                    if (_disposed || lease.Closed) return true;
+                    if (catalog.Find(sha256) is not { } record) return false;
+                    Enter();
+                    var key = requested ?? WorkingKey(record);
+                    var name = PixelName(key);
+                    var ready = ReadyPixels(name); // also ends an expired retry backoff
+                    if (ready is null && _derived!.TryTakePixels(key, out var mip))
+                    {
+                        AdoptDerivedMip(key, mip);
+                        ready = ReadyPixels(name);
+                    }
+                    if (ready is not null)
+                    {
+                        _cache.Pin(ready);
+                        _samples.Pin(ready);
+                        lease.Held.Add(ready);
+                        image = ready;
+                        return true;
+                    }
+                    // A key that will not arrive (cacheable-missing, or failed for good): the frame draws its
+                    // resident fallback then, and so does the lease — a consistent, final picture.
+                    if (_cacheableMissing.Contains(key)
+                        || _pixelRetryAt.TryGetValue(name, out var final) && final == long.MaxValue) return true;
+                    // This raster already gave up on an image (time limit / cancel): it will not be kept, so later
+                    // lookups do not wait — the worker is free for the next chunk at once.
+                    if (lease.Preparing > 0) return true;
+                    if (interest is null) { interest = key; AddInterest(key); }
+                    _wantedMips.Add(key);
+                    if (_decodeFailed.Contains(name))
+                    {
+                        // A temporary failure in its backoff: wait for the retry instead of keeping a fallback.
+                        var retry = _pixelRetryAt.GetValueOrDefault(name) - _retryClock.GetUtcNow().ToUnixTimeMilliseconds();
+                        wait = Task.Delay(TimeSpan.FromMilliseconds(Math.Clamp(retry, 1, 60_000)), _retryClock);
+                    }
+                    else
+                    {
+                        var header = _derived!.Request(key.Sha);
+                        if (!header.IsCompleted) wait = header;
+                        else if (header.IsCompletedSuccessfully && header.Result is { } prepared)
+                        {
+                            // The held task when another request already asked; the capacity signal when the store is full.
+                            _derived.TryRequestPixels(prepared, key.Step, key.Level, out var pixels);
+                            wait = pixels;
+                        }
+                        else { FailedPixels(key); continue; }
+                    }
+                }
+                var left = lease.Deadline - Environment.TickCount64;
+                try
+                {
+                    if (left <= 0 || !wait.Wait(TimeSpan.FromMilliseconds(left), lease.Cancellation))
+                    { lock (_gate) lease.Preparing++; return true; }
+                }
+                catch (OperationCanceledException) { lock (_gate) lease.Preparing++; return true; }
+                catch (AggregateException) { /* a failed task: the next round sees the failure through the store */ }
+            }
+        }
+        finally
+        {
+            if (interest is { } held) lock (_gate) RemoveInterest(held);
+        }
+    }
+
+    private static StampDerivedAssetStore.PixelKey WorkingKey(AssetRecord record) =>
+        new(record.Sha256.ToLowerInvariant(), AssetCatalog.DetailLadderDepth(record.Width, record.Height) > 0 ? 1 : 0, 0);
+
+    /// <summary>Keys exact leases are waiting for, with how many lookups wait: kept wanted across frames.</summary>
+    private readonly Dictionary<StampDerivedAssetStore.PixelKey, int> _leaseWanted = [];
+    private void AddInterest(StampDerivedAssetStore.PixelKey key) => _leaseWanted[key] = _leaseWanted.GetValueOrDefault(key) + 1;
+    private void RemoveInterest(StampDerivedAssetStore.PixelKey key)
+    {
+        if (!_leaseWanted.TryGetValue(key, out var count)) return;
+        if (count <= 1) _leaseWanted.Remove(key); else _leaseWanted[key] = count - 1;
+    }
+
+    // Re-implements the interface so its own PreparingLookups / LastImageRequestPending are the ones mapped.
+    private sealed class ExactImageLease(CatalogStampImageSource source, CancellationToken cancellation)
+        : ImageLease(source), IStampImageLease
+    {
+        private readonly CatalogStampImageSource _source = source;
+        internal readonly CancellationToken Cancellation = cancellation;
+        internal readonly long Deadline = Environment.TickCount64 + (long)ExactWaitLimit.TotalMilliseconds;
+        internal int Preparing;
+        public int PreparingLookups { get { lock (_source._gate) return Preparing; } }
+
+        public override SKImage? TryGetImage(string sha256) =>
+            _source.TryExactPixels(this, sha256, null, out var image) ? image : base.TryGetImage(sha256);
+
+        public override SKImage? TryGetImageForPixelSize(string sha256, double width, double height)
+        {
+            var record = _source.FindRecord(sha256);
+            if (record is null) return base.TryGetImageForPixelSize(sha256, width, height);
+            return _source.TryExactPixels(this, sha256, PixelKey(record, width, height), out var image) ? image
+                : base.TryGetImageForPixelSize(sha256, width, height);
+        }
+
+        public override SKImage? TryGetReadyImageForPixelSize(string sha256, double width, double height) =>
+            _source.LeaseReadyFallback(this, sha256, width, height);
+    }
+
+    private AssetRecord? FindRecord(string sha256)
+    {
+        lock (_gate) return _disposed ? null : catalog.Find(sha256);
+    }
+
+    private class ImageLease(CatalogStampImageSource source) : IStampImageLease
     {
         public long SourceRevision => source.SourceRevision;
         internal readonly List<SKImage> Held = [];
         internal readonly HashSet<string> Failed = new(StringComparer.OrdinalIgnoreCase);
         internal bool Closed;
-        public SKImage? TryGetImage(string sha256) => source.LeaseGet(this, () => source.WorkingImage(sha256));
+        public virtual SKImage? TryGetImage(string sha256) => source.LeaseGet(this, () => source.WorkingImage(sha256));
         // Derived tints are cheap metadata. Legacy/embedded images decode through the lease,
         // outside the shared source gate, so background overview work cannot hold up a frame.
         public SKColor? TryGetOverviewColor(string sha256) => source.HasDerivedOverview(sha256)
             ? source.TryGetOverviewColor(sha256)
             : TryGetImage(sha256) is { } image ? SceneRenderer.StampOverviewColor(image) : null;
-        public SKImage? TryGetImageForPixelSize(string sha256, double width, double height) =>
+        public virtual SKImage? TryGetImageForPixelSize(string sha256, double width, double height) =>
             source.LeaseGet(this, () => source.ForPixelSize(sha256, width, height));
+        public virtual SKImage? TryGetReadyImageForPixelSize(string sha256, double width, double height) => TryGetImage(sha256);
         // A lease draws what it asks for on its own thread, so every image is ready when asked.
         public bool PrepareForPixelSizes(IEnumerable<(string Sha256, double Width, double Height)> stamps, Action ready) => true;
         public IStampImageLease Lease() => source.Lease();

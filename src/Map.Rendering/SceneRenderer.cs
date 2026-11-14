@@ -64,6 +64,15 @@ public interface IStampImageSource
     IStampImageLease Lease() => new StampImagePassThrough(this);
 
     /// <summary>
+    /// A lease for rasters that are kept (overview chunks), for a background worker. Each lookup answers only with the
+    /// pixels a settled frame draws for that size — never another level, an ad-hoc sample or the original — so a kept
+    /// raster does not depend on which thread built it or when. A lookup whose pixels are still preparing waits for
+    /// them; one that gave up (cancelled, timed out) counts in <see cref="IStampImageLease.PreparingLookups"/> and the
+    /// caller must not keep that raster. Sources without prepared pixels return <see cref="Lease"/>.
+    /// </summary>
+    IStampImageLease ExactLease(CancellationToken cancellation = default) => Lease();
+
+    /// <summary>
     /// Marks one canvas frame on the calling thread: images other threads push out of the cache during it are freed
     /// only when it ends. Null when the source has nothing to defer.
     /// </summary>
@@ -90,7 +99,11 @@ public interface IStampPreparationPlan
 }
 
 /// <summary>See <see cref="IStampImageSource.Lease"/>.</summary>
-public interface IStampImageLease : IStampImageSource, IDisposable;
+public interface IStampImageLease : IStampImageSource, IDisposable
+{
+    /// <summary>Lookups of an <see cref="IStampImageSource.ExactLease"/> that gave up waiting for their pixels.</summary>
+    int PreparingLookups => 0;
+}
 
 internal sealed class StampImagePassThrough(IStampImageSource source) : IStampImageLease
 {
@@ -6864,9 +6877,7 @@ public static partial class SceneRenderer
         {
             // Dots stay legible at half the view's resolution; painted mountains keep the view's own
             // (the overview is used below scale 0.25, so a chunk is at most 2 048 pixels wide).
-            var imageScale = Math.Min(bucketScale, (painted ? 2048.0 : 512.0) / Math.Max(bounds.Width, bounds.Height));
-            var width = Math.Max(1, (int)Math.Ceiling(bounds.Width * imageScale));
-            var height = Math.Max(1, (int)Math.Ceiling(bounds.Height * imageScale));
+            var (imageScale, width, height) = ImageSize();
             using var surface = SKSurface.Create(new SKImageInfo(
                 width, height, SKColorType.Rgba8888, SKAlphaType.Premul))
                 ?? throw new InvalidOperationException("Could not allocate an overview chunk surface.");
@@ -6898,6 +6909,13 @@ public static partial class SceneRenderer
             }
             recording.Flush();
             return surface.Snapshot();
+        }
+
+        private (double Scale, int Width, int Height) ImageSize()
+        {
+            var imageScale = Math.Min(bucketScale, (painted ? 2048.0 : 512.0) / Math.Max(bounds.Width, bounds.Height));
+            return (imageScale, Math.Max(1, (int)Math.Ceiling(bounds.Width * imageScale)),
+                Math.Max(1, (int)Math.Ceiling(bounds.Height * imageScale)));
         }
     }
 

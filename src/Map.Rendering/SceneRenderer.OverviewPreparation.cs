@@ -67,6 +67,10 @@ public static partial class SceneRenderer
         private long _plansBuilt;
         private long _cancelled;
         private long _prefetched;
+        private long _parked;
+
+        /// <summary>Painted chunk rasters dropped because an exact image wait was cancelled or timed out.</summary>
+        public long Parked { get { lock (_gate) return _parked; } }
         private double _planMilliseconds, _paletteMilliseconds, _variantMilliseconds, _rasterMilliseconds;
         private Exception? _lastError;
 
@@ -431,9 +435,18 @@ public static partial class SceneRenderer
             }
             started = Stopwatch.GetTimestamp();
             allocated = GC.GetAllocatedBytesForCurrentThread();
-            using var lease = state.Source?.Lease();
+            // A kept raster must hold exactly what a settled frame draws, whichever thread builds it and
+            // whenever: the exact lease waits for each image's prepared pixels instead of another level.
+            using var lease = state.Source?.ExactLease(token);
             var options = new RenderOptions { Stamps = lease, LodTier = RenderLodTier.Overview, ViewScale = Math.Pow(2, work.Zoom / 4d) };
             var image = variant.BuildImage(work.Foreground, options, token);
+            if (lease?.PreparingLookups > 0)
+            {
+                // Cancelled or timed out on an image: not kept, the frame asks again.
+                image.Dispose();
+                lock (_gate) { _variantBytes += variantBytes; _variantMilliseconds += variantMs; _parked++; }
+                return;
+            }
             var rasterMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
             var rasterBytes = GC.GetAllocatedBytesForCurrentThread() - allocated;
             lock (_gate)
