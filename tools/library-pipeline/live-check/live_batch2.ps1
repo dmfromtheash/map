@@ -40,6 +40,31 @@ function Get-SetId([string]$Key) {
     } finally { $sha.Dispose() }
 }
 
+# A set name such as "Кровати" exists in every catalog: its cover can be hundreds of tiles down, and
+# the gallery's UIA peer does not scroll (13.11 battlemaps-classic 3-4). The set's own detail text
+# is unique across the drive library, so the exact cover is on the first screen.
+$script:CatalogDetails = @{}
+function Get-SearchText($Set) {
+    if (-not $script:CatalogDetails.ContainsKey($Set.Catalog)) {
+        $map = @{}
+        $path = Join-Path (Split-Path $script:ChecksDirectory) (Join-Path $Set.Catalog 'catalog.json')
+        if (Test-Path -LiteralPath $path -PathType Leaf) {
+            Add-Type -AssemblyName System.Web.Extensions
+            $json = New-Object System.Web.Script.Serialization.JavaScriptSerializer
+            $json.MaxJsonLength = [int]::MaxValue
+            $data = $json.DeserializeObject([IO.File]::ReadAllText($path, [Text.Encoding]::UTF8))
+            foreach ($entry in @($data['sets'])) {
+                if ($entry -is [Collections.IDictionary] -and $entry['id'] -is [string] -and $entry['detail'] -is [string]) {
+                    $map[$entry['id']] = $entry['detail'] }
+            }
+        }
+        $script:CatalogDetails[$Set.Catalog] = $map
+    }
+    $detail = $script:CatalogDetails[$Set.Catalog][$Set.SetId]
+    if ([string]::IsNullOrWhiteSpace($detail)) { return $Set.Name }
+    return $detail
+}
+
 function Read-Batch([string]$Path, [int]$Number, [string]$Filter = '') {
     $data = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($null -eq $data -or -not $data.PSObject.Properties['Batch'] -or
@@ -258,6 +283,8 @@ function Test-Visible($Element) {
     return -not $c.IsOffscreen -and -not $r.IsEmpty -and $r.Width -gt 0 -and $r.Height -gt 0
 }
 function Find-Elements($Root, [string]$Id) {
+    # A window that is briefly hidden (13.11 batch 4) is "not found", never a null-method crash.
+    if ($null -eq $Root) { return @() }
     $condition = New-Object System.Windows.Automation.PropertyCondition(
         [System.Windows.Automation.AutomationElement]::AutomationIdProperty, $Id)
     return $Root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition)
@@ -517,8 +544,15 @@ try {
         $item = [pscustomobject]@{ Key=$set.Key; Name=$set.Name; SetId=$set.SetId; CoverId=$set.CoverId
             Found=$false; Placed=$false; Before=$null; After=$null; Error=$null }
         $summary.Results += $item
-        Set-CatalogSearch $set.Name
-        $cover = Find-Cover $set.CoverId
+        # One set's search failure is that set's result; it must not end the rest of the hundred.
+        $cover = $null
+        try {
+            if ($null -eq (Get-CatalogWindow)) { Open-Catalog }
+            $search = Get-SearchText $set
+            Write-Event 'SearchText' @{ SetId=$set.SetId; ByDetail=($search -cne $set.Name) }
+            Set-CatalogSearch $search
+            $cover = Find-Cover $set.CoverId
+        } catch { $item.Error = "Search failed: $($_.Exception.Message)"; continue }
         if ($null -eq $cover) { $item.Error='Exact cover ID not found after search/scroll.'; continue }
         $item.Found = $true; $summary.Found++
         Write-Event 'CoverFound' @{ Id=$cover.Current.AutomationId; Name=$cover.Current.Name }
@@ -543,7 +577,7 @@ try {
     }
     Open-Catalog
     # Keep a batch-specific search in the evidence, rather than an unrelated unfiltered library.
-    Set-CatalogSearch $sets[0].Name
+    Set-CatalogSearch (Get-SearchText $sets[0])
     if ($null -eq (Find-Cover $sets[0].CoverId)) { throw 'First batch cover missing before catalog capture.' }
     Save-Capture 'catalog' (Get-CatalogWindow)
     Close-Catalog
