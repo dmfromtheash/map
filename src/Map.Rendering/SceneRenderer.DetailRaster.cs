@@ -1,0 +1,328 @@
+using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
+using Map.Core.Documents;
+using SkiaSharp;
+
+namespace Map.Rendering;
+
+public static partial class SceneRenderer
+{
+    /// <summary>
+    /// Dense detail tiles are rastered off the frame thread. A tile whose images are ready is drawn by a
+    /// background worker from a pinned snapshot of those images (<see cref="IStampPreparationPlan.Pin"/>) with the
+    /// same CPU evaluator as the synchronous path; the frame only adopts finished tiles, one per frame,
+    /// and keeps the seed or the overview for the others. One tile of a dense map
+    /// holds tens of thousands of objects: rastered on the frame it took seconds (Chromium rasters tiles on
+    /// worker threads for the same reason, the compositor only uploads them).
+    /// </summary>
+    private enum BackgroundTile { FrameThread, Waiting, Adopted }
+
+    private readonly record struct DetailRasterKey(LayerId Layer, int X, int Y, int Zoom, ulong Revision);
+
+    private sealed class DetailRasterJob
+    {
+        public required DetailRasterKey Key { get; init; }
+        public required MapDocument Document { get; init; }
+        public required ObjectLayer Layer { get; init; }
+        public required WorldBounds Bounds { get; init; }
+        public required double Scale { get; init; }
+        public required int Bucket { get; init; }
+        public required RenderOptions Options { get; init; }
+        public required IStampImageLease Images { get; init; }
+        public required Action? Ready { get; init; }
+        /// <summary>A coarse fallback level (see <see cref="DrawDetailedStampTiles"/>), not an exact tile.</summary>
+        public required bool Seed { get; init; }
+        public long Touched;
+        public bool Cancelled, Done, Complete;
+        public SKImage? Image;
+        public int Objects, Culled;
+        public PreparedDetailTile? Tile;
+        public SKImage?[]? Parts;
+        public int Side, Remaining, Failures;
+    }
+
+    /// <summary>A tile's objects in draw order, after occlusion culling: what every part of its raster draws.</summary>
+    private sealed record PreparedDetailTile(IReadOnlyList<SceneObject> DrawOrder, IReadOnlyList<SceneObject> Ordered, int Objects, int Culled);
+
+    /// <summary>The background tiles of one render context (one detail cache), touched by its frame thread only.</summary>
+    private sealed class DetailRasterJobs
+    {
+        public readonly Dictionary<DetailRasterKey, DetailRasterJob> Jobs = [];
+        /// <summary>Tiles whose background raster came back incomplete: they are built on the frame as before.</summary>
+        public readonly HashSet<DetailRasterKey> FrameOnly = [];
+        public int Running => Jobs.Values.Count(job => !job.Done);
+    }
+
+    private static readonly ConditionalWeakTable<ObjectOverviewCache, DetailRasterJobs> DetailRasterContexts = [];
+
+    /// <summary>
+    /// Workers for every render context: ProcessorCount − 2 (at most 8), below normal priority, FIFO (tiles are
+    /// asked centre first). They build tile plans and raster tiles; nothing they touch belongs to a frame.
+    /// </summary>
+    private static readonly int DetailRasterWorkers = Math.Clamp(Environment.ProcessorCount - 2, 1, 8);
+    private static readonly BlockingCollection<Action> DetailRasterQueue = StartDetailRasterWorkers();
+
+    private static void QueueDetailWork(Action work) => DetailRasterQueue.Add(work);
+
+    private static BlockingCollection<Action> StartDetailRasterWorkers()
+    {
+        var queue = new BlockingCollection<Action>();
+        for (var i = 0; i < DetailRasterWorkers; i++)
+            new Thread(() =>
+            {
+                foreach (var work in queue.GetConsumingEnumerable())
+                    try { work(); } catch (Exception ex) when (ex is not OutOfMemoryException) { }
+            })
+            {
+                IsBackground = true, Priority = ThreadPriority.BelowNormal, Name = "Map detail tile raster " + i,
+            }.Start();
+        return queue;
+    }
+
+    /// <summary>
+    /// The tile's draw order is made once. A seed tile (a whole page of objects) is then split into up to 4×4 parts
+    /// drawn in parallel, each the whole tile under a clip of its part (runs entirely outside it are skipped as a
+    /// whole, so the same stamps go together); an exact tile is one raster.
+    /// </summary>
+
+
+    private static void RunDetailRaster(DetailRasterJob job)
+    {
+        try
+        {
+            lock (job) if (job.Cancelled) { FinishDetailRaster(job, null, false); return; }
+            var tile = PrepareDetailTile(job.Layer, job.Bounds, job.Scale, null, default, job.Options);
+            (job.Objects, job.Culled) = (tile.Objects, tile.Culled);
+            job.Tile = tile;
+            // Only a seed is split: a clip moves Skia's edge coverage by up to 3/255 at the parts' seams, harmless in
+            // a stand-in that is never the final picture. An exact tile is one raster, byte for byte the frame's.
+            var side = !job.Seed ? 1 : tile.Ordered.Count > 24_000 ? 4 : tile.Ordered.Count > 6_000 ? 2 : 1;
+            job.Parts = new SKImage?[side * side];
+            job.Side = side;
+            job.Remaining = side * side;
+            for (var part = 1; part < side * side; part++)
+            {
+                var index = part;
+                QueueDetailWork(() => RunDetailRasterPart(job, index));
+            }
+            RunDetailRasterPart(job, 0);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException) { FinishDetailRaster(job, null, false); }
+    }
+
+    private static void RunDetailRasterPart(DetailRasterJob job, int part)
+    {
+        SKImage? image = null;
+        var unresolved = 1;
+        try
+        {
+            bool cancelled;
+            lock (job) cancelled = job.Cancelled;
+            if (!cancelled)
+            {
+                var stats = new RenderStats();
+                var options = job.Options.ForBackgroundTile(job.Images, stats);
+                using var scratch = new StampBatchScratch();
+                // The same platform pixel layout as the frame-thread CPU path.
+                // The same platform pixel layout as the frame-thread CPU path.
+                using var surface = SKSurface.Create(new SKImageInfo(514, 514))!;
+                surface.Canvas.Clear(SKColors.Transparent);
+                SKRectI? device = null; WorldBounds? world = null;
+                if (job.Side > 1)
+                {
+                    int Edge(int k) => k * 514 / job.Side;
+                    var (column, row) = (part % job.Side, part / job.Side);
+                    device = new SKRectI(Edge(column), Edge(row), Edge(column + 1), Edge(row + 1));
+                    double World(int pixel, double origin) => origin + (pixel - 1) / job.Scale;
+                    world = new WorldBounds(World(device.Value.Left, job.Bounds.Left), World(device.Value.Top, job.Bounds.Top),
+                        World(device.Value.Right, job.Bounds.Left), World(device.Value.Bottom, job.Bounds.Top));
+                }
+                DrawDetailTilePiece(surface.Canvas, job.Document, job.Layer, job.Bounds, job.Scale, job.Bucket, job.Tile!,
+                    null, options, scratch, device, world);
+                image = surface.Snapshot();
+                unresolved = stats.UnresolvedImages;
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException) { image?.Dispose(); image = null; }
+        job.Parts![part] = image;
+        if (image is null || unresolved > 0) Interlocked.Increment(ref job.Failures);
+        if (Interlocked.Decrement(ref job.Remaining) > 0) return;
+        // The last part composes the tile: each part's pixels copied unchanged into their rectangle.
+        SKImage? composed = null;
+        try
+        {
+            if (job.Failures == 0 && job.Side == 1) { composed = job.Parts[0]; job.Parts[0] = null; }
+            else if (job.Failures == 0)
+            {
+                using var surface = SKSurface.Create(new SKImageInfo(514, 514))!;
+                surface.Canvas.Clear(SKColors.Transparent);
+                using var copy = new SKPaint { BlendMode = SKBlendMode.Src };
+                for (var index = 0; index < job.Parts.Length; index++)
+                {
+                    int Edge(int k) => k * 514 / job.Side;
+                    var (column, row) = (index % job.Side, index / job.Side);
+                    var rect = new SKRect(Edge(column), Edge(row), Edge(column + 1), Edge(row + 1));
+                    surface.Canvas.DrawImage(job.Parts[index], rect, rect, new SKSamplingOptions(SKFilterMode.Nearest), copy);
+                }
+                composed = surface.Snapshot();
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException) { composed?.Dispose(); composed = null; }
+        foreach (var piece in job.Parts) piece?.Dispose();
+        FinishDetailRaster(job, composed, composed is not null && job.Images.UnresolvedRequestVersion == 0);
+    }
+
+    private static void FinishDetailRaster(DetailRasterJob job, SKImage? image, bool complete)
+    {
+        job.Images.Dispose();
+        lock (job)
+        {
+            if (job.Cancelled) { image?.Dispose(); image = null; }
+            job.Image = image;
+            job.Complete = complete;
+            job.Done = true;
+        }
+        job.Ready?.Invoke();
+    }
+
+    /// <summary>Cancels background tiles that no frame asked for since the previous one (the view or revision moved on).</summary>
+    private static void SweepDetailRasters(ObjectOverviewCache cache)
+    {
+        if (!DetailRasterContexts.TryGetValue(cache, out var context) || context.Jobs.Count == 0) return;
+        foreach (var (key, job) in context.Jobs.Where(pair => pair.Value.Touched < cache.FrameNumber - 1).ToArray())
+        {
+            context.Jobs.Remove(key);
+            lock (job)
+            {
+                job.Cancelled = true;
+                job.Image?.Dispose();
+                job.Image = null;
+            }
+        }
+        if (context.FrameOnly.Count > 256) context.FrameOnly.Clear();
+    }
+
+    private static BackgroundTile TryBackgroundTile(MapDocument document, ObjectLayer layer, DetailTileRevisions revisions,
+        int x, int y, int bucket, WorldBounds bounds, double scale, ulong revision, ObjectOverviewCache cache, RenderOptions options,
+        DetailPreparation frame, bool seed, out ObjectOverviewCacheResult adopted)
+    {
+        adopted = default;
+        if (options.Stamps is not { } stamps || options.RequestRefinedFrame is not { } ready) return BackgroundTile.FrameThread;
+        var context = DetailRasterContexts.GetValue(cache, static _ => new DetailRasterJobs());
+        var key = new DetailRasterKey(layer.Id, x, y, DetailZoomKey(layer, bucket), revision);
+        if (context.FrameOnly.Contains(key)) return BackgroundTile.FrameThread;
+        if (context.Jobs.TryGetValue(key, out var job))
+        {
+            job.Touched = cache.FrameNumber;
+            SKImage? image;
+            lock (job)
+            {
+                if (!job.Done) { if (options.Stats is { } waiting) waiting.DetailRastersWaiting++; return BackgroundTile.Waiting; }
+                // Each adopted tile is a texture upload on its first draw (on the CPU a 0.26 Mpx copy): one per frame.
+                if (frame.Adopted >= 1) return BackgroundTile.Waiting;
+                image = job.Image;
+                job.Image = null;
+            }
+            context.Jobs.Remove(key);
+            if (image is null || !job.Complete)
+            {
+                image?.Dispose();
+                context.FrameOnly.Add(key);
+                return BackgroundTile.FrameThread;
+            }
+            frame.Adopted++;
+            if (options.Stats is { } taken) taken.DetailRastersAdopted++;
+            adopted = cache.GetOrCreate(layer.Id, x, y, DetailZoomKey(layer, bucket), revision, () => image,
+                () => (job.Objects, job.Culled), fallback: seed);
+            return BackgroundTile.Adopted;
+        }
+        var area = Expand(bounds, 1 / scale);
+        // A tile with a kept base gets only its appended objects drawn over that base, on the frame as before.
+        if (!layer.Effects.DepthSort && revisions.TryAppendBase(cache, layer.Id, x, y, bucket, area, stamps.MissingRevision, out _, out _))
+            return BackgroundTile.FrameThread;
+        if (revisions.Plan(x, y, bucket, area, stamps) is not { Complete: true } tile) return BackgroundTile.FrameThread;
+        if (context.Running >= DetailRasterWorkers * 2) return BackgroundTile.Waiting;
+        if (tile.Plan.Pin() is not { } images)
+            return tile.Plan.Prepare(ready) ? BackgroundTile.FrameThread : BackgroundTile.Waiting;
+        var started = new DetailRasterJob
+        {
+            Key = key, Document = document, Layer = layer, Bounds = bounds, Scale = scale, Bucket = bucket,
+            Options = options.ForBackgroundTile(images, new RenderStats()), Images = images, Ready = ready, Seed = seed,
+            Touched = cache.FrameNumber,
+        };
+        context.Jobs.Add(key, started);
+        QueueDetailWork(() => RunDetailRaster(started));
+        if (options.Stats is { } stats) stats.DetailRastersStarted++;
+        return BackgroundTile.Waiting;
+    }
+
+    /// <summary>
+    /// The objects of one detail tile onto its 514 px raster (one pixel of bleed): the same evaluator on the frame
+    /// thread and on a background worker. With <paramref name="appended"/> only those objects go over the copied base.
+    /// </summary>
+    private static (int Objects, int Culled) DrawDetailTileObjects(SKCanvas target, MapDocument document, ObjectLayer layer,
+        WorldBounds bounds, double scale, int bucket, IReadOnlyList<SceneObject>? appended, ObjectOverviewCacheResult basis,
+        ObjectOverviewCache? cache, RenderOptions options, StampBatchScratch scratch)
+    {
+        var tile = PrepareDetailTile(layer, bounds, scale, appended, basis, options);
+        DrawDetailTilePiece(target, document, layer, bounds, scale, bucket, tile, cache, options, scratch, null, null);
+        return (tile.Objects, tile.Culled);
+    }
+
+    private static PreparedDetailTile PrepareDetailTile(ObjectLayer layer, WorldBounds bounds, double scale,
+        IReadOnlyList<SceneObject>? appended, ObjectOverviewCacheResult basis, RenderOptions options)
+    {
+        var prepareStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+        var incremental = appended is not null;
+        var candidates = appended ?? ObjectSpatialIndex.For(layer).Query(Expand(bounds, 1 / scale));
+        if (layer.SublayerStates.Any(s => !s.Visible)) candidates = candidates.Where(o => layer.StateFor(o.Sublayer).Visible).ToArray();
+        var drawOrder = SceneGeometry.InDrawOrder(layer, candidates);
+        var ordered = StampOcclusion.Cull(drawOrder, Expand(bounds, 1 / scale), scale, options.Stamps);
+        var objects = (incremental ? basis.ObjectCount : 0) + ordered.Count(o => o.Visible);
+        var culled = (incremental ? basis.CulledCount : 0) + candidates.Count - ordered.Count;
+        if (options.Stats is { } preparation)
+            preparation.DetailPrepareMilliseconds += System.Diagnostics.Stopwatch.GetElapsedTime(prepareStarted).TotalMilliseconds;
+        return new(drawOrder, ordered, objects, culled);
+    }
+
+    /// <summary>
+    /// Draws a prepared tile, or with <paramref name="device"/> one part of it: the same draw calls in the same order
+    /// under a pixel-exact clip, skipping whole runs (a batch or a single stamp) whose bounds miss the part.
+    /// </summary>
+    private static void DrawDetailTilePiece(SKCanvas target, MapDocument document, ObjectLayer layer, WorldBounds bounds,
+        double scale, int bucket, PreparedDetailTile tile, ObjectOverviewCache? cache, RenderOptions options,
+        StampBatchScratch scratch, SKRectI? device, WorldBounds? part)
+    {
+        if (device is { } clip) target.ClipRect(clip, SKClipOperation.Intersect, false);
+        target.Translate(1, 1);
+        target.Scale((float)scale);
+        target.Translate((float)-bounds.Left, (float)-bounds.Top);
+        var rasterStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+        var ordered = tile.Ordered;
+        AreaBeautyRenderer.DrawMasses(target, tile.DrawOrder, options);
+        if (cache is null || !TryDrawDenseAtlas(target, ordered, layer.Id, bucket, cache, options, scratch))
+        {
+            // Two device pixels of filtering reach around every stamp.
+            var reach = 2 / scale;
+            for (var i = 0; i < ordered.Count; i++)
+            {
+                if (!ordered[i].Visible) continue;
+                if (part is { } area)
+                {
+                    var run = Math.Max(1, StampBatchLength(target.TotalMatrix, ordered, i, options, out _));
+                    var touches = false;
+                    for (var k = i; k < i + run && !touches; k++)
+                        // A contact shadow or tint reaches past the object's own rectangle: never skipped.
+                        touches = ordered[k].Stamp is not { GroundShadow: null, Tint: null }
+                            || Expand(SceneGeometry.BoundsOf(ordered[k]), reach).Intersects(area);
+                    if (!touches) { i += run - 1; continue; }
+                }
+                var batch = TryDrawStampBatch(target, ordered, i, options, scratch);
+                if (batch > 0) i += batch - 1;
+                else DrawObject(target, ordered[i], document.StampForeground, options);
+            }
+        }
+        if (options.Stats is { } raster)
+            raster.DetailRasterMilliseconds += System.Diagnostics.Stopwatch.GetElapsedTime(rasterStarted).TotalMilliseconds;
+    }
+}

@@ -410,6 +410,39 @@ public sealed class Stage15StampToolParityTests : IDisposable
         Assert.False(editor.EraseStampsAround(100, 100));
     }
 
+    [Fact]
+    public void Alt_eraser_spatial_candidates_match_full_center_scan_across_dabs_and_undo()
+    {
+        var editor = AssetEditor(out var catalog);
+        editor.SelectAssetSet(catalog.FindSetForContent(catalog.Records[0].Sha256)!.Id);
+        editor.StampPlacementMode = StampPlacementMode.Area;
+        editor.SetStampAreaRadius(140, persist: true);
+        var layer = editor.Session.Document.Layers.OfType<ObjectLayer>().Single();
+        var random = new Random(72013);
+        var items = Enumerable.Range(0, 2000).Select(i => new SceneObject(ObjectId.New(),
+            i % 11 == 0 ? SceneObjectKind.Rectangle : SceneObjectKind.Stamp, "candidate", random.Next(-800, 2800),
+            random.Next(-800, 2800), 40, 20, i % 360, "#FFFFFFFF", "#00000000", 0, true, false)
+            { Stamp = i % 11 == 0 ? null : new(catalog.Records[0].Sha256) }).ToArray();
+        editor.Session.Execute(new AddObjectsCommand(layer.Id, items));
+        var before = Objects(editor).Select(o => o.Id).ToArray();
+        var depth = editor.Session.UndoDepth;
+        for (var dab = 0; dab < 40; dab++)
+        {
+            var x = random.Next(-600, 2600); var y = random.Next(-600, 2600);
+            var expected = Objects(editor).Where(o => o.Kind != SceneObjectKind.Stamp
+                || Math.Pow(o.X + o.Width / 2 - x, 2) + Math.Pow(o.Y + o.Height / 2 - y, 2) > 140 * 140)
+                .Select(o => o.Id).ToArray();
+            editor.EraseStampsAround(x, y);
+            Assert.Equal(expected, Objects(editor).Select(o => o.Id));
+        }
+        var after = Objects(editor).Select(o => o.Id).ToArray();
+        Assert.True(after.Length < before.Length);
+        editor.EndStampErase();
+        Assert.Equal(depth + 1, editor.Session.UndoDepth);
+        Assert.True(editor.Session.Undo()); Assert.Equal(before, Objects(editor).Select(o => o.Id));
+        Assert.True(editor.Session.Redo()); Assert.Equal(after, Objects(editor).Select(o => o.Id));
+    }
+
     private static IReadOnlyList<SceneObject> Objects(EditorViewModel editor) =>
         editor.Session.Document.Layers.OfType<ObjectLayer>().SelectMany(layer => layer.Objects).ToArray();
 

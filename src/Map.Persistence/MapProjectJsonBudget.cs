@@ -51,7 +51,7 @@ public static class MapProjectJsonBudget
         public int Count { get; set; }
     }
 
-    public static void Validate(ReadOnlySpan<byte> utf8Json, string entryName)
+    public static void Validate(ReadOnlySpan<byte> utf8Json, string entryName, int maxDepth = 64)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(entryName);
 
@@ -59,11 +59,14 @@ public static class MapProjectJsonBudget
         {
             AllowTrailingCommas = false,
             CommentHandling = JsonCommentHandling.Disallow,
-            MaxDepth = 64,
+            MaxDepth = maxDepth,
         });
         var arrays = new Stack<ArrayFrame>();
         var aggregates = new long[Enum.GetValues<AggregateKind>().Length];
-        string? pendingProperty = null;
+        // The pending property name stays a slice of the input; a string is made only when it
+        // names an array (labels and limits), not for every property of every object.
+        ReadOnlySpan<byte> pendingPropertyUtf8 = default;
+        string? pendingPropertyEscaped = null;
         var pendingPropertyDepth = -1;
         long tokens = 0;
 
@@ -82,7 +85,15 @@ public static class MapProjectJsonBudget
                     ThrowLimit(entryName, "a JSON property name longer than 256 UTF-8 bytes");
                 }
 
-                pendingProperty = reader.GetString();
+                if (reader.ValueIsEscaped)
+                {
+                    pendingPropertyEscaped = reader.GetString();
+                }
+                else
+                {
+                    pendingPropertyEscaped = null;
+                    pendingPropertyUtf8 = reader.ValueSpan;
+                }
                 pendingPropertyDepth = reader.CurrentDepth;
                 continue;
             }
@@ -120,12 +131,13 @@ public static class MapProjectJsonBudget
                     $"a string longer than {MaxStringUtf8Bytes} UTF-8 bytes");
             }
 
-            var propertyForValue = pendingPropertyDepth == reader.CurrentDepth
-                ? pendingProperty
-                : null;
+            var hasPropertyForValue = pendingPropertyDepth == reader.CurrentDepth;
 
             if (reader.TokenType == JsonTokenType.StartArray)
             {
+                var propertyForValue = hasPropertyForValue
+                    ? pendingPropertyEscaped ?? System.Text.Encoding.UTF8.GetString(pendingPropertyUtf8)
+                    : null;
                 var (label, limit, aggregateKind) = ArrayLimit(propertyForValue);
                 arrays.Push(new ArrayFrame(label, reader.CurrentDepth + 1, limit, aggregateKind));
             }
@@ -137,9 +149,10 @@ public static class MapProjectJsonBudget
                 }
             }
 
-            if (propertyForValue is not null && StartsValue(reader.TokenType))
+            if (hasPropertyForValue && StartsValue(reader.TokenType))
             {
-                pendingProperty = null;
+                pendingPropertyEscaped = null;
+                pendingPropertyUtf8 = default;
                 pendingPropertyDepth = -1;
             }
         }

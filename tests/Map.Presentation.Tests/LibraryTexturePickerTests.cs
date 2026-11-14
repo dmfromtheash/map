@@ -111,8 +111,10 @@ public sealed class LibraryTexturePickerTests : IDisposable
     }
 
     [Fact]
-    public void Creating_offscreen_swatches_does_not_request_pixels()
+    public Task Creating_offscreen_swatches_does_not_request_pixels() => EditorUiThread.Run(() =>
     {
+        Assert.True(Avalonia.Threading.Dispatcher.UIThread.CheckAccess());
+        Assert.True(Thread.CurrentThread.IsBackground);
         var requests = 0;
         var type = typeof(EditorView).GetNestedType("MaterialSwatch", BindingFlags.NonPublic)!;
         var contextType = typeof(EditorView).GetNestedType("MaterialPreviewContext", BindingFlags.NonPublic)!;
@@ -121,7 +123,7 @@ public sealed class LibraryTexturePickerTests : IDisposable
         for (var i = 0; i < 200; i++)
             Assert.NotNull(Activator.CreateInstance(type, [preview, Activator.CreateInstance(contextType)]));
         Assert.Equal(0, requests);
-    }
+    });
 
     private static Func<T, Avalonia.Media.IBrush?> Preview<T>(Action requested) => _ => { requested(); return null; };
 

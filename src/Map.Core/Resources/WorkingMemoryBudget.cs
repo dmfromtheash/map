@@ -10,7 +10,7 @@ public readonly record struct WorkingMemorySnapshot(long PhysicalBytes, long Ava
 /// <summary>Shared admission for live documents/history and overlapping native operations.
 /// It measures private commitment across Map processes; it is not a replacement allocator or
 /// a claim that driver allocations can be hard-capped by a managed application.</summary>
-public sealed class WorkingMemoryBudget
+public sealed partial class WorkingMemoryBudget
 {
     public const long MiB = 1024L * 1024;
     public const long EditReserveBytes = 16 * MiB;
@@ -38,9 +38,14 @@ public sealed class WorkingMemoryBudget
     public static WorkingMemoryBudget Shared { get; } = new(() => Volatile.Read(ref _sharedRead)());
 
     /// <summary>Pins <see cref="Shared"/> of a test process to the given machine.</summary>
-    internal static void UseFixedSharedMemoryForTests(WorkingMemorySnapshot snapshot) =>
+    internal static void UseFixedSharedMemoryForTests(WorkingMemorySnapshot snapshot)
+    {
         Volatile.Write(ref _sharedRead, () => snapshot);
+        // A fixed machine also has a fixed cache budget: test results must not depend on how long a run took.
+        Shared._cacheBudgetFixed = true;
+    }
     private readonly Func<WorkingMemorySnapshot> _read;
+    private readonly TimeProvider _clock;
     private readonly object _gate = new();
     private long _reserved;
     private volatile bool _pressure;
@@ -49,7 +54,14 @@ public sealed class WorkingMemoryBudget
     private static readonly Mutex HeavyGate = new(false, "Local\\Map.HeavyOperation."
         + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Environment.UserDomainName + "\\" + Environment.UserName)))[..16]);
 
-    public WorkingMemoryBudget(Func<WorkingMemorySnapshot> read) => _read = read;
+    public WorkingMemoryBudget(Func<WorkingMemorySnapshot> read) : this(read, TimeProvider.System) { }
+
+    /// <param name="clock">Paces the dynamic cache budget (grow interval, regrow delay); tests pass their own.</param>
+    public WorkingMemoryBudget(Func<WorkingMemorySnapshot> read, TimeProvider clock)
+    {
+        _read = read;
+        _clock = clock ?? throw new ArgumentNullException(nameof(clock));
+    }
     public long ReservedBytes { get { lock (_gate) return _reserved; } }
     public WorkingMemorySnapshot Snapshot => _read();
     public bool IsUnderPressure

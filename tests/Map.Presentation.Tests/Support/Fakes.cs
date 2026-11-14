@@ -156,6 +156,7 @@ public sealed class FakeProjectStore : IProjectStore
     public ManualResetEventSlim? AutosaveEntered { get; set; }
     public ManualResetEventSlim? AutosaveRelease { get; set; }
     public List<RecoveryCandidate> Candidates { get; } = [];
+    public Func<IReadOnlyList<RecoveryCandidate>>? OnFindRecovery { get; set; }
     public Func<string, OpenedProject>? OnOpen { get; set; }
     public Func<string, ProjectFileInspection>? OnInspect { get; set; }
     public Func<string, string, ProjectMigrationResult>? OnMigrate { get; set; }
@@ -295,7 +296,7 @@ public sealed class FakeProjectStore : IProjectStore
         Candidates.RemoveAll(candidate => candidate.DocumentId == documentId);
     }
 
-    public IReadOnlyList<RecoveryCandidate> FindRecoveryCandidates() => [.. Candidates];
+    public IReadOnlyList<RecoveryCandidate> FindRecoveryCandidates() => OnFindRecovery?.Invoke() ?? [.. Candidates];
 
     public OpenedProject RestoreRecovery(RecoveryCandidate candidate) => Open(candidate.CandidatePath);
 

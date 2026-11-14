@@ -427,14 +427,7 @@ public sealed partial class EditorView
         }.Classed("panel-footer").Named("RoadsSectionFooter");
     }
 
-    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<IReadOnlyList<SceneObject>, System.Runtime.CompilerServices.StrongBox<int>> StampCounts = [];
-
-    /// <summary>
-    /// Stamps in one object list, counted once per list: lists are immutable, and the footer is
-    /// refreshed with every panel refresh (a scan of 100 000 objects each time).
-    /// </summary>
-    private static int StampCount(IReadOnlyList<SceneObject> objects) =>
-        StampCounts.GetValue(objects, static list => new(list.Count(o => o.Kind == SceneObjectKind.Stamp))).Value;
+    private static int StampCount(ObjectLayer layer) => AssetUsageIndex.For(layer).StampCount;
 
     private Control BuildAssetsSectionFooter()
     {
@@ -443,7 +436,7 @@ public sealed partial class EditorView
         var summary = new TextBlock { Name = "AssetsSectionSummary", TextWrapping = TextWrapping.Wrap };
         _sectionSyncs.Add(() =>
         {
-            var stamps = _editor.Layers.OfType<ObjectLayer>().Sum(layer => StampCount(layer.Objects));
+            var stamps = _editor.Layers.OfType<ObjectLayer>().Sum(StampCount);
             summary.Text = stamps == 0
                 ? "На карте пока нет размещённых ассетов."
                 : $"Размещено: {EditorLabels.AssetCount(stamps)}. Свойства выбранного — в колонке свойств рядом.";

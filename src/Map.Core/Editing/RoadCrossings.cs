@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Map.Core.Documents;
 
 namespace Map.Core.Editing;
@@ -35,35 +36,57 @@ public static class RoadCrossings
     {
         var result = new List<RoadCrossing>();
         if (roads.Count == 0 || rivers.Count == 0) return result;
-        var riverSets = new List<RiverGeometrySet>();
-        foreach (var river in rivers) if (river.Visible) riverSets.Add(RiverGeometry.Evaluate(river));
+        var riverSets = new List<(River River, RiverGeometrySet Set)>();
+        foreach (var river in rivers) if (river.Visible) riverSets.Add((river, RiverGeometry.Evaluate(river)));
         foreach (var road in roads)
         {
             if (!road.Visible) continue;
             var set = RoadGeometry.Evaluate(road);
-            foreach (var riverSet in riverSets)
+            ConditionalWeakTable<River, RoadCrossing[]>? pairs = null;
+            foreach (var (river, riverSet) in riverSets)
             {
                 if (!set.Bounds.Intersects(riverSet.Bounds)) continue;
-                foreach (var branch in set.Branches.Values)
+                pairs ??= PairCache.GetOrCreateValue(road);
+                if (!pairs.TryGetValue(river, out var found))
                 {
-                    if (branch.Samples.Length < 2) continue;
-                    foreach (var channel in riverSet.Channels.Values)
-                    {
-                        if (channel.Closed || channel.Samples.Length < 2) continue;
-                        var hits = new List<RoadCrossing>();
-                        FindHits(road, branch, riverSet.River, channel, hits);
-                        if (hits.Count == 0) continue;
-                        hits.Sort((a, b) => a.Distance.CompareTo(b.Distance));
-                        for (var ordinal = 0; ordinal < hits.Count; ordinal++)
-                        {
-                            var hit = hits[ordinal];
-                            result.Add(hit with { Ordinal = ordinal, Kind = KindOf(road, hit.BranchId, hit.ChannelId, ordinal) });
-                        }
-                    }
+                    found = Pair(road, set, river, riverSet);
+                    pairs.AddOrUpdate(river, found);
                 }
+                result.AddRange(found);
             }
         }
         return result;
+    }
+
+    /// <summary>
+    /// The crossings of one road over one river, kept per revision of both (records are immutable:
+    /// an edit makes a new one). The canvas asks for them whenever the terrain is drawn; finding
+    /// them again for every pair of a map with a few hundred roads and rivers took most of the frame.
+    /// </summary>
+    private static readonly ConditionalWeakTable<Road, ConditionalWeakTable<River, RoadCrossing[]>> PairCache = new();
+
+    private static RoadCrossing[] Pair(Road road, RoadGeometrySet set, River river, RiverGeometrySet riverSet)
+    {
+        List<RoadCrossing>? result = null;
+        foreach (var branch in set.Branches.Values)
+        {
+            if (branch.Samples.Length < 2) continue;
+            foreach (var channel in riverSet.Channels.Values)
+            {
+                if (channel.Closed || channel.Samples.Length < 2) continue;
+                var hits = new List<RoadCrossing>();
+                FindHits(road, branch, river, channel, hits);
+                if (hits.Count == 0) continue;
+                hits.Sort((a, b) => a.Distance.CompareTo(b.Distance));
+                result ??= [];
+                for (var ordinal = 0; ordinal < hits.Count; ordinal++)
+                {
+                    var hit = hits[ordinal];
+                    result.Add(hit with { Ordinal = ordinal, Kind = KindOf(road, hit.BranchId, hit.ChannelId, ordinal) });
+                }
+            }
+        }
+        return result is null ? [] : [.. result];
     }
 
     /// <summary>The kind stored for this crossing, or the default bridge.</summary>

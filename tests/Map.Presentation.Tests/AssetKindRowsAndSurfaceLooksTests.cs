@@ -48,7 +48,8 @@ public sealed class AssetKindRowsAndSurfaceLooksTests
         Assert.All(kinds, row => Assert.Equal(ObjectTreeRowKind.AssetKind, row.Kind));
         var oakRow = kinds.Single(row => row.AssetKey == Oak);
         Assert.Equal(3, oakRow.ChildCount);
-        Assert.Equal(oaks.Select(o => o.Id).OrderBy(id => id.Value), oakRow.MemberIds!.OrderBy(id => id.Value));
+        Assert.Null(oakRow.MemberIds);
+        Assert.Equal(oaks.Reverse().Select(o => o.Id), ObjectTreeRows.AssetMembers(editor.Session.Document, Oak).Select(o => o.Id));
         // Without a library the title is the topmost copy's name, cut before a " · " suffix.
         Assert.Equal("Зелёный дуб", oakRow.Title);
         Assert.Equal("Каменный мост", kinds.Single(row => row.AssetKey == Bridge).Title);

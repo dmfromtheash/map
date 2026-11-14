@@ -74,6 +74,7 @@ public sealed partial class EditorViewModel
     {
         CancelStampSeries();
         ActiveTool = EditorTool.Stamp;
+        PrepareArmedAssets();
         var centre = ViewCentre();
         PendingPlacement = BuildStampPlacement(centre.X, centre.Y, pointerVisible: false);
         if (PendingPlacement.InvalidReason is { Length: > 0 } refusal)
@@ -318,7 +319,7 @@ public sealed partial class EditorViewModel
         var layer = pending.LayerId is { } layerId ? Session.Document.FindLayer(layerId) as ObjectLayer : ActiveObjectLayer();
         if (layer is not { Visible: true, Locked: false }) return false;
         var radius = Math.Max(1, StampAreaRadius);
-        var ids = layer.Objects
+        var ids = ObjectSpatialIndex.For(layer).Query(new(worldX - radius, worldY - radius, worldX + radius, worldY + radius))
             .Where(o => o.Kind == SceneObjectKind.Stamp
                 && Math.Pow(o.X + (o.Width / 2) - worldX, 2) + Math.Pow(o.Y + (o.Height / 2) - worldY, 2) <= radius * radius)
             .Select(o => o.Id).ToList();
@@ -507,6 +508,7 @@ public sealed partial class EditorViewModel
                 request.Seed, _currentVariantIndex, _selectedSetVariants.Count);
             RememberCurrentVariant();
             RaiseVariantState();
+            PrepareArmedAssets();
         }
 
         var placementMessage = objects.Count == 1
@@ -914,6 +916,8 @@ public sealed partial class EditorViewModel
             return;
         }
 
+        if (pending.Target == PlacementTargetKind.Stamp) PrepareArmedAssets();
+
         PendingPlacement = pending.Target == PlacementTargetKind.Stamp
             ? BuildStampPlacement(
                 pending.WorldX, pending.WorldY, pending.PointerVisible)
@@ -1129,7 +1133,7 @@ public sealed partial class EditorViewModel
                 return null;
             }
 
-            var resolution = _assetResolver!.Resolve(record);
+            var resolution = PreparedAsset(record);
             if (!resolution.IsAvailable)
             {
                 refusal = Unplaceable(record, resolution.Availability);
@@ -1197,6 +1201,8 @@ public sealed partial class EditorViewModel
     /// <summary>Names the variant and the exact reason it stopped the whole gesture.</summary>
     private static string Unplaceable(AssetRecord record, AssetAvailability availability) => availability switch
     {
+        AssetAvailability.Checking or AssetAvailability.Unknown =>
+            "Содержимое ассета подготавливается. Повторите размещение после завершения проверки.",
         AssetAvailability.Missing =>
             $"Вариант «{record.DisplayName}» отсутствует на диске. Ничего не размещено.",
         AssetAvailability.HashMismatch =>
@@ -1348,6 +1354,37 @@ public sealed partial class EditorViewModel
     }
 
     public void PlaceStamp(AssetRecord record, bool embedded = true, double? x = null, double? y = null)
+        => PlaceReadyStamp(record, embedded, x, y, null);
+
+    /// <summary>Explicit library action: read/verify away from the dispatcher, then commit the
+    /// ready reference against the current snapshot. The legacy synchronous API is for scripts.</summary>
+    public async Task PlaceStampAsync(AssetRecord record, bool embedded = true, double? x = null, double? y = null)
+    {
+        if (_assetCatalog is null || _assetResolver is null) return;
+        var document = Session.Document;
+        if (document.Assets.Any(asset => string.Equals(asset.Sha256, record.Sha256, StringComparison.OrdinalIgnoreCase)))
+        { PlaceReadyStamp(record, embedded, x, y, null); return; }
+        if (!MapProjectStore.CanAdmitEmbeddedBytes(document, embedded ? record.ByteLength : 0, 1, out var refusal))
+        { StatusDetail = refusal; return; }
+        var resolver = _assetResolver;
+        var catalog = _assetCatalog;
+        var documentPath = DocumentPath;
+        var ready = await Task.Run(() =>
+        {
+            var resolved = resolver.Resolve(record);
+            if (!resolved.IsAvailable || embedded) return resolved;
+            var path = catalog.Resolve(record).Path;
+            var relative = documentPath is not null && path is not null
+                && ProjectLinkedAssetPath.TryMakeRelative(documentPath, path, out var projectRelative) ? projectRelative : null;
+            return resolved with { Reference = resolved.Reference! with
+                { Storage = ProjectAssetStorage.Linked, EmbeddedContent = null, CatalogId = record.Sha256, RelativePath = relative } };
+        });
+        if (Session.Document.Id != document.Id || DocumentPath != documentPath) return;
+        if (!ready.IsAvailable) { StatusDetail = Unplaceable(record, ready.Availability); return; }
+        PlaceReadyStamp(record, embedded, x, y, ready.Reference);
+    }
+
+    private void PlaceReadyStamp(AssetRecord record, bool embedded, double? x, double? y, MapAssetReference? prepared)
     {
         if (_assetCatalog is null || _assetResolver is null)
         {
@@ -1374,7 +1411,9 @@ public sealed partial class EditorViewModel
             return;
         }
 
-        MapAssetReference? reference = knownReference;
+        MapAssetReference? reference = knownReference ?? prepared;
+        if (reference is not null && !MapProjectStore.CanAdmitAdditionalAssets(Session.Document, [reference], out var admissionFailure))
+        { StatusDetail = admissionFailure; return; }
         if (reference is null)
         {
             var resolution = _assetCatalog.ReadVerified(record);

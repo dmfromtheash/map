@@ -336,6 +336,7 @@ public static partial class MapProjectStore
 
         // Reject known payload/count violations before opening a temp or serializing objects.
         // Exact JSON and checkpoint totals are still admitted by ContainerWriteState.
+        var serializedBefore = SerializedObjectsOnThisThread;
         if (!TryValidateAssetEnvelope(document, document.Assets, previewPng.LongLength, out var reason))
             throw new MapProjectResourceLimitException(reason);
 
@@ -362,20 +363,23 @@ public static partial class MapProjectStore
                     document.Id.Value, fullTarget, tempPath, metadata.SavedRevision, baseHash);
             }
 
+            ContainerWriteState written;
             using (var stream = new FileStream(
                        tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1 << 16, FileOptions.None))
             {
                 var writeStarted = System.Diagnostics.Stopwatch.GetTimestamp();
-                WriteContainer(stream, document, metadata, previewPng);
+                written = WriteContainer(stream, document, metadata, previewPng);
+                if (timings is not null) timings.SerializedObjects = SerializedObjectsOnThisThread - serializedBefore;
                 if (timings is not null) timings.WriteContainerMilliseconds = System.Diagnostics.Stopwatch.GetElapsedTime(writeStarted).TotalMilliseconds;
                 var flushStarted = System.Diagnostics.Stopwatch.GetTimestamp();
                 stream.Flush(flushToDisk: true);
                 if (timings is not null) timings.FlushMilliseconds = System.Diagnostics.Stopwatch.GetElapsedTime(flushStarted).TotalMilliseconds;
             }
 
-            // A save that cannot be read back by our own reader is a failed save, not a success.
+            // Verify the durable bytes against the write receipts without rebuilding the document.
+            faults?.AfterFlushBeforeReadBack?.Invoke(tempPath);
             var readBackStarted = System.Diagnostics.Stopwatch.GetTimestamp();
-            ValidateReadBack(tempPath, document);
+            ValidateReadBack(tempPath, written);
             if (timings is not null) timings.ReadBackMilliseconds = System.Diagnostics.Stopwatch.GetElapsedTime(readBackStarted).TotalMilliseconds;
 
             // The temp is now durable and proven: from this point a crash leaves a recovery
@@ -399,6 +403,7 @@ public static partial class MapProjectStore
                 File.Move(tempPath, fullTarget);
             }
             if (timings is not null) timings.PublishMilliseconds = System.Diagnostics.Stopwatch.GetElapsedTime(publishStarted).TotalMilliseconds;
+            RememberWrittenSnapshot(fullTarget, document.Id.Value, written);
 
             if (journal is not null && record is not null)
             {
@@ -544,7 +549,7 @@ public static partial class MapProjectStore
 
     // ---------------------------------------------------------------- write path
 
-    private static void WriteContainer(
+    private static ContainerWriteState WriteContainer(
         Stream destination,
         MapDocument document,
         SaveMetadata metadata,
@@ -600,6 +605,7 @@ public static partial class MapProjectStore
         {
             WriteBytesEntry(archive, name, bytes, state);
         }
+        return state;
     }
 
     private static string? WriteCheckpoints(
@@ -726,46 +732,30 @@ public static partial class MapProjectStore
     }
 
     /// <summary>
-    /// Runs the temp through the full read path and confirms it holds the snapshot that was asked
-    /// for. Object payloads are compared in canonical persisted form so a count-only read-back can
-    /// never hide reordering, an id change, or a semantic conversion defect.
+    /// Checks every durable entry against the length and SHA-256 of the exact bytes supplied to
+    /// the writer. Semantic conversion is covered by round-trip tests; saving never constructs a
+    /// second domain graph or serializes the snapshot again. The untrusted open path is unchanged.
     /// </summary>
-    private static void ValidateReadBack(string tempPath, MapDocument expected)
+    private static void ValidateReadBack(string tempPath, ContainerWriteState expected)
     {
-        var (manifest, scene, objectStorages, assetManifest, _, tiles, assets, checkpoints) =
-            ReadAndValidate(tempPath);
-        var reloaded = ToDomain(
-            manifest, scene, objectStorages, assetManifest, tiles, assets, checkpoints);
-
-        if (reloaded.Id != expected.Id)
+        using var stream = File.OpenRead(tempPath);
+        MapProjectZipAdmission.Validate(stream);
+        using var archive = new ZipArchive(stream, ZipArchiveMode.Read);
+        ValidateContainerShape(archive);
+        ValidatePreviewHeader(archive);
+        if (archive.Entries.Count != expected.Entries.Count)
+            throw new MapProjectCorruptedException("Read-back entry count does not match the write receipts.");
+        foreach (var entry in archive.Entries)
         {
-            throw new MapProjectCorruptedException("Read-back document id does not match the saved snapshot.");
+            if (!expected.Entries.TryGetValue(entry.FullName, out var receipt) || entry.Length != receipt.Length)
+                throw new MapProjectCorruptedException($"Read-back length differs for {entry.FullName}.");
+            using var payload = entry.Open();
+            if (!string.Equals(Convert.ToHexStringLower(SHA256.HashData(payload)), receipt.Sha256, StringComparison.Ordinal))
+                throw new MapProjectCorruptedException($"Read-back SHA-256 differs for {entry.FullName}.");
         }
-
-        if (reloaded.Layers.Count != expected.Layers.Count
-            || reloaded.Layers.Zip(expected.Layers).Any(p =>
-                p.First.Id != p.Second.Id
-                || p.First.GetType() != p.Second.GetType()
-                || ObjectCount(p.First) != ObjectCount(p.Second)
-                || !ObjectSequencesMatch(p.First, p.Second)
-                || TileCount(p.First) != TileCount(p.Second)
-                || (p.First.Mask?.Tiles.TileCount ?? 0) != (p.Second.Mask?.Tiles.TileCount ?? 0))
-            || reloaded.Assets.Count != expected.Assets.Count
-            || (reloaded.StampForeground?.Tiles.TileCount ?? -1)
-                != (expected.StampForeground?.Tiles.TileCount ?? -1)
-            || reloaded.Checkpoints.Count != expected.Checkpoints.Count
-            || reloaded.Checkpoints.Zip(expected.Checkpoints).Any(pair =>
-                pair.First.Id != pair.Second.Id
-                || pair.First.Name != pair.Second.Name
-                || pair.First.CreatedUtc != pair.Second.CreatedUtc
-                || (pair.First.Snapshot.StampForeground?.Tiles.TileCount ?? -1)
-                    != (pair.Second.Snapshot.StampForeground?.Tiles.TileCount ?? -1)
-                || !ObjectSequencesMatch(
-                    pair.First.Snapshot.Layers, pair.Second.Snapshot.Layers)
-                || !pair.First.PreviewPng.Span.SequenceEqual(pair.Second.PreviewPng.Span)))
-        {
-            throw new MapProjectCorruptedException("Read-back layer/object shape does not match the saved snapshot.");
-        }
+        stream.Position = 0;
+        expected.FileLength = stream.Length;
+        expected.FileSha256 = Convert.ToHexStringLower(SHA256.HashData(stream));
     }
 
     // ---------------------------------------------------------------- read path
@@ -1026,11 +1016,11 @@ public static partial class MapProjectStore
         }
     }
 
-    private static T ParseJson<T>(byte[] bytes, string entryName)
+    private static T ParseJson<T>(byte[] bytes, string entryName, bool budgetChecked = false)
     {
         try
         {
-            MapProjectJsonBudget.Validate(bytes, entryName);
+            if (!budgetChecked) MapProjectJsonBudget.Validate(bytes, entryName);
             return JsonSerializer.Deserialize<T>(bytes, JsonOptions)
                 ?? throw new MapProjectCorruptedException($"{entryName} is empty.");
         }
@@ -1687,40 +1677,6 @@ public static partial class MapProjectStore
         {
             throw new MapProjectCorruptedException($"{entryName} is not valid JSON.", ex);
         }
-    }
-
-    private static bool ObjectSequencesMatch(
-        IReadOnlyList<MapLayer> first,
-        IReadOnlyList<MapLayer> second) =>
-        first.Count == second.Count
-        && first.Zip(second).All(pair =>
-            pair.First.Id == pair.Second.Id && ObjectSequencesMatch(pair.First, pair.Second));
-
-    private static bool ObjectSequencesMatch(MapLayer first, MapLayer second)
-    {
-        if (first is not ObjectLayer firstObjects || second is not ObjectLayer secondObjects)
-        {
-            return first is not ObjectLayer && second is not ObjectLayer;
-        }
-
-        if (firstObjects.Objects.Count != secondObjects.Objects.Count)
-        {
-            return false;
-        }
-
-        for (var index = 0; index < firstObjects.Objects.Count; index++)
-        {
-            var expected = firstObjects.Objects[index];
-            var actual = secondObjects.Objects[index];
-            if (expected.Id != actual.Id
-                || !JsonSerializer.SerializeToUtf8Bytes(ToObjectDto(expected), JsonOptions).AsSpan()
-                    .SequenceEqual(JsonSerializer.SerializeToUtf8Bytes(ToObjectDto(actual), JsonOptions)))
-            {
-                return false;
-            }
-        }
-
-        return true;
     }
 
     private static bool ObjectIdentitySequencesMatch(MapLayer first, MapLayer second)

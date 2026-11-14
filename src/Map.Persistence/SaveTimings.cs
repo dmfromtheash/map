@@ -6,6 +6,7 @@ public sealed class SaveTimings
 {
     public double PreviousFingerprintMilliseconds { get; internal set; }
     public double WriteContainerMilliseconds { get; internal set; }
+    public long SerializedObjects { get; internal set; }
     public double FlushMilliseconds { get; internal set; }
     public double ReadBackMilliseconds { get; internal set; }
     public double PublishMilliseconds { get; internal set; }

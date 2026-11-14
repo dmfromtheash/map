@@ -87,7 +87,7 @@ public sealed record MapDocument
 
         var orderedLayers = LayerOrderPolicy.Normalize(layers);
         var layerIds = new HashSet<LayerId>();
-        var objectIds = new HashSet<ObjectId>();
+        var objectIds = new HashSet<ObjectId>(orderedLayers.OfType<ObjectLayer>().Sum(l => l.Objects.Count));
         var nodeIds = new HashSet<VectorNodeId>();
         var portalIds = new HashSet<PortalId>();
         var regionIds = new HashSet<ShapeRegionId>();
@@ -130,15 +130,19 @@ public sealed record MapDocument
                             $"Duplicate object id {sceneObject.Id}.", nameof(layers));
                     }
 
-                    var nodes = sceneObject.Line?.Nodes
-                        ?? sceneObject.Shape?.Regions.SelectMany(region => region.Nodes).ToList()
-                        ?? [];
-                    var portals = sceneObject.Line?.Portals ?? sceneObject.Shape?.Portals ?? [];
-                    if (nodes.Any(node => !nodeIds.Add(node.Id))
-                        || portals.Any(portal => !portalIds.Add(portal.Id))
-                        || sceneObject.Shape?.Regions.Any(region => !regionIds.Add(region.Id)) == true)
+                    // Only lines and shapes own vector ids; a stamp allocates nothing here.
+                    if (sceneObject.Line is not null || sceneObject.Shape is not null)
                     {
-                        throw new ArgumentException("Vector node, portal and region ids are unique across the document.", nameof(layers));
+                        var nodes = sceneObject.Line?.Nodes
+                            ?? sceneObject.Shape?.Regions.SelectMany(region => region.Nodes).ToList()
+                            ?? [];
+                        var portals = sceneObject.Line?.Portals ?? sceneObject.Shape?.Portals ?? [];
+                        if (nodes.Any(node => !nodeIds.Add(node.Id))
+                            || portals.Any(portal => !portalIds.Add(portal.Id))
+                            || sceneObject.Shape?.Regions.Any(region => !regionIds.Add(region.Id)) == true)
+                        {
+                            throw new ArgumentException("Vector node, portal and region ids are unique across the document.", nameof(layers));
+                        }
                     }
                     ValidateComposition(sceneObject);
                 }
@@ -263,6 +267,12 @@ public sealed record MapDocument
         {
             throw new ArgumentException(
                 "Checkpoint ids are unique within a document.", nameof(checkpoints));
+        }
+        // Prepare at load/public construction, before the snapshot becomes editable.
+        foreach (var layer in Layers.OfType<ObjectLayer>())
+        {
+            _ = AssetUsageIndex.For(layer);
+            _ = PlacementOwnershipIndex.For(layer);
         }
     }
 
@@ -500,6 +510,8 @@ public sealed record MapDocument
                     "A replacement revision must preserve layer identity, kind and order.",
                     nameof(layers));
             }
+            if (Layers[index] is ObjectLayer source && layers[index] is ObjectLayer target
+                && !ReferenceEquals(source, target)) PlacementOwnershipIndex.Share(source, target);
         }
 
         return new MapDocument(this, revisedLayers: layers);

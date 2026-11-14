@@ -8,10 +8,8 @@ namespace Map.Presentation.Tests;
 public sealed class UiAsyncButtonTests
 {
     [Fact]
-    public void Both_async_button_factories_restore_state_and_report_synchronous_and_task_failures()
+    public Task Both_async_button_factories_restore_state_and_report_synchronous_and_task_failures() => Support.EditorUiThread.Run(() =>
     {
-        // Only the existing CPU geometry backend for the command glyph: no application or window.
-        Avalonia.Skia.SkiaPlatform.Initialize();
         foreach (var command in new[] { false, true })
             foreach (var synchronousThrow in new[] { false, true })
             {
@@ -57,12 +55,11 @@ public sealed class UiAsyncButtonTests
                 button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                 Assert.True(button.IsEnabled);
             }
-    }
+    });
 
     [Fact]
-    public void A_second_click_while_the_action_runs_is_ignored()
+    public Task A_second_click_while_the_action_runs_is_ignored() => Support.EditorUiThread.Run(() =>
     {
-        Avalonia.Skia.SkiaPlatform.Initialize();
         var pending = new TaskCompletionSource();
         var calls = 0;
         var button = Ui.AsyncButton("SlowButton", "Test", () => { calls++; return pending.Task; });
@@ -72,7 +69,7 @@ public sealed class UiAsyncButtonTests
         pending.SetResult();
         button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         Assert.Equal(2, calls);
-    }
+    });
 
     [Fact]
     public async Task Fire_and_forget_observes_a_later_fault_and_a_throw_before_returning_a_task()

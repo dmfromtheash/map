@@ -212,6 +212,24 @@ public sealed class AssetCatalogSnapshotTests(ITestOutputHelper output) : IDispo
         Assert.True(own.FindSet("set-0")!.Favorite);
     }
 
+    [Fact]
+    public async Task Export_snapshot_capture_is_constant_cost_and_keeps_records_and_mount_roots_together()
+    {
+        await using var own = new AssetCatalog(Seed("export-own", 1, start: 50000));
+        var drive = Seed("export-drive", 20000);
+        own.SetMounts([drive]);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var frozen = own.CaptureReadSnapshot();
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.True(allocated < 16 * 1024, $"Capturing the worker view allocated {allocated} bytes.");
+        own.SetMounts([]);
+        var records = await Task.Run(() => frozen.Records);
+        Assert.Equal(20001, records.Count);
+        Assert.Equal(own.Root, frozen.RootFor(records.Single(r => r.Sha256 == 50000.ToString("x64"))));
+        Assert.Equal(Path.GetFullPath(drive), frozen.RootFor(records.Single(r => r.Sha256 == 0.ToString("x64"))));
+        Assert.Single(own.Records);
+    }
+
     private string Seed(string name, int count, int start = 0)
     {
         var root = Path.Combine(_temp, name);

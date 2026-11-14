@@ -1465,6 +1465,24 @@ public sealed partial class EditorViewModel
         }
     }
 
+    /// <summary>Tag of the owner's test library cards (DEC-104): their preparations can be dropped at once.</summary>
+    public const string TestAssetTag = "Тестовое";
+
+    // Targeted cleanup of the machine cache of asset preparations (DEC-111 p.4). No UI yet: the owner chooses where
+    // the commands appear. Each removes only this PC's cache files, never library files, and returns what it removed.
+    public Task<Services.DerivedCachePurgeResult> PurgeDerivedCache(IEnumerable<string> sha) =>
+        StampImages is Services.CatalogStampImageSource source ? source.PurgeDerived(sha) : NoDerivedCache;
+
+    public Task<Services.DerivedCachePurgeResult> PurgeDerivedCacheByTag(string tag) =>
+        StampImages is Services.CatalogStampImageSource source ? source.PurgeDerivedByTag(tag) : NoDerivedCache;
+
+    public Task<Services.DerivedCachePurgeResult> PurgeTestAssetsDerivedCache() => PurgeDerivedCacheByTag(TestAssetTag);
+
+    public Task<Services.DerivedCachePurgeResult> PurgeUnusedDerivedCache() =>
+        StampImages is Services.CatalogStampImageSource source ? source.PurgeUnused() : NoDerivedCache;
+
+    private static Task<Services.DerivedCachePurgeResult> NoDerivedCache => Task.FromResult(Services.DerivedCachePurgeResult.Nothing);
+
     public bool ExportSelectedCompositionPackage(string path)
     {
         if (Session.SelectedObjectIds.Count == 0)

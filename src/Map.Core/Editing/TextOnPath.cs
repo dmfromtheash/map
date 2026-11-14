@@ -170,27 +170,21 @@ public static class TextOnPath
     {
         ArgumentNullException.ThrowIfNull(before);
         ArgumentNullException.ThrowIfNull(after);
-        if (ReferenceEquals(before, after)) return after;
+        if (ReferenceEquals(before, after) || !after.Layers.OfType<ObjectLayer>().Any(l => BoundObjectIndex.For(l).Paths.Count > 0)) return after;
         var changedTargets = ChangedTargets(before, after);
-        Dictionary<ObjectId, SceneObject>? previousLabels = null;
-        List<MapLayer>? layers = null;
+        var replacements = new List<SceneObject>();
         for (var index = 0; index < after.Layers.Count; index++)
         {
             if (after.Layers[index] is not ObjectLayer layer) continue;
             var previousLayer = before.FindLayer(layer.Id) as ObjectLayer;
-            var objectsChanged = previousLayer is null || !ReferenceEquals(previousLayer.Objects, layer.Objects);
-            if (changedTargets.Count == 0 && !objectsChanged) continue;
-            SceneObject[]? rewritten = null;
-            for (var i = 0; i < layer.Objects.Count; i++)
+            var labels = BoundObjectIndex.For(layer);
+            var previousLabels = previousLayer is null ? new BoundObjectIndex().Paths : BoundObjectIndex.For(previousLayer).Paths;
+            foreach (var id in BoundObjectIndex.Candidates(previousLayer, layer, labels.Paths, previousLabels, labels.PathTargets, changedTargets))
             {
-                var item = layer.Objects[i];
+                var item = labels.Paths[id];
                 if (item.Text?.Path is not { } binding) continue;
-                SceneObject? previous = null;
-                if (objectsChanged)
-                {
-                    previousLabels ??= BoundLabels(before);
-                    previousLabels.TryGetValue(item.Id, out previous);
-                }
+                previousLabels.TryGetValue(item.Id, out var previous);
+                previous ??= BoundObjectIndex.PreviousLabel(before, item.Id, path: true);
 
                 SceneObject laid;
                 if (changedTargets.Contains(binding.TargetId))
@@ -216,28 +210,11 @@ public static class TextOnPath
                 }
 
                 if (ReferenceEquals(laid, item)) continue;
-                rewritten ??= [.. layer.Objects];
-                rewritten[i] = laid;
+                replacements.Add(laid);
             }
-
-            if (rewritten is null) continue;
-            layers ??= [.. after.Layers];
-            layers[index] = layer with { Objects = rewritten };
         }
 
-        return layers is null ? after : after.WithLayers(layers);
-    }
-
-    private static Dictionary<ObjectId, SceneObject> BoundLabels(MapDocument document)
-    {
-        var result = new Dictionary<ObjectId, SceneObject>();
-        foreach (var layer in document.Layers.OfType<ObjectLayer>())
-        foreach (var item in layer.Objects)
-        {
-            if (item.Text?.Path is not null) result[item.Id] = item;
-        }
-
-        return result;
+        return replacements.Count == 0 ? after : DocumentEditor.ReplaceObjects(after, replacements);
     }
 
     private static HashSet<Guid> ChangedTargets(MapDocument before, MapDocument after)
@@ -296,6 +273,7 @@ public static class TextOnPath
 
     private static bool SameItems<T>(ImmutableArray<T> a, ImmutableArray<T> b) where T : class
     {
+        if (a == b) return true;
         if (a.Length != b.Length) return false;
         for (var i = 0; i < a.Length; i++) if (!ReferenceEquals(a[i], b[i])) return false;
         return true;
@@ -490,8 +468,8 @@ public sealed class TextPathFollowCommand : IEditCommand
         foreach (var layer in followed.Layers.OfType<ObjectLayer>())
         {
             if (edited.FindLayer(layer.Id) is not ObjectLayer previous || ReferenceEquals(previous.Objects, layer.Objects)) continue;
-            var before = previous.Objects.Where(item => item.Text?.Path is not null).ToDictionary(item => item.Id);
-            foreach (var item in layer.Objects)
+            var before = BoundObjectIndex.For(previous).Paths;
+            foreach (var item in BoundObjectIndex.ChangedLabels(previous, layer, BoundObjectIndex.For(layer).Paths))
             {
                 if (item.Text?.Path is not null && before.TryGetValue(item.Id, out var was) && !ReferenceEquals(was, item))
                     labels.Add((layer.Id, was, item));
@@ -513,15 +491,7 @@ public sealed class TextPathFollowCommand : IEditCommand
 
     private MapDocument Replace(MapDocument document, bool after)
     {
-        var result = document;
-        foreach (var group in _labels.GroupBy(label => label.Layer))
-        {
-            var map = group.ToDictionary(label => label.Before.Id, label => after ? label.After : label.Before);
-            result = result.WithLayer(group.Key, layer => layer is ObjectLayer objects
-                ? objects with { Objects = [.. objects.Objects.Select(item => map.TryGetValue(item.Id, out var swap) ? swap : item)] }
-                : layer);
-        }
-
-        return result;
+        return _labels.Count == 0 ? document : DocumentEditor.ReplaceObjects(document,
+            _labels.Select(label => after ? label.After : label.Before).ToArray());
     }
 }

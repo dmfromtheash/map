@@ -1892,7 +1892,8 @@ public sealed partial class EditorView
                             }, "compact"),
                             AssetCommand("PlaceLinkedStampButton", "Разместить как связанный", () =>
                             {
-                                if (_selectedAsset is not null) _editor.PlaceStamp(_selectedAsset, embedded: false);
+                                if (_selectedAsset is { } record)
+                                    UiTasks.Forget(this, () => _editor.PlaceStampAsync(record, embedded: false));
                             }, "compact"),
                             AssetCommand("ReplaceStampAssetButton", "Заменить ассет у выделенного объекта", () =>
                             {

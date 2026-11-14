@@ -33,6 +33,9 @@
 
   <ItemGroup>
     <Compile Include="..\Shared\FixedWorkingMemory.cs" Link="Shared\FixedWorkingMemory.cs" />
+    <Compile Include="../../tools/Map.EditLatency/UiProbe.cs" Link="Support/UiProbe.cs" />
+    <Compile Include="../../tools/Map.Performance/DerivedBuildProbe.cs" Link="Support/DerivedBuildProbe.cs" />
+    <Compile Include="../../tools/Map.Performance/PerformanceContract.cs" Link="Support/PerformanceContract.cs" />
     <EmbeddedResource Include="Fixtures\hex-json-2534315.json" />
   </ItemGroup>
 

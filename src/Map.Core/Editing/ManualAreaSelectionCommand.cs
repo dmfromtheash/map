@@ -41,13 +41,17 @@ public sealed class ManualAreaSelectionCommand(IEditCommand edit, IReadOnlyColle
             if (layers[li] is not ObjectLayer layer || layer.PlacementAreas.IsEmpty
                 || !selected.TryGetValue(layer.Id, out var objects)) continue;
             var selectedIds = objects.Select(o => o.Id).ToHashSet();
-            var keys = objects.Select(o => new PlacementAreaSlot(PlacementAreaGeometry.Cell(o.X + o.Width / 2),
-                PlacementAreaGeometry.Cell(o.Y + o.Height / 2), 0).Cell).ToHashSet();
+            var ownership = PlacementOwnershipIndex.For(layer);
             var areas = layer.PlacementAreas.ToBuilder();
-            var changed = false;
-            for (var ai = 0; ai < areas.Count; ai++)
+            var revisedAreas = new List<PlacementArea>();
+            var detachedIds = new List<ObjectId>();
+            foreach (var groupByOwner in objects.Where(o => ownership.Owner(o.Id) is PlacementArea)
+                .GroupBy(o => ((PlacementArea)ownership.Owner(o.Id)!).Id))
             {
-                var area = areas[ai];
+                var area = (PlacementArea)ownership.Owner(groupByOwner.First().Id)!;
+                var ai = areas.IndexOf(area);
+                var keys = groupByOwner.Select(o => new PlacementAreaSlot(PlacementAreaGeometry.Cell(o.X + o.Width / 2),
+                    PlacementAreaGeometry.Cell(o.Y + o.Height / 2), 0).Cell).ToHashSet();
                 var removed = keys.Where(area.Cells.ContainsKey).SelectMany(k => area.Cells[k])
                     .Where(m => selectedIds.Contains(m.ObjectId)).ToArray();
                 if (removed.Length == 0) continue;
@@ -61,10 +65,12 @@ public sealed class ManualAreaSelectionCommand(IEditCommand edit, IReadOnlyColle
                     Exclusions = area.Exclusions.Union(removed.Select(m => m.Slot)) };
                 PlacementAreaDrawOrder.Detach(area, areas[ai], removed.Select(m => index.FindObject(m.ObjectId)!));
                 detachedCount += removed.Length;
-                changed = true;
+                revisedAreas.Add(areas[ai]);
+                detachedIds.AddRange(removed.Select(m => m.ObjectId));
             }
-            if (!changed) continue;
+            if (revisedAreas.Count == 0) continue;
             var revised = layer with { PlacementAreas = areas.ToImmutable() };
+            PlacementOwnershipIndex.RegisterAreas(layer, revised, revisedAreas, detachedIds);
             layers[li] = revised;
             changedLayers.Add((layer, revised));
         }

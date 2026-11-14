@@ -31,6 +31,14 @@ public sealed class ExportStampImageSource : IStampImageSource, IDisposable
     private readonly HashSet<string> _missingSteps = new(StringComparer.OrdinalIgnoreCase);
 
     public ExportStampImageSource(MapDocument snapshot, string? projectPath, AssetCatalog? catalog)
+        : this(snapshot, projectPath, catalog?.CaptureReadSnapshot())
+    {
+    }
+
+    internal static ExportStampImageSource FromSnapshot(MapDocument snapshot, string? projectPath, AssetCatalogReadSnapshot? catalog) =>
+        new(snapshot, projectPath, catalog);
+
+    private ExportStampImageSource(MapDocument snapshot, string? projectPath, AssetCatalogReadSnapshot? catalog)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         _snapshot = snapshot;
@@ -41,7 +49,7 @@ public sealed class ExportStampImageSource : IStampImageSource, IDisposable
             .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase)
             ?? new Dictionary<string, AssetRecord>(StringComparer.OrdinalIgnoreCase);
         // Frozen with the records: a picture from an attached drive library reads its ladder there.
-        _rootBySha = catalog is null || catalog.Mounts.Count == 0
+        _rootBySha = catalog is null
             ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             : _catalogRecords.Values.Select(record => (record.Sha256, Root: catalog.RootFor(record)))
                 .Where(pair => !string.Equals(pair.Root, _catalogRoot, StringComparison.OrdinalIgnoreCase))

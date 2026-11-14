@@ -256,9 +256,7 @@ public sealed class PlaceAssetObjectsCommand : IEditCommand
 
         // Only references this command actually introduced, and only those no surviving stamp
         // still points at, are withdrawn. Anything else would break another object's content.
-        var stillUsed = CompositionTransfer.UsedAssetHashes(
-            withoutObjects.Layers.OfType<ObjectLayer>().SelectMany(layer => layer.Objects));
-        var withdraw = _introduced.Where(sha => !stillUsed.Contains(sha))
+        var withdraw = _introduced.Where(sha => AssetUsageIndex.Count(withoutObjects, sha) == 0)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         return withdraw.Count == 0
             ? withoutObjects
@@ -342,9 +340,7 @@ public sealed class PasteObjectsCommand : IEditCommand
 
         // Same rule as a placement: only references this paste introduced, and only those no
         // surviving object still points at, are withdrawn.
-        var stillUsed = CompositionTransfer.UsedAssetHashes(
-            withoutObjects.Layers.OfType<ObjectLayer>().SelectMany(layer => layer.Objects));
-        var withdraw = _introduced.Where(sha => !stillUsed.Contains(sha))
+        var withdraw = _introduced.Where(sha => AssetUsageIndex.Count(withoutObjects, sha) == 0)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         return withdraw.Count == 0
             ? withoutObjects
@@ -444,9 +440,7 @@ public sealed class ReplaceStampAssetCommand : IEditCommand
     {
         var reverted = DocumentEditor.ReplaceObject(document, _before);
         if (_introduced.Count == 0) return reverted;
-        var stillUsed = CompositionTransfer.UsedAssetHashes(
-            reverted.Layers.OfType<ObjectLayer>().SelectMany(layer => layer.Objects));
-        var withdraw = _introduced.Where(hash => !stillUsed.Contains(hash))
+        var withdraw = _introduced.Where(hash => AssetUsageIndex.Count(reverted, hash) == 0)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         return withdraw.Count == 0 ? reverted : reverted.WithAssets(
             [.. reverted.Assets.Where(asset => !withdraw.Contains(asset.Sha256))]);
@@ -493,9 +487,7 @@ public sealed class UpdateStampStyleWithAssetCommand : IEditCommand
     {
         var reverted = DocumentEditor.ReplaceObject(document, _before);
         if (!_introduced) return reverted;
-        var used = CompositionTransfer.UsedAssetHashes(
-            reverted.Layers.OfType<ObjectLayer>().SelectMany(layer => layer.Objects));
-        return used.Contains(_asset.Sha256)
+        return AssetUsageIndex.Count(reverted, _asset.Sha256) > 0
             ? reverted
             : reverted.WithAssets([.. reverted.Assets.Where(item =>
                 !string.Equals(item.Sha256, _asset.Sha256, StringComparison.OrdinalIgnoreCase))]);
@@ -622,55 +614,83 @@ public sealed class TransformObjectCommand : IEditCommand
     public MapDocument Revert(MapDocument document) => _inner.Revert(document);
 }
 
-/// <summary>Removes objects (delete / move-to-layer source side) as one entry.</summary>
+/// <summary>
+/// Removes objects (delete / move-to-layer source side) as one entry. Positions come from the
+/// layer's identity slots and the storage drops only the touched chunks, so Apply, Undo and Redo
+/// cost what they change; the derived lookups follow through the same removal/insertion deltas.
+/// </summary>
 public sealed class RemoveObjectsCommand : IEditCommand
 {
     private readonly LayerId _layerId;
-    private readonly IReadOnlyList<(int Index, SceneObject Object)> _removed;
+    // Ascending original positions with the removed instances: Undo puts these very objects back.
+    private readonly (int Index, SceneObject Object)[] _removed;
+    private readonly HashSet<ObjectId> _ids;
 
     public RemoveObjectsCommand(MapDocument document, LayerId layerId, IReadOnlyCollection<ObjectId> ids)
     {
+        ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(ids);
         _layerId = layerId;
 
         var layer = document.FindLayer(layerId) as ObjectLayer
             ?? throw new InvalidOperationException($"Layer {layerId} does not hold objects.");
 
-        _removed = [.. layer.Objects
-            .Select((o, i) => (Index: i, Object: o))
-            .Where(p => ids.Contains(p.Object.Id))];
-
-        if (_removed.Count != ids.Count)
+        var storage = layer.ObjectStorage;
+        _ids = new HashSet<ObjectId>(ids.Count);
+        var removed = new List<(int Index, SceneObject Object)>(ids.Count);
+        foreach (var id in ids)
         {
-            throw new InvalidOperationException("Some objects to remove are not on the layer.");
-        }
-    }
-
-    public string Name => $"Delete {_removed.Count} object(s)";
-
-    public long? MeasuredWorkingBytes => EditCost.ForObjects(_removed.Count);
-
-    public MapDocument Apply(MapDocument document)
-    {
-        var ids = _removed.Select(r => r.Object.Id).ToHashSet();
-        return document.WithLayer(_layerId, layer =>
-        {
-            var objectLayer = (ObjectLayer)layer;
-            return objectLayer with { Objects = [.. objectLayer.Objects.Where(o => !ids.Contains(o.Id))] };
-        });
-    }
-
-    public MapDocument Revert(MapDocument document) =>
-        document.WithLayer(_layerId, layer =>
-        {
-            var objects = ((ObjectLayer)layer).Objects.ToList();
-            foreach (var (index, sceneObject) in _removed.OrderBy(r => r.Index))
+            var index = storage.IndexOfId(id);
+            if (index < 0 || !_ids.Add(id))
             {
-                objects.Insert(Math.Min(index, objects.Count), sceneObject);
+                throw new InvalidOperationException("Some objects to remove are not on the layer.");
             }
 
-            return ((ObjectLayer)layer) with { Objects = objects };
-        });
+            removed.Add((index, storage[index]));
+        }
+
+        removed.Sort(static (left, right) => left.Index.CompareTo(right.Index));
+        _removed = [.. removed];
+    }
+
+    public string Name => $"Delete {_removed.Length} object(s)";
+
+    public long? MeasuredWorkingBytes => EditCost.ForObjects(_removed.Length);
+
+    /// <summary>The removed objects in their layer order.</summary>
+    internal IReadOnlyList<SceneObject> RemovedObjects => [.. _removed.Select(r => r.Object)];
+
+    public MapDocument Apply(MapDocument document) =>
+        _removed.Length == 0 ? document : DocumentEditor.RemoveObjects(document, _layerId, _ids);
+
+    public MapDocument Revert(MapDocument document)
+    {
+        if (_removed.Length == 0) return document;
+        var layer = document.FindLayer(_layerId) as ObjectLayer
+            ?? throw new InvalidOperationException($"Layer {_layerId} does not hold objects.");
+
+        // Same result as inserting each object at its original index in ascending order, clamped
+        // to the end: in the reduced list the j-th removed object returns before index - j.
+        var remaining = layer.Objects.Count;
+        var batches = new Dictionary<int, IReadOnlyList<SceneObject>>();
+        List<SceneObject>? batch = null;
+        var batchKey = -1;
+        for (var j = 0; j < _removed.Length; j++)
+        {
+            var (index, sceneObject) = _removed[j];
+            var key = index < remaining + j ? index - j : remaining;
+            if (batch is null || key != batchKey)
+            {
+                batch = [];
+                batchKey = key;
+                batches.Add(key, batch);
+            }
+
+            batch.Add(sceneObject);
+        }
+
+        return DocumentEditor.InsertObjects(document, _layerId, batches);
+    }
 }
 
 /// <summary>Moves objects from one object layer to the end of another, preserving relative order.</summary>
@@ -695,9 +715,7 @@ public sealed class MoveObjectsToLayerCommand : IEditCommand
 
         _remove = new RemoveObjectsCommand(document, sourceLayerId, ids);
         _targetLayerId = targetLayerId;
-
-        var source = (ObjectLayer)document.FindLayer(sourceLayerId)!;
-        _moved = [.. source.Objects.Where(o => ids.Contains(o.Id))];
+        _moved = _remove.RemovedObjects;
     }
 
     public string Name => $"Move {_moved.Count} object(s) to another layer";
@@ -848,29 +866,40 @@ public sealed class DeleteObjectsCommand : IEditCommand
             throw new ArgumentException("Deletion needs at least one object.", nameof(ids));
         }
 
+        // Located through the revision index: the cost follows the deleted objects, not the map.
+        var index = DocumentRevisionIndex.For(document);
         var deleting = ids.ToHashSet();
-        var byLayer = new List<RemoveObjectsCommand>();
-        foreach (var layer in document.Layers.OfType<ObjectLayer>())
+        var onLayers = new Dictionary<LayerId, List<ObjectId>>();
+        var touchedGroups = new HashSet<Guid>();
+        foreach (var id in deleting)
         {
-            var onLayer = layer.Objects.Where(o => deleting.Contains(o.Id)).Select(o => o.Id).ToList();
-            if (onLayer.Count > 0)
+            if (!index.TryFind(id, out var location))
+            {
+                throw new InvalidOperationException("Some objects to delete are not part of this document.");
+            }
+
+            if (!onLayers.TryGetValue(location.LayerId, out var onLayer))
+            {
+                onLayers.Add(location.LayerId, onLayer = []);
+            }
+
+            onLayer.Add(id);
+            if (location.Object.GroupId is { } touched)
+            {
+                touchedGroups.Add(touched);
+            }
+        }
+
+        var byLayer = new List<RemoveObjectsCommand>(onLayers.Count);
+        foreach (var layer in document.Layers)
+        {
+            if (layer is ObjectLayer && onLayers.TryGetValue(layer.Id, out var onLayer))
             {
                 byLayer.Add(new RemoveObjectsCommand(document, layer.Id, onLayer));
             }
         }
 
-        var located = document.Layers.OfType<ObjectLayer>()
-            .SelectMany(l => l.Objects).Count(o => deleting.Contains(o.Id));
-        if (located != deleting.Count)
-        {
-            throw new InvalidOperationException("Some objects to delete are not part of this document.");
-        }
-
         // Survivors of touched groups: exactly one left means its group dissolves with the delete.
-        var touchedGroups = document.Layers.OfType<ObjectLayer>().SelectMany(l => l.Objects)
-            .Where(o => deleting.Contains(o.Id) && o.GroupId is not null)
-            .Select(o => o.GroupId!.Value)
-            .Distinct();
         var singletons = new List<SceneObject>();
         foreach (var groupId in touchedGroups)
         {
@@ -1387,16 +1416,40 @@ public static class DocumentEditor
 {
     internal static MapDocument RemovePathObjects(MapDocument document, LayerId layerId, IReadOnlySet<ObjectId> ids)
     {
-        var source = (ObjectLayer)document.FindLayer(layerId)!;
-        var removed = ids.Select(source.ObjectStorage.IndexOfId).Where(i => i >= 0).Order().ToArray();
-        var storage = source.ObjectStorage.RemoveIds(ids);
-        var targetLayer = source with { Objects = storage };
+        _ = DocumentRevisionIndex.For(document);
+        return RemoveObjects(document, layerId, ids);
+    }
+
+    /// <summary>
+    /// Shared removal boundary (delete, move-to-layer, path regeneration). Ids absent from the
+    /// layer are ignored. Only the chunks of the removed objects are rebuilt, and the revision
+    /// index, names, spatial grid, asset usage and bound labels receive the removal delta.
+    /// </summary>
+    internal static MapDocument RemoveObjects(MapDocument document, LayerId layerId, IReadOnlySet<ObjectId> ids)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(ids);
         var layers = document.Layers.ToArray();
-        layers[Array.FindIndex(layers, l => l.Id == layerId)] = targetLayer;
+        var layerIndex = Array.FindIndex(layers, layer => layer.Id == layerId);
+        if (layerIndex < 0 || layers[layerIndex] is not ObjectLayer source)
+        {
+            throw new InvalidOperationException($"Layer {layerId} does not hold objects.");
+        }
+
+        var removed = new List<int>(ids.Count);
+        foreach (var id in ids)
+        {
+            var position = source.ObjectStorage.IndexOfId(id);
+            if (position >= 0) removed.Add(position);
+        }
+
+        removed.Sort();
+        var targetLayer = source with { Objects = source.ObjectStorage.RemovePositions(removed) };
+        layers[layerIndex] = targetLayer;
         var target = document.WithRevisedLayers(layers);
-        DocumentRevisionIndex.RegisterPathRemoval(document, target, targetLayer, removed.Length);
+        DocumentRevisionIndex.RegisterRemoval(document, target, layerId, removed.Count);
         ObjectNameIndex.Register(document, target, removed.Select(i => source.Objects[i]), []);
-        ObjectLayerChanges.Register(source, targetLayer, removed, [], orderCompacted: true);
+        ObjectLayerChanges.Register(source, targetLayer, [.. removed], [], orderCompacted: true);
         return target;
     }
 
@@ -1456,7 +1509,9 @@ public static class DocumentEditor
         var locations = new List<DocumentObjectLocation>(); var offset = 0;
         foreach (var batch in batches.OrderBy(kv => kv.Key))
             foreach (var item in batch.Value) locations.Add(new(item, layerId, li, batch.Key + offset++));
-        DocumentRevisionIndex.RegisterAppends(document, result, locations, revised);
+        // Undo of a delete or a move brings back the very objects the structural layer lost.
+        if (!DocumentRevisionIndex.RegisterReinsertion(document, result, layerId, additions))
+            DocumentRevisionIndex.RegisterAppends(document, result, locations, revised);
         ObjectNameIndex.Register(document, result, [], additions);
         ObjectLayerChanges.Register(source, revised, [], locations.Select(l => l.ObjectIndex).ToArray(), orderCompacted: true);
         return result;
@@ -1492,7 +1547,7 @@ public static class DocumentEditor
                 Objects = objectLayer.ObjectStorage.RemoveRange(start, additions.Count),
             };
             var target = document.WithRevisedLayers(layers);
-            DocumentRevisionIndex.RegisterTailRemoval(document, target, additions);
+            DocumentRevisionIndex.RegisterTailRemoval(document, target, additions, layerId);
             ObjectNameIndex.Register(document, target,
                 Enumerable.Range(start, additions.Count).Select(i => objectLayer.Objects[i]).ToArray(), []);
             ObjectLayerChanges.Register(objectLayer, (ObjectLayer)layers[layerIndex],
@@ -1500,12 +1555,7 @@ public static class DocumentEditor
             return target;
         }
 
-        var ids = additions.Select(sceneObject => sceneObject.Id).ToHashSet();
-        return document.WithLayer(layerId, layer =>
-        {
-            var current = (ObjectLayer)layer;
-            return current with { Objects = [.. current.Objects.Where(item => !ids.Contains(item.Id))] };
-        });
+        return RemoveObjects(document, layerId, additions.Select(sceneObject => sceneObject.Id).ToHashSet());
     }
 
     /// <summary>

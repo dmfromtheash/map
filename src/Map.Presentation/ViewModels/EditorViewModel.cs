@@ -179,9 +179,10 @@ public enum EditorChangeReason
     SidePanelData = 1 << 5,
 }
 
-public sealed class EditorSceneInvalidatedEventArgs(EditorChangeReason reasons) : EventArgs
+public sealed class EditorSceneInvalidatedEventArgs(EditorChangeReason reasons, SelectionRefreshDelta? selection = null) : EventArgs
 {
     public EditorChangeReason Reasons { get; } = reasons;
+    public SelectionRefreshDelta? Selection { get; } = selection;
 
     public bool Has(EditorChangeReason reason) => (Reasons & reason) != 0;
 }
@@ -192,6 +193,10 @@ public sealed class EditorSceneInvalidatedEventArgs(EditorChangeReason reasons) 
 /// </summary>
 public sealed partial class EditorViewModel : ViewModelBase
 {
+    /// <summary>Set by the desktop host to its validated user/test profile, never a mounted library.</summary>
+    public static string? DerivedAssetCacheRoot { get; set; }
+    /// <summary>When that cache's janitor runs; null is the program's default (startup, every 30 min, after builds).</summary>
+    public static Services.DerivedCacheMaintenancePolicy? DerivedCacheMaintenance { get; set; }
     private readonly IProjectStore _store;
     private readonly IRecentMaps _recent;
     private readonly IFilePicker _filePicker;
@@ -370,7 +375,8 @@ public sealed partial class EditorViewModel : ViewModelBase
         EditorLocalPreferences? localPreferences = null,
         Action<EditorLocalPreferences>? saveLocalPreferences = null,
         DateTimeOffset? lastSavedUtc = null,
-        Map.Core.Resources.WorkingMemoryBudget? memory = null)
+        Map.Core.Resources.WorkingMemoryBudget? memory = null,
+        IStampImageSource? stampImages = null)
     {
         _workingMemory = memory ?? Map.Core.Resources.WorkingMemoryBudget.Shared;
         Session = new EditingSession(document, _workingMemory);
@@ -423,9 +429,12 @@ public sealed partial class EditorViewModel : ViewModelBase
             availableFontFamilies ?? SystemFontCatalog.Families);
         _assetResolver = assetResolver
             ?? (assetCatalog is null ? null : new CatalogAssetContentResolver(assetCatalog));
-        StampImages = assetCatalog is null
+        // A native probe may supply the same production source with a different cache policy.
+        // Its lifetime is transferred to the editor/canvas, like the default catalog source.
+        StampImages = stampImages ?? (assetCatalog is null
             ? null
-            : new CatalogStampImageSource(assetCatalog, () => Session.Document, () => DocumentPath);
+            : new CatalogStampImageSource(assetCatalog, () => Session.Document, () => DocumentPath,
+                derivedRoot: DerivedAssetCacheRoot, derivedMaintenance: DerivedCacheMaintenance));
         AttachLibraryTextures();
 
         // The tools start at sizes that fit this canvas (А1.2); what the map already holds is not touched.
@@ -454,6 +463,9 @@ public sealed partial class EditorViewModel : ViewModelBase
         }
 
         SceneChanged += (_, _) => RefreshOpenExportAfterSceneChange();
+        // Large maps: the lookups of the first click and placement are built off the input thread.
+        SceneChanged += (_, _) => QueueDerivedIndexPreparation();
+        QueueDerivedIndexPreparation();
     }
 
     public EditingSession Session { get; }
@@ -480,8 +492,18 @@ public sealed partial class EditorViewModel : ViewModelBase
     /// </summary>
     public event EventHandler<EditorSceneInvalidatedEventArgs>? SceneInvalidated;
 
-    private void InvalidateScene(EditorChangeReason reasons) =>
-        SceneInvalidated?.Invoke(this, new EditorSceneInvalidatedEventArgs(reasons));
+    private SelectionRefreshDelta _lastNotifiedSelection = SelectionRefreshDelta.Empty;
+    private void InvalidateScene(EditorChangeReason reasons)
+    {
+        SelectionRefreshDelta? delta = null;
+        if ((reasons & EditorChangeReason.Selection) != 0)
+        {
+            var current = SelectionRefreshDelta.Capture(this);
+            delta = _lastNotifiedSelection.Merge(current);
+            _lastNotifiedSelection = current;
+        }
+        SceneInvalidated?.Invoke(this, new EditorSceneInvalidatedEventArgs(reasons, delta));
+    }
 
     // ---------------------------------------------------------------- status
 
@@ -1131,9 +1153,10 @@ public sealed partial class EditorViewModel : ViewModelBase
             Raise(nameof(PrimaryAutosaveSummary));
             try
             {
-                using var imageSource = new ExportStampImageSource(snapshot, path, _assetCatalog);
+                var catalog = _assetCatalog?.CaptureReadSnapshot();
                 var thumbnail = await RunResourceOperationAsync(() => Task.Run(() =>
                 {
+                    using var imageSource = ExportStampImageSource.FromSnapshot(snapshot, path, catalog);
                     var thumbnail = ThumbnailRenderer.RenderPng(snapshot, stamps: imageSource);
                     _store.Save(AtlasSnapshot(snapshot, path), path, metadata, thumbnail);
                     return thumbnail;
@@ -1188,9 +1211,10 @@ public sealed partial class EditorViewModel : ViewModelBase
             try
             {
                 var sourcePath = DocumentPath;
-                using var imageSource = new ExportStampImageSource(snapshot, sourcePath, _assetCatalog);
+                var catalog = _assetCatalog?.CaptureReadSnapshot();
                 await RunResourceOperationAsync(() => Task.Run(() =>
                 {
+                    using var imageSource = ExportStampImageSource.FromSnapshot(snapshot, sourcePath, catalog);
                     var thumbnail = ThumbnailRenderer.RenderPng(snapshot, stamps: imageSource);
                     _store.SaveAutosave(AtlasSnapshot(snapshot, sourcePath), sourcePath, metadata, thumbnail);
                     return true;
@@ -1322,9 +1346,11 @@ public sealed partial class EditorViewModel : ViewModelBase
             try
             {
                 savedSnapshot = AtlasSnapshot(snapshot, path);
-                using var imageSource = new ExportStampImageSource(snapshot, DocumentPath, _assetCatalog);
+                var sourcePath = DocumentPath;
+                var catalog = _assetCatalog?.CaptureReadSnapshot();
                 thumbnail = await RunResourceOperationAsync(() => Task.Run(() =>
                 {
+                    using var imageSource = ExportStampImageSource.FromSnapshot(snapshot, sourcePath, catalog);
                     // The thumbnail comes from the same scene evaluator as the canvas, without
                     // selection or any editor chrome.
                     var thumbnail = ThumbnailRenderer.RenderPng(snapshot, stamps: imageSource);

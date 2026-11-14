@@ -43,8 +43,13 @@ public static class BlendModes
          "Color", "Luminosity"];
 
     /// <summary>Exact, case-sensitive membership - the stored key is a contract, not free text.</summary>
-    public static bool IsSupported(string? blend) =>
-        blend is not null && Supported.Contains(blend, StringComparer.Ordinal);
+    public static bool IsSupported(string? blend)
+    {
+        if (blend is null) return false;
+        for (var i = 0; i < Supported.Count; i++)
+            if (string.Equals(Supported[i], blend, StringComparison.Ordinal)) return true;
+        return false;
+    }
 }
 
 /// <summary>Canonical colour syntax shared by editor input and project materialisation.</summary>
@@ -54,6 +59,8 @@ public static class AppearanceColor
 
     public static string? Normalize(string? text)
     {
+        // Already canonical ("#" and eight upper-case hex digits): the same value, without new strings.
+        if (text is { Length: 9 } && text[0] == '#' && IsCanonicalHex(text.AsSpan(1))) return text;
         var value = (text ?? "").Trim().TrimStart('#');
         if (value.Length is not (6 or 8) || !value.All(Uri.IsHexDigit))
         {
@@ -61,6 +68,13 @@ public static class AppearanceColor
         }
 
         return "#" + (value.Length == 6 ? "FF" + value : value).ToUpperInvariant();
+    }
+
+    private static bool IsCanonicalHex(ReadOnlySpan<char> digits)
+    {
+        foreach (var c in digits)
+            if (c is not ((>= '0' and <= '9') or (>= 'A' and <= 'F'))) return false;
+        return true;
     }
 
     public static bool IsCanonical(string? text) =>

@@ -56,7 +56,7 @@ public sealed record StampStyle
         AssetSha256 = assetSha256.ToLowerInvariant();
     }
 
-    public string AssetSha256 { get; init; }
+    public string AssetSha256 { get; init => field = SharedValues.Share(value); }
 
     /// <summary>
     /// World size the asset had at 100 % scale, captured at placement. Null on files written
@@ -74,13 +74,13 @@ public sealed record StampStyle
     /// Resolved mask identity captured from the concrete asset variant. The placed object keeps
     /// this identity independently of later Library changes.
     /// </summary>
-    public string? MaskAssetSha256 { get; init; }
+    public string? MaskAssetSha256 { get; init => field = SharedValues.ShareOrNull(value); }
 
     /// <summary>Whether this stamp reveals the document foreground through its resolved mask.</summary>
     public bool ClipMaskEnabled { get; init; }
 
     /// <summary>Blend mode name from a fixed supported set; "Normal" is source-over.</summary>
-    public string Blend { get; init; } = "Normal";
+    public string Blend { get; init => field = SharedValues.Share(value); } = "Normal";
 
     /// <summary>Gaussian blur sigma in canvas units; 0 = none.</summary>
     public double Blur { get; init; }
@@ -91,7 +91,7 @@ public sealed record StampStyle
     public double ShadowBlur { get; init; } = 6;
     public double ShadowOpacity { get; init; }
     public StampShadowPlacement ShadowPlacement { get; init; } = StampShadowPlacement.Object;
-    public string ShadowColor { get; init; } = AppearanceColor.OpaqueBlack;
+    public string ShadowColor { get; init => field = SharedValues.Share(value); } = AppearanceColor.OpaqueBlack;
 
     /// <summary>Colour adjustments: hue in degrees, the rest as -1..1 offsets.</summary>
     public double Hue { get; init; }
@@ -103,10 +103,27 @@ public sealed record StampStyle
     /// R10 «Разброс цвета»: a multiplying colour (#AARRGGBB, alpha ignored), or null for none. Kept
     /// apart from the adjustments above so the dense atlas path can still draw the stamp in one mesh.
     /// </summary>
-    public string? Tint { get; init; }
+    public string? Tint { get; init => field = SharedValues.ShareOrNull(value); }
 
     /// <summary>R10 «Тень под объектом»: a soft cold contact shadow at the foot, or null for none.</summary>
     public StampGroundShadow? GroundShadow { get; init; }
+
+    /// <summary>
+    /// Value equality that also tells 0 from -0, so sharing one instance never changes a saved value.
+    /// </summary>
+    internal static bool IdenticalForSharing(StampStyle a, StampStyle b)
+    {
+        static bool Same(double x, double y) => BitConverter.DoubleToInt64Bits(x) == BitConverter.DoubleToInt64Bits(y);
+        static bool SameOrNull(double? x, double? y) => x.HasValue == y.HasValue && (!x.HasValue || Same(x.Value, y!.Value));
+        return a.Equals(b)
+            && SameOrNull(a.ReferenceWidth, b.ReferenceWidth) && SameOrNull(a.ReferenceHeight, b.ReferenceHeight)
+            && Same(a.Blur, b.Blur) && Same(a.ShadowOffsetX, b.ShadowOffsetX) && Same(a.ShadowOffsetY, b.ShadowOffsetY)
+            && Same(a.ShadowBlur, b.ShadowBlur) && Same(a.ShadowOpacity, b.ShadowOpacity) && Same(a.Hue, b.Hue)
+            && Same(a.Saturation, b.Saturation) && Same(a.Brightness, b.Brightness) && Same(a.Contrast, b.Contrast)
+            && (a.GroundShadow is null || (Same(a.GroundShadow.Opacity, b.GroundShadow!.Opacity)
+                && Same(a.GroundShadow.FootX, b.GroundShadow.FootX) && Same(a.GroundShadow.FootY, b.GroundShadow.FootY)
+                && Same(a.GroundShadow.Width, b.GroundShadow.Width) && Same(a.GroundShadow.Mass, b.GroundShadow.Mass)));
+    }
 }
 
 /// <summary>
@@ -189,8 +206,8 @@ public sealed record SceneObject
         Width = width;
         Height = height;
         RotationDegrees = rotationDegrees;
-        FillColor = fillColor;
-        StrokeColor = strokeColor;
+        FillColor = SharedValues.Share(fillColor);
+        StrokeColor = SharedValues.Share(strokeColor);
         StrokeWidth = strokeWidth;
         Visible = visible;
         Locked = locked;
@@ -213,8 +230,11 @@ public sealed record SceneObject
     /// </summary>
     public string? GroupName { get; init; }
 
-    /// <summary>Set only for kind == Stamp: how the referenced asset is drawn.</summary>
-    public StampStyle? Stamp { get; init; }
+    /// <summary>
+    /// Set only for kind == Stamp: how the referenced asset is drawn. Value-equal styles share one
+    /// immutable instance (the copies of one asset usually carry the same style).
+    /// </summary>
+    public StampStyle? Stamp { get; init => field = SharedValues.Share(value); }
 
     /// <summary>Editable line geometry and appearance when <see cref="Kind"/> is Line.</summary>
     public LineStyle? Line { get; init; }

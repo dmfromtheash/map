@@ -44,7 +44,7 @@ internal static class StampOcclusion
             if (!needed) continue;
             visible.Add(item);
             if (item.ObjectOpacity < 1 || item.Stamp is not { } stamp
-                || images.TryGetImage(stamp.AssetSha256) is not { } image) continue;
+                || images.TryGetImageForOcclusion(stamp.AssetSha256) is not { } image) continue;
             var coverage = Images.GetValue(image, static i => new(i));
             if (!coverage.HasOpaqueCells) continue;
             var angle = -item.RotationDegrees * Math.PI / 180;

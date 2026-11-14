@@ -111,6 +111,14 @@ public sealed partial class AssetCatalog : IAsyncDisposable
 
     public string Root => _root;
 
+    /// <summary>O(1) immutable read view for workers, including the routing of attached libraries.</summary>
+    public AssetCatalogReadSnapshot CaptureReadSnapshot()
+    {
+        var snapshot = _snapshot;
+        return new(_root, () => snapshot.View.Records,
+            record => snapshot.MountForRecord(record.Sha256)?._root ?? _root);
+    }
+
     private AssetCatalog(AssetCatalog source, CatalogSnapshot snapshot)
     {
         _root = source._root;
@@ -1320,6 +1328,14 @@ public sealed partial class AssetCatalog : IAsyncDisposable
         return new AssetResolution(payload.Status, payload.Path);
     }
 
+    /// <summary>Metadata-only path routing. This is not verification; reads still use ReadVerified.</summary>
+    public string? SourcePath(AssetRecord record)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        if (_snapshot.MountForRecord(record.Sha256) is { } mount) return mount.SourcePath(record);
+        return record.StoredRelativePath is { } stored ? ResolveCatalogRelative(stored, "originals") : record.LinkedPath;
+    }
+
     /// <summary>
     /// Reads one bounded original and verifies the SHA-256 of those exact bytes. Callers that
     /// embed or decode content must use the returned payload instead of reopening its mutable path.
@@ -1417,7 +1433,42 @@ public sealed partial class AssetCatalog : IAsyncDisposable
     /// </summary>
     public void RemoveRecord(string sha256)
     {
-        if (TryRouteRecord(sha256, mount => mount.RemoveRecord(sha256))) return;
+        if (TryRouteRecord(sha256, mount => mount.RemoveRecord(sha256))) { RecordRemoved?.Invoke(sha256); return; }
+        RemoveOwnRecord(sha256);
+        RecordRemoved?.Invoke(sha256);
+    }
+
+    /// <summary>
+    /// Raised on the removing thread after <see cref="RemoveRecord"/> saved, for this catalog or a drive library routed
+    /// through it. Listeners drop what they prepared for the content (the machine cache of DEC-111); the same content
+    /// may still be listed by another library, so they check <see cref="Find"/> first.
+    /// </summary>
+    public event Action<string>? RecordRemoved;
+
+    /// <summary>
+    /// SHA-256 of every content carrying this tag: the images and masks of the variants of tagged sets and tagged flat
+    /// records, across the owner's library and the attached drive libraries.
+    /// </summary>
+    public IReadOnlyCollection<string> ContentWithTag(string tag)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tag);
+        tag = tag.Trim();
+        var view = _view;
+        var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var record in view.Records)
+            if (record.Tags.Contains(tag, StringComparer.OrdinalIgnoreCase)) result.Add(record.Sha256);
+        foreach (var set in view.Sets.Where(set => set.Tags.Contains(tag, StringComparer.OrdinalIgnoreCase)))
+            foreach (var id in set.VariantIds)
+                if (FindVariant(id) is { } variant)
+                {
+                    result.Add(variant.Sha256);
+                    if (variant.MaskSha256 is { } mask) result.Add(mask);
+                }
+        return result;
+    }
+
+    private void RemoveOwnRecord(string sha256)
+    {
         using var mutation = BeginMutation();
         ArgumentException.ThrowIfNullOrWhiteSpace(sha256);
         var variantIds = _document.Variants

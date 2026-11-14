@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Map.Core.Documents;
 using SkiaSharp;
 
@@ -26,7 +27,9 @@ public static partial class StyleRenderer
         SKMatrix matrix, int w, int h, float scale, WorldBounds? visible,
         Action<SKCanvas, MapDocument, RenderOptions> drawScene)
     {
+        var partsStarted = StyleDiagnostics.StageStart();
         var parts = PrintPartsFor(bare);
+        StyleDiagnostics.StageEnd("parts", partsStarted);
         var auxiliary = options.ForStyleNames().ForStyleScene(visible);
         SKImage RenderPart(MapDocument d)
         {
@@ -35,10 +38,12 @@ public static partial class StyleRenderer
             drawScene(surface.Canvas, d, auxiliary);
             return surface.Snapshot();
         }
+        var auxStarted = StyleDiagnostics.StageStart();
         using var land = RenderPart(parts.Land);
         using var rivers = RenderPart(parts.Rivers);
         var geo = BuildCoastField(land, rivers, w, h, scale);
         var riverSoft = Blurred(rivers, gpu, 4 * scale)!;
+        StyleDiagnostics.StageEnd("land-rivers-coast", auxStarted);
         // Source maps already include their entire blur support. No per-frame Kuwahara/blur.
         var surfaces = Enumerable.Range(0, 7).Select(i => NewSurface(gpu, w, h,
             i >= 4 ? SKColorType.RgbaF16 : SKColorType.Rgba8888)!).ToArray();
@@ -52,7 +57,6 @@ public static partial class StyleRenderer
             if (gpu is not null) maps = [.. maps.Select(m => m.ToTextureImage(gpu) ?? m)];
             return uploaded[source] = maps;
         }
-        PrebuildFormMaps(parts.Mountains, options);
         try
         {
             foreach (var surface in surfaces)
@@ -62,34 +66,52 @@ public static partial class StyleRenderer
             // The stamps in drawing order, then one buffer at a time (R09b): consecutive draws of one form map into one
             // target batch on the GPU, where interleaving the seven targets split every stamp into seven passes. Each
             // buffer still receives the same draws in the same order.
-            var stamps = new List<(SceneObject Item, StampStyle Stamp, SKImage[] Maps, float Sx, float Sy, SKPoint Mid, SKRect Padded, byte Alpha)>();
-            foreach (var layer in parts.Mountains.Layers.OfType<ObjectLayer>())
+            var gatherStarted = StyleDiagnostics.StageStart();
+            var visibleStamps = new List<(SceneObject Item, StampStyle Stamp, SKImage Source, byte Alpha)>();
+            for (var index = 0; index < parts.Mountains.Layers.Count; index++)
             {
-                if (!layer.Visible || layer.Opacity <= 0) continue;
+                if (parts.Mountains.Layers[index] is not ObjectLayer layer || !layer.Visible || layer.Opacity <= 0) continue;
                 // Include a stamp whose wet halo reaches the view even if its original bounds do not.
                 // Spatial candidates expand by the largest style support of this layer.
                 IEnumerable<SceneObject> candidates = layer.Objects;
                 if (visible is { } v)
                 {
-                    var reach = layer.Objects.Count == 0 ? 0 : layer.Objects.Max(o => Math.Max(o.Width, o.Height)) * PainterFormMaps.Padding / PainterFormMaps.ReferenceWidth;
+                    var haloStarted = StyleDiagnostics.StageStart();
+                    // The largest side of the layer's objects, kept per object list and carried through its edits (the
+                    // bare record at the same place holds the edit's link; both records share the list).
+                    var reach = layer.Objects.Count == 0 ? 0
+                        : LargestSide(bare.Layers[index] is ObjectLayer linked && ReferenceEquals(linked.Objects, layer.Objects) ? linked : layer)
+                            * PainterFormMaps.Padding / PainterFormMaps.ReferenceWidth;
+                    StyleDiagnostics.StageEnd("halo", haloStarted);
                     candidates = ObjectSpatialIndex.For(layer).Query(new WorldBounds(v.Left - reach, v.Top - reach, v.Right + reach, v.Bottom + reach));
                 }
                 foreach (var item in candidates.OrderBy(o => o.Sublayer))
                 {
                     if (!item.Visible || item.ObjectOpacity <= 0 || !layer.StateFor(item.Sublayer).Visible
                         || item.Stamp is not { } stamp || options.Stamps?.TryGetImage(stamp.AssetSha256) is not { } source) continue;
-                    var wet = PainterFormMaps.Get(source, true);
-                    var block = PainterFormMaps.Get(source, false);
-                    var maps = MapsFor(source, wet, block);
-                    var rect = SKRect.Create((float)item.X, (float)item.Y, (float)item.Width, (float)item.Height);
-                    var sx = rect.Width / PainterFormMaps.ReferenceWidth;
-                    var sy = rect.Height / (block.Big.Height - 2 * PainterFormMaps.Padding);
-                    var padded = SKRect.Create(-rect.Width / 2 - PainterFormMaps.Padding * sx,
-                        -rect.Height / 2 - PainterFormMaps.Padding * sy, block.Big.Width * sx, block.Big.Height * sy);
-                    stamps.Add((item, stamp, maps, sx, sy, new SKPoint(rect.MidX, rect.MidY), padded,
-                        (byte)Math.Clamp(Math.Round(255 * item.ObjectOpacity * layer.Opacity), 0, 255)));
+                    visibleStamps.Add((item, stamp, source, (byte)Math.Clamp(Math.Round(255 * item.ObjectOpacity * layer.Opacity), 0, 255)));
                 }
             }
+            // The form maps of the pictures this frame draws, the missing ones side by side (before: every picture of
+            // the map, found by walking all its objects on each build). The maps themselves are the same.
+            var formMapsStarted = StyleDiagnostics.StageStart();
+            PrebuildFormMaps(visibleStamps.Select(d => d.Source));
+            StyleDiagnostics.StageEnd("form-maps", formMapsStarted);
+            var stamps = new List<(SceneObject Item, StampStyle Stamp, SKImage[] Maps, float Sx, float Sy, SKPoint Mid, SKRect Padded, byte Alpha)>(visibleStamps.Count);
+            foreach (var (item, stamp, source, alpha) in visibleStamps)
+            {
+                var wet = PainterFormMaps.Get(source, true);
+                var block = PainterFormMaps.Get(source, false);
+                var maps = MapsFor(source, wet, block);
+                var rect = SKRect.Create((float)item.X, (float)item.Y, (float)item.Width, (float)item.Height);
+                var sx = rect.Width / PainterFormMaps.ReferenceWidth;
+                var sy = rect.Height / (block.Big.Height - 2 * PainterFormMaps.Padding);
+                var padded = SKRect.Create(-rect.Width / 2 - PainterFormMaps.Padding * sx,
+                    -rect.Height / 2 - PainterFormMaps.Padding * sy, block.Big.Width * sx, block.Big.Height * sy);
+                stamps.Add((item, stamp, maps, sx, sy, new SKPoint(rect.MidX, rect.MidY), padded, alpha));
+            }
+            StyleDiagnostics.StageEnd("gather", gatherStarted);
+            var passesStarted = StyleDiagnostics.StageStart();
             var sampling = new SKSamplingOptions(SKFilterMode.Linear);
             using var paint = new SKPaint();
             for (var i = 0; i < surfaces.Length; i++)
@@ -117,6 +139,7 @@ public static partial class StyleRenderer
                 }
             }
             var images = surfaces.Select(s => s.Snapshot()).ToArray();
+            StyleDiagnostics.StageEnd("passes", passesStarted);
             return new(images[0], images[1], images[2], images[3], images[4], images[5], images[6], geo, riverSoft);
         }
         catch { geo.Dispose(); riverSoft.Dispose(); throw; }
@@ -146,6 +169,16 @@ public static partial class StyleRenderer
     public static void PrepareAssets(MapDocument document, IStampImageSource? stamps, CancellationToken token)
     {
         ArgumentNullException.ThrowIfNull(document);
+        // The style's own per-layer data as well, so the first styled frame of a large map does not make it: the map
+        // without its names, the spatial index of each bare layer, its largest side and its pictures.
+        foreach (var layer in Split(document).Bare.Layers.OfType<ObjectLayer>())
+        {
+            if (token.IsCancellationRequested) return;
+            if (!layer.Visible || layer.Objects.Count == 0) continue;
+            ObjectSpatialIndex.For(layer);
+            LargestSide(layer);
+            VisibleStampAssetsOf(layer);
+        }
         if (stamps is null) return;
         var work = new List<Action>();
         foreach (var sha in document.Layers.OfType<ObjectLayer>().Where(l => l.Visible).SelectMany(l => l.Objects)
@@ -181,18 +214,71 @@ public static partial class StyleRenderer
         if (lease.TryGetImage(sha) is { IsTextureBacked: false } image) build(image);
     }
 
-    private static void PrebuildFormMaps(MapDocument mountains, RenderOptions options)
+    private static void PrebuildFormMaps(IEnumerable<SKImage> drawn)
     {
-        if (options.Stamps is not { } stamps) return;
-        var sources = mountains.Layers.OfType<ObjectLayer>().Where(l => l.Visible)
-            .SelectMany(l => l.Objects).Select(o => o.Stamp?.AssetSha256).OfType<string>()
-            .Distinct(StringComparer.Ordinal).Select(stamps.TryGetImage).OfType<SKImage>()
+        var sources = drawn.Distinct(ReferenceEqualityComparer.Instance).Cast<SKImage>()
             .Where(s => !PainterFormMaps.IsBuilt(s)).ToArray();
         if (sources.Length < 2) return;
         Parallel.ForEach(sources.SelectMany(s => new[] { (s, true), (s, false) }),
             new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount - 1) },
             pair => PainterFormMaps.Get(pair.Item1, pair.Item2));
     }
+
+    /// <summary>The largest side of a list's objects and how many objects have it (an exact maximum under edits).</summary>
+    private sealed record Extent(double Largest, int AtLargest);
+
+    private static readonly ConditionalWeakTable<IReadOnlyList<SceneObject>, Extent> Extents = [];
+
+    /// <summary>
+    /// <c>Objects.Max(o => Math.Max(o.Width, o.Height))</c> of a non-empty layer, kept per object list: an edit updates
+    /// it from its removed and added objects, and only the removal of the last object of the largest side scans again.
+    /// </summary>
+    private static double LargestSide(ObjectLayer layer) => PerObjects(Extents, layer, static objects =>
+    {
+        var largest = objects.Max(o => Math.Max(o.Width, o.Height));
+        return new Extent(largest, objects.Count(o => Math.Max(o.Width, o.Height) == largest));
+    }, static (before, delta, objects) =>
+    {
+        var (largest, count) = before;
+        foreach (var index in delta.Removed)
+            if (Math.Max(delta.Source.Objects[index].Width, delta.Source.Objects[index].Height) == largest) count--;
+        foreach (var index in delta.Added)
+        {
+            var side = Math.Max(objects[index].Width, objects[index].Height);
+            if (side > largest) { largest = side; count = 1; }
+            else if (side == largest) count++;
+        }
+        return count > 0 ? new Extent(largest, count) : null;
+    }).Largest;
+
+    /// <summary>How many visible stamps of a list use each picture (StampsReady asks only about the pictures).</summary>
+    private sealed class StampAssets(Dictionary<string, int> counts)
+    {
+        public Dictionary<string, int> Counts { get; } = counts;
+    }
+
+    private static readonly ConditionalWeakTable<IReadOnlyList<SceneObject>, StampAssets> VisibleStampAssets = [];
+
+    private static IReadOnlyCollection<string> VisibleStampAssetsOf(ObjectLayer layer) => PerObjects(VisibleStampAssets, layer, static objects =>
+    {
+        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var item in objects)
+            if (item.Visible && item.Stamp is { } stamp) counts[stamp.AssetSha256] = counts.GetValueOrDefault(stamp.AssetSha256) + 1;
+        return new StampAssets(counts);
+    }, static (before, delta, objects) =>
+    {
+        var counts = new Dictionary<string, int>(before.Counts, StringComparer.Ordinal);
+        foreach (var index in delta.Removed)
+            if (delta.Source.Objects[index] is { Visible: true, Stamp: { } stamp })
+            {
+                var left = counts.GetValueOrDefault(stamp.AssetSha256) - 1;
+                if (left < 0) return null;
+                if (left == 0) counts.Remove(stamp.AssetSha256); else counts[stamp.AssetSha256] = left;
+            }
+        foreach (var index in delta.Added)
+            if (objects[index] is { Visible: true, Stamp: { } stamp }) counts[stamp.AssetSha256] = counts.GetValueOrDefault(stamp.AssetSha256) + 1;
+        return new StampAssets(counts);
+    }).Counts.Keys;
 
     private static readonly Lazy<SKRuntimeEffect> DirectionEffect = new(() => PainterFormMaps.Compile("""
 uniform shader tensor;

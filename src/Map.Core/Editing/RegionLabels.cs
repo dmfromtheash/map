@@ -6,7 +6,7 @@ namespace Map.Core.Editing;
 /// R07b: a label that names a region sits inside the region's figure - a closed shape or a
 /// placement area - along the figure's widest axis, away from its edge, and follows every edit of
 /// the outline. Runs after every edit in <see cref="EditingSession.Execute"/>, like
-/// <see cref="TextOnPath.Follow"/>; a map without region labels pays one scan of its objects.
+/// <see cref="TextOnPath.Follow"/>; revisions share delta-maintained label sets.
 /// </summary>
 public static class RegionLabels
 {
@@ -17,7 +17,7 @@ public static class RegionLabels
     public const double MaxAngle = 40;
 
     public static bool HasRegionLabels(MapDocument document) =>
-        document.Layers.OfType<ObjectLayer>().Any(l => l.Objects.Any(o => o.Text?.Region is not null));
+        document.Layers.OfType<ObjectLayer>().Any(l => BoundObjectIndex.For(l).Regions.Count > 0);
 
     /// <summary>The closed outline of the figure a label names, in world coordinates; null when it is gone.</summary>
     public static IReadOnlyList<VectorPoint>? Outline(MapDocument document, TextRegionBinding binding)
@@ -172,19 +172,26 @@ public static class RegionLabels
         ArgumentNullException.ThrowIfNull(before);
         ArgumentNullException.ThrowIfNull(after);
         if (ReferenceEquals(before, after) || !HasRegionLabels(after)) return after;
-        Dictionary<ObjectId, SceneObject>? previous = null;
-        List<MapLayer>? layers = null;
+        var changedTargets = ChangedTargets(before, after);
+        var changedEntities = Changed(before.Entities, after.Entities, e => e.Id);
+        var replacements = new List<SceneObject>();
         for (var index = 0; index < after.Layers.Count; index++)
         {
             if (after.Layers[index] is not ObjectLayer layer) continue;
-            SceneObject[]? rewritten = null;
-            for (var i = 0; i < layer.Objects.Count; i++)
+            var previousLayer = before.FindLayer(layer.Id) as ObjectLayer;
+            var labels = BoundObjectIndex.For(layer);
+            var previous = previousLayer is null ? new BoundObjectIndex().Regions : BoundObjectIndex.For(previousLayer).Regions;
+            var candidates = BoundObjectIndex.Candidates(previousLayer, layer, labels.Regions, previous, labels.RegionTargets, changedTargets);
+            foreach (var entity in changedEntities)
+                if (labels.RegionEntities.TryGetValue(entity, out var dependents)) candidates.UnionWith(dependents);
+            foreach (var id in candidates)
             {
-                var item = layer.Objects[i];
+                var item = labels.Regions[id];
                 if (item.Text?.Region is not { } binding) continue;
-                previous ??= before.Layers.OfType<ObjectLayer>().SelectMany(l => l.Objects).Where(o => o.Text?.Region is not null).ToDictionary(o => o.Id);
                 var source = item;
-                if (previous.TryGetValue(item.Id, out var was) && !ReferenceEquals(was, item) && was.Text?.Region is { } wasBinding
+                previous.TryGetValue(item.Id, out var was);
+                was ??= BoundObjectIndex.PreviousLabel(before, item.Id, path: false);
+                if (was is not null && !ReferenceEquals(was, item) && was.Text?.Region is { } wasBinding
                     && wasBinding.TargetId == binding.TargetId && wasBinding.OffsetX == binding.OffsetX && wasBinding.OffsetY == binding.OffsetY
                     && (!Near(was.X, item.X) || !Near(was.Y, item.Y)) && Near(was.Width, item.Width) && Near(was.Height, item.Height))
                 {
@@ -194,16 +201,54 @@ public static class RegionLabels
 
                 var laid = Layout(after, source);
                 if (ReferenceEquals(laid, item)) continue;
-                rewritten ??= [.. layer.Objects];
-                rewritten[i] = laid;
+                replacements.Add(laid);
             }
-
-            if (rewritten is null) continue;
-            layers ??= [.. after.Layers];
-            layers[index] = layer with { Objects = rewritten };
         }
 
-        return layers is null ? after : after.WithLayers(layers);
+        return replacements.Count == 0 ? after : DocumentEditor.ReplaceObjects(after, replacements);
+    }
+
+    private static HashSet<Guid> Changed<T>(System.Collections.Immutable.ImmutableArray<T> before,
+        System.Collections.Immutable.ImmutableArray<T> after, Func<T, Guid> id) where T : class
+    {
+        var changed = new HashSet<Guid>();
+        if (before == after) return changed;
+        var previous = before.ToDictionary(id);
+        foreach (var item in after)
+            if (!previous.Remove(id(item), out var was) || !ReferenceEquals(was, item)) changed.Add(id(item));
+        changed.UnionWith(previous.Keys);
+        return changed;
+    }
+
+    private static HashSet<Guid> ChangedTargets(MapDocument before, MapDocument after)
+    {
+        var changed = new HashSet<Guid>();
+        foreach (var layer in after.Layers.OfType<ObjectLayer>())
+        {
+            var previous = before.FindLayer(layer.Id) as ObjectLayer;
+            changed.UnionWith(Changed<PlacementArea>(previous?.PlacementAreas ?? [], layer.PlacementAreas, a => a.Id));
+            var ids = new HashSet<ObjectId>();
+            if (BoundObjectIndex.TryChangedIds(previous, layer, ids))
+                changed.UnionWith(ids.Select(id => id.Value));
+            else if (previous is null || !ReferenceEquals(previous.Objects, layer.Objects))
+            {
+                // Arbitrary layer swaps need no stamp scan: compare only actual bound targets.
+                foreach (var target in after.Layers.OfType<ObjectLayer>().SelectMany(l => BoundObjectIndex.For(l).RegionTargets.Keys).Distinct())
+                    if (!ReferenceEquals(DocumentRevisionIndex.For(before).FindObject(new(target)),
+                        DocumentRevisionIndex.For(after).FindObject(new(target)))) changed.Add(target);
+            }
+        }
+        foreach (var layer in before.Layers.OfType<ObjectLayer>())
+            if (after.FindLayer(layer.Id) is null)
+            {
+                foreach (var area in layer.PlacementAreas) changed.Add(area.Id);
+                if (layer.Objects.Count == 0) continue;
+                // Include only targets owned by the removed layer, without scanning its stamps.
+                foreach (var target in after.Layers.OfType<ObjectLayer>().SelectMany(l => BoundObjectIndex.For(l).RegionTargets.Keys))
+                    if (DocumentRevisionIndex.For(before).TryFind(new(target), out var location) && location.LayerId == layer.Id)
+                        changed.Add(target);
+            }
+        return changed;
     }
 
     private static List<VectorPoint> Resample(IReadOnlyList<VectorPoint> polygon, int count)
@@ -256,8 +301,8 @@ public sealed class RegionLabelFollowCommand : IEditCommand
         foreach (var layer in followed.Layers.OfType<ObjectLayer>())
         {
             if (edited.FindLayer(layer.Id) is not ObjectLayer previous || ReferenceEquals(previous.Objects, layer.Objects)) continue;
-            var before = previous.Objects.Where(o => o.Text?.Region is not null).ToDictionary(o => o.Id);
-            foreach (var item in layer.Objects)
+            var before = BoundObjectIndex.For(previous).Regions;
+            foreach (var item in BoundObjectIndex.ChangedLabels(previous, layer, BoundObjectIndex.For(layer).Regions))
                 if (item.Text?.Region is not null && before.TryGetValue(item.Id, out var was) && !ReferenceEquals(was, item))
                     labels.Add((layer.Id, was, item));
         }
@@ -272,16 +317,8 @@ public sealed class RegionLabelFollowCommand : IEditCommand
 
     private MapDocument Replace(MapDocument document, bool after)
     {
-        var result = document;
-        foreach (var group in _labels.GroupBy(label => label.Layer))
-        {
-            var map = group.ToDictionary(label => label.Before.Id, label => after ? label.After : label.Before);
-            result = result.WithLayer(group.Key, layer => layer is ObjectLayer objects
-                ? objects with { Objects = [.. objects.Objects.Select(item => map.TryGetValue(item.Id, out var swap) ? swap : item)] }
-                : layer);
-        }
-
-        return result;
+        return _labels.Count == 0 ? document : DocumentEditor.ReplaceObjects(document,
+            _labels.Select(label => after ? label.After : label.Before).ToArray());
     }
 }
 

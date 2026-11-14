@@ -407,6 +407,7 @@ public sealed partial class EditorView : UserControl
         Action requestShortcutSettings)
     {
         _editor = editor;
+        _editor.AllowsBackgroundAssetPreparation = true;
         // The workshop is fixed by the map's category: a hex map opens with the hex tool set and
         // never shows the standard constructor's tools.
         _isHexWorkshop = editor.IsHexWorkshop;
@@ -500,25 +501,22 @@ public sealed partial class EditorView : UserControl
             // Undo/Redo of a light or style change brings «Вид» back in line (not while a slider drags).
             Dispatcher.UIThread.Post(SyncLookParts);
         };
-        _editor.SceneInvalidated += (_, e) => Dispatcher.UIThread.Post(() =>
+        _editor.SceneInvalidated += (_, e) =>
         {
             if (e.Has(EditorChangeReason.Selection))
             {
-                SyncStatus();
-                SyncInspector();
-                FollowSelectionToSection();
-                SyncObjectListSelection();
-                SyncSectionFooter();
-                SyncContextArea();
+                lock (_uiSyncGate)
+                    _pendingSelectionDelta = _pendingSelectionDelta.Merge(e.Selection ?? SelectionRefreshDelta.Empty);
+                OnEditorChanged(this, new(nameof(EditorViewModel.SelectionCount)));
             }
-        });
+        };
         DetachedFromVisualTree += (_, _) =>
         {
             _closingAuxiliaryWindows = true;
             // A running timer is held by the dispatcher and holds this view, its editor and the
             // document: the status toast kept a closed editor alive for its 5-9 s (history-memory).
             _statusToastTimer?.Stop();
-            _deferredPanelTimer?.Stop();
+            _panelWork?.Clear();
             foreach (var (_, frames) in _demoFrames.Values) foreach (var bitmap in frames) bitmap.Dispose();
             _demoFrames.Clear();
             DisposeExplainFrames();

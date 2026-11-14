@@ -1,6 +1,7 @@
 using Map.Assets;
 using Map.Core.Documents;
 using Map.Presentation.Services;
+using Map.Rendering;
 using SkiaSharp;
 
 namespace Map.Presentation.Tests;
@@ -13,6 +14,139 @@ namespace Map.Presentation.Tests;
 public sealed class StampImageLeaseTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "map-lease-tests", Guid.NewGuid().ToString("N"));
+
+    [Fact]
+    public async Task Background_overview_lease_returns_the_same_owner_tint_as_the_canvas()
+    {
+        var (images, shas) = Source();
+        using var lifetime = images;
+        var expected = images.TryGetOverviewColor(shas[0]);
+        var actual = await Task.Run(() =>
+        {
+            using var lease = images.Lease();
+            return lease.TryGetOverviewColor(shas[0]);
+        });
+        Assert.NotNull(expected);
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void Sampled_owner_pixels_and_tints_survive_source_eviction_within_the_same_budget()
+    {
+        const long budget = 2L * 1024 * 1024;
+        var (before, shas) = Source(4096, budget, false);
+        var (after, _) = Source(4096, budget, true);
+        using var oldLifetime = before;
+        using var newLifetime = after;
+        var expected = new Dictionary<string, byte[]>();
+        var colors = new Dictionary<string, SKColor?>();
+        foreach (var sha in shas)
+        {
+            before.TryGetImage(sha); // The previous renderer asked for the working image first.
+            using var pixels = SKBitmap.FromImage(before.TryGetImageForPixelSize(sha, 16, 16)!);
+            expected[sha] = pixels.Bytes;
+            colors[sha] = before.TryGetOverviewColor(sha);
+            after.TryGetImageSize(sha);
+            using var actual = SKBitmap.FromImage(after.TryGetImageForPixelSize(sha, 16, 16)!);
+            Assert.Equal(expected[sha], actual.Bytes);
+            Assert.Equal(colors[sha], after.TryGetOverviewColor(sha));
+        }
+        Assert.True(after.CacheStatistics.Evictions > 0);
+        var warm = after.CacheStatistics;
+        using (after.BeginFrame())
+        foreach (var sha in shas)
+        {
+            Assert.NotNull(after.TryGetImageSize(sha));
+            using var actual = SKBitmap.FromImage(after.TryGetImageForPixelSize(sha, 16, 16)!);
+            Assert.Equal(expected[sha], actual.Bytes);
+            Assert.Equal(colors[sha], after.TryGetOverviewColor(sha));
+        }
+        Assert.Equal(warm.Misses, after.CacheStatistics.Misses);
+        Assert.InRange(after.CacheStatistics.ResidentBytes, 1, budget);
+        // Zooming in still returns the full-resolution original, including after a small mip hit.
+        using var oldFull = SKBitmap.FromImage(before.TryGetImage(shas[0])!);
+        using var newFull = SKBitmap.FromImage(after.TryGetImageForPixelSize(shas[0], 4096, 4096)!);
+        Assert.Equal(oldFull.Bytes, newFull.Bytes);
+    }
+
+    [Theory]
+    [InlineData(.25)]
+    [InlineData(1)]
+    [InlineData(4)]
+    [InlineData(16)]
+    public void Retained_sampling_preserves_composited_owner_pixels(double scale)
+    {
+        var (before, shas) = Source(4096, 2L * 1024 * 1024, false);
+        var (after, _) = Source(4096, 2L * 1024 * 1024, true);
+        using var oldLifetime = before;
+        using var newLifetime = after;
+        var objects = shas.Select((sha, i) => new SceneObject(ObjectId.New(), SceneObjectKind.Stamp,
+            "Гора", i % 9 * 30, i / 9 * 22, 48, 55, i % 5 * 13, "#FFFFFFFF", "#00000000", 0, true, false)
+            { ObjectOpacity = .6, Stamp = new StampStyle(sha) { FlipHorizontal = i % 4 == 0,
+                ShadowOpacity = i % 7 == 0 ? .3 : 0, Blur = i % 11 == 0 ? .5 : 0 } }).ToArray();
+        var document = new MapDocument(DocumentId.New(), "Pixels", DateTimeOffset.UnixEpoch,
+            new CanvasDefinition(512, 512, "px", "#FFFFFFFF"),
+            [new BaseColorLayer(LayerId.New(), "Page", true, false, 1, "#FFFFFFFF"),
+                new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, objects)]);
+        using var expected = SKSurface.Create(new SKImageInfo(512, 512))!;
+        using var actual = SKSurface.Create(new SKImageInfo(512, 512))!;
+        expected.Canvas.Scale((float)scale); actual.Canvas.Scale((float)scale);
+        for (var pass = 0; pass < 2; pass++)
+        {
+            SceneRenderer.Render(expected.Canvas, document, new RenderOptions { Stamps = new PreviousFetchOrder(before), ViewScale = scale });
+            SceneRenderer.Render(actual.Canvas, document, new RenderOptions { Stamps = after, ViewScale = scale });
+            using var expectedImage = expected.Snapshot(); using var actualImage = actual.Snapshot();
+            using var expectedPixels = SKBitmap.FromImage(expectedImage); using var actualPixels = SKBitmap.FromImage(actualImage);
+            Assert.Equal(expectedPixels.Bytes, actualPixels.Bytes);
+        }
+    }
+
+    private sealed class PreviousFetchOrder(CatalogStampImageSource source) : IStampImageSource
+    {
+        public SKImage? TryGetImage(string sha256) => source.TryGetImage(sha256);
+        public SKImage? TryGetImageForPixelSize(string sha256, double width, double height)
+        {
+            var original = source.TryGetImage(sha256);
+            return source.TryGetImageForPixelSize(sha256, width, height) ?? original;
+        }
+    }
+
+    [Fact]
+    public void A_sample_lease_survives_eviction_of_other_sources_and_samples()
+    {
+        var (images, shas) = Source(4096, 2L * 1024 * 1024);
+        using var lifetime = images;
+        var lease = images.Lease();
+        var held = lease.TryGetImageForPixelSize(shas[0], 48, 48)!;
+        foreach (var sha in shas.Skip(1)) Assert.NotNull(images.TryGetImageForPixelSize(sha, 48, 48));
+        Assert.True(images.CacheStatistics.Evictions > 0);
+        Assert.NotEqual(IntPtr.Zero, held.Handle);
+        Assert.True(Drawn(held));
+        lease.Dispose();
+        foreach (var sha in shas.Skip(1)) images.TryGetImageForPixelSize(sha, 48, 48);
+        Assert.Equal(IntPtr.Zero, held.Handle);
+    }
+
+    [Fact]
+    public void A_screen_of_distinct_small_owner_images_stays_resident_with_identical_pixels()
+    {
+        var (oldImages, shas) = Source(64);
+        var (images, _) = Source(4096);
+        using var oldLifetime = oldImages;
+        using var lifetime = images;
+        foreach (var sha in shas)
+        {
+            using var oldPixels = SKBitmap.FromImage(oldImages.TryGetImage(sha)!);
+            using var pixels = SKBitmap.FromImage(images.TryGetImage(sha)!);
+            Assert.Equal(oldPixels.Bytes, pixels.Bytes);
+        }
+        var before = images.CacheStatistics;
+        foreach (var sha in shas) Assert.NotNull(images.TryGetImage(sha));
+        Assert.Equal(before.Misses, images.CacheStatistics.Misses);
+        Assert.Equal(0, images.CacheStatistics.Evictions);
+        Assert.True(oldImages.CacheStatistics.Evictions > 0);
+        Assert.True(images.CacheStatistics.ResidentBytes < 512L * 1024 * 1024);
+    }
 
     [Fact]
     public void Without_a_lease_the_canvas_evicting_more_than_64_pictures_frees_the_one_in_use()
@@ -117,7 +251,8 @@ public sealed class StampImageLeaseTests : IDisposable
     }
 
     /// <summary>The owner's six mountains, each at twelve sizes: 72 different pictures embedded in one map.</summary>
-    private (CatalogStampImageSource Images, string[] Shas) Source()
+    private (CatalogStampImageSource Images, string[] Shas) Source(int capacity = 64,
+        long cacheBytes = 512L * 1024 * 1024, bool retainSamples = true)
     {
         var root = new DirectoryInfo(AppContext.BaseDirectory);
         while (root is not null && !File.Exists(Path.Combine(root.FullName, "Map.slnx"))) root = root.Parent;
@@ -141,7 +276,7 @@ public sealed class StampImageLeaseTests : IDisposable
             new CanvasDefinition(1024, 1024, "px", "#FFFFFFFF"),
             [new BaseColorLayer(LayerId.New(), "Base", true, false, 1, "#FFFFFFFF")], []) { Assets = [.. assets] };
         var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));
-        return (new CatalogStampImageSource(catalog, () => document, () => null), assets.Select(a => a.Sha256).ToArray());
+        return (new CatalogStampImageSource(catalog, () => document, () => null, capacity, cacheBytes, retainSamples), assets.Select(a => a.Sha256).ToArray());
     }
 
     public void Dispose()

@@ -1,36 +1,75 @@
 using Map.Core.Documents;
+using Map.Core.Resources;
 using SkiaSharp;
 
 namespace Map.Rendering;
 
-/// <summary>
-/// Land coverage for far views: one image per block of 16×16 tiles, every coarse pixel the mean
-/// of 16×16 source pixels, kept as long as the block's tiles are the very same arrays. A land
-/// edit replaces only the tiles it touched, so only their blocks are rebuilt. Recomputable
-/// pixels: a bounded LRU shared by every renderer, images handed out under the lock.
-/// </summary>
+/// <summary>Exact 16 by 16 means, retained by block and immutable source tiles.</summary>
 internal static class CoarseCoverage
 {
-    public const int Block = 16;
+    public const int Block = TileMap.RevisionBlockSize;
     public const int Reduction = 16;
-    private const int Capacity = 256; // at most 64 MiB of RGBA overview pixels
-
-    // An overview must not keep entire old documents alive: one block can refer to 16 MiB
-    // of source coverage, while its derived image is only 256 KiB.
-    private sealed record Entry(WeakReference<byte[]>?[] Tiles, SKImage Image);
+    // RGBA pixels and LRU bookkeeping; never source pixels.
+    private const long EntryBytes = TileMap.TileSize * TileMap.TileSize * 4L + 512;
+    private static CacheMemoryAccount Account = Register(64L * WorkingMemoryBudget.MiB);
+    private static CacheMemoryAccount Register(long bytes) => WorkingMemoryBudget.Shared.RegisterCache(
+        "land-coarse-coverage", CacheRebuildCost.Expensive, bytes);
+    private readonly record struct Key(LayerId Layer, int X, int Y);
+    private sealed record Entry(Key Key, WeakReference<object> Revision, SKImage Image);
     private static readonly object Gate = new();
-    private static readonly Dictionary<(LayerId Layer, int X, int Y), Entry> Entries = [];
-    private static readonly List<(LayerId Layer, int X, int Y)> Order = [];
+    private static readonly Dictionary<Key, LinkedListNode<Entry>> Entries = [];
+    private static readonly LinkedList<Entry> Order = new();
+    private static long _workingBytes = 64L * WorkingMemoryBudget.MiB;
+    internal static long Builds { get; private set; }
+    internal static long Bytes { get { lock (Gate) return Entries.Count * EntryBytes; } }
 
-    static CoarseCoverage() => Map.Core.Resources.WorkingMemoryBudget.ReleaseDerivedCaches += Clear;
+    static CoarseCoverage() => WorkingMemoryBudget.ReleaseDerivedCaches += Clear;
 
-    private static void Clear()
+    // Keep the largest visited working set, within the shared allowance. Panning after fit
+    // must not discard the overview needed when returning to fit.
+    internal static void Prepare(MapDocument document, WorldBounds view)
+    {
+        var size = (double)Block * TileMap.TileSize;
+        var all = Math.Ceiling(document.Canvas.Width / size) * Math.Ceiling(document.Canvas.Height / size);
+        var visible = (Math.Ceiling((view.Right - view.Left) / size) + 2)
+            * (Math.Ceiling((view.Bottom - view.Top) / size) + 2);
+        var layers = document.Layers.OfType<LandLayer>().Count(l => l.Visible && l.Opacity > 0);
+        lock (Gate)
+        {
+            _workingBytes = Math.Max(_workingBytes, (long)Math.Min(1536L * WorkingMemoryBudget.MiB,
+                Math.Min(all, visible * 2) * layers * EntryBytes));
+            if (_workingBytes > Account.RequestedBytes)
+            {
+                Account.Dispose(); Account = Register(_workingBytes);
+            }
+            Trim();
+        }
+    }
+
+    internal static void Clear()
     {
         lock (Gate)
         {
-            foreach (var entry in Entries.Values) entry.Image.Dispose();
-            Entries.Clear(); Order.Clear();
+            foreach (var node in Entries.Values) node.Value.Image.Dispose();
+            Entries.Clear(); Order.Clear(); Account.Report(0);
+            _workingBytes = 64L * WorkingMemoryBudget.MiB;
+            if (Account.RequestedBytes != _workingBytes)
+            {
+                Account.Dispose(); Account = Register(_workingBytes);
+            }
         }
+    }
+
+    private static void Trim()
+    {
+        var target = Math.Min(_workingBytes, Math.Min(Account.LimitBytes, Account.TargetBytes));
+        long bytes = 0; var count = 0;
+        while (Entries.Count * EntryBytes > target && Order.First is { } oldest)
+        {
+            Order.RemoveFirst(); Entries.Remove(oldest.Value.Key); oldest.Value.Image.Dispose();
+            bytes += EntryBytes; count++;
+        }
+        Account.RecordTrim(bytes, count); Account.Report(Entries.Count * EntryBytes);
     }
 
     public static void Draw(SKCanvas canvas, LayerId layer, TileMap tiles, WorldBounds view, SKSamplingOptions sampling,
@@ -39,62 +78,57 @@ internal static class CoarseCoverage
         var blockSize = (double)Block * TileMap.TileSize;
         var minX = (int)Math.Floor(view.Left / blockSize); var maxX = (int)Math.Floor(view.Right / blockSize);
         var minY = (int)Math.Floor(view.Top / blockSize); var maxY = (int)Math.Floor(view.Bottom / blockSize);
-        for (var by = minY; by <= maxY; by++)
-        for (var bx = minX; bx <= maxX; bx++)
+        lock (Gate)
         {
-            var refs = new byte[]?[Block * Block];
-            var any = false;
-            for (var ty = 0; ty < Block; ty++)
-            for (var tx = 0; tx < Block; tx++)
+            Trim();
+            for (var by = minY; by <= maxY; by++)
+            for (var bx = minX; bx <= maxX; bx++)
             {
-                var tile = tiles.TryGet(new TileKey(bx * Block + tx, by * Block + ty));
-                refs[ty * Block + tx] = tile;
-                any |= tile is not null;
+                var key = new Key(layer, bx, by);
+                Entries.TryGetValue(key, out var node);
+                var blockRevision = tiles.BlockRevision(bx, by);
+                if (blockRevision is null)
+                {
+                    if (node is not null)
+                    {
+                        Order.Remove(node); Entries.Remove(key); node.Value.Image.Dispose();
+                    }
+                    continue;
+                }
+                // Tokens are shared by untouched blocks even in a newly edited snapshot.
+                if (node is null || !node.Value.Revision.TryGetTarget(out var revision) || !ReferenceEquals(revision, blockRevision))
+                {
+                    var refs = new byte[]?[Block * Block];
+                    for (var ty = 0; ty < Block; ty++)
+                    for (var tx = 0; tx < Block; tx++)
+                    {
+                        var tile = tiles.TryGet(new TileKey(bx * Block + tx, by * Block + ty));
+                        refs[ty * Block + tx] = tile;
+                    }
+                    if (node is not null)
+                    {
+                        Order.Remove(node); Entries.Remove(key); node.Value.Image.Dispose();
+                    }
+                    var image = buildImage(Reduce(refs), TileImageKind.LandCoverage);
+                    Builds++;
+                    node = Order.AddLast(new Entry(key, new(blockRevision), image));
+                    Entries.Add(key, node);
+                }
+                Order.Remove(node!); Order.AddLast(node!);
+                var rect = new SKRect((float)(bx * blockSize), (float)(by * blockSize), (float)((bx + 1) * blockSize), (float)((by + 1) * blockSize));
+                canvas.DrawImage(node!.Value.Image, rect, sampling, paint);
+                // Draw under the lock: release/eviction cannot dispose a borrowed image.
+                Trim();
             }
-            if (!any) continue;
-            var rect = new SKRect((float)(bx * blockSize), (float)(by * blockSize), (float)((bx + 1) * blockSize), (float)((by + 1) * blockSize));
-            lock (Gate)
-            {
-                var image = Get(layer, bx, by, refs, buildImage);
-                canvas.DrawImage(image, rect, sampling, paint);
-            }
+            Trim();
         }
     }
 
-    private static SKImage Get(LayerId layer, int bx, int by, byte[]?[] refs, Func<byte[], TileImageKind, SKImage> buildImage)
-    {
-        var key = (layer, bx, by);
-        if (Entries.TryGetValue(key, out var entry) && Same(entry.Tiles, refs))
-        {
-            Order.Remove(key); Order.Add(key);
-            return entry.Image;
-        }
-        var image = buildImage(Reduce(refs), TileImageKind.LandCoverage);
-        if (Entries.Remove(key, out var stale)) { stale.Image.Dispose(); Order.Remove(key); }
-        Entries[key] = new Entry(refs.Select(tile => tile is null ? null : new WeakReference<byte[]>(tile)).ToArray(), image); Order.Add(key);
-        while (Order.Count > Capacity)
-        {
-            var oldest = Order[0]; Order.RemoveAt(0);
-            if (Entries.Remove(oldest, out var evicted)) evicted.Image.Dispose();
-        }
-        return image;
-    }
-
-    private static bool Same(WeakReference<byte[]>?[] a, byte[]?[] b)
-    {
-        for (var i = 0; i < a.Length; i++)
-        {
-            if (a[i] is null) { if (b[i] is not null) return false; }
-            else if (!a[i]!.TryGetTarget(out var tile) || !ReferenceEquals(tile, b[i])) return false;
-        }
-        return true;
-    }
-
-    /// <summary>The block reduced to one tile-sized coverage: each coarse pixel is the mean of a 16×16 square of source pixels.</summary>
+    /// <summary>Each coarse pixel is the exact integer mean of a 16 by 16 source square.</summary>
     private static byte[] Reduce(byte[]?[] refs)
     {
         const int size = TileMap.TileSize;
-        const int cell = size / Reduction; // coarse pixels per tile side
+        const int cell = size / Reduction;
         var sums = new int[size * size];
         for (var ty = 0; ty < Block; ty++)
         for (var tx = 0; tx < Block; tx++)

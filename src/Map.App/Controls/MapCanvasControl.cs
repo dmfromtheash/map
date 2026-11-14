@@ -25,10 +25,22 @@ namespace Map.App.Controls;
 public sealed partial class MapCanvasControl : Control
 {
     private EditorViewModel? _editor;
+    private readonly SceneRenderer.OverviewPreparation _overviewPreparation = new();
     private CanvasInputRouter? _input;
     private Point? _lastPointer;
     private long _sceneRevision;
     private long _completedSceneRevision;
+    private int _refinementQueued;
+
+    private void QueueRefinedFrame()
+    {
+        if (System.Threading.Interlocked.Exchange(ref _refinementQueued, 1) != 0) return;
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            System.Threading.Interlocked.Exchange(ref _refinementQueued, 0);
+            if (TopLevel.GetTopLevel(this) is not null) QueueVisualInvalidation();
+        }, Avalonia.Threading.DispatcherPriority.Render);
+    }
 
     /// <summary>A diagnostic frame request tied to the input that just changed this canvas.</summary>
     public long RequestFrameForSmoke()
@@ -47,6 +59,13 @@ public sealed partial class MapCanvasControl : Control
         && !LastTerrainRefinementPending && !LastDetailTilesPending && !LastFrameFastTerrain;
     private sealed record GpuCapture(long Revision, System.Threading.Tasks.TaskCompletionSource<SKBitmap> Completion);
     private GpuCapture? _gpuCapture;
+
+    /// <summary>Diagnostic: rebuild retained scene pixels without changing the document or camera.</summary>
+    public void ClearDerivedRenderCachesForSmoke()
+    {
+        lock (_renderResources.Gate) _renderResources.Dispose();
+        QueueVisualInvalidation();
+    }
 
     /// <summary>Reads this canvas from its own native GPU frame; no desktop capture or activation.</summary>
     public async System.Threading.Tasks.Task<SKBitmap> CaptureGpuFrameForSmokeAsync()
@@ -88,6 +107,14 @@ public sealed partial class MapCanvasControl : Control
         public object Gate { get; } = new();
         private long _disposedObjectImages;
         private readonly System.Collections.Generic.Dictionary<int, HexChunkCache> _hexChunks = [];
+        private readonly System.Collections.Generic.Dictionary<int, (IStampImageSource? Source, long Revision)> _sourceVersions = [];
+        private readonly System.Collections.Generic.Dictionary<int, CameraFrameCache> _cameraFrames = [];
+        public CameraFrameCache CameraFrames()
+        {
+            var thread = Environment.CurrentManagedThreadId;
+            if (!_cameraFrames.TryGetValue(thread, out var cache)) _cameraFrames[thread] = cache = new();
+            return cache;
+        }
 
         /// <summary>Kept hex chunk pictures of the current render thread.</summary>
         public HexChunkCache Hex()
@@ -97,9 +124,18 @@ public sealed partial class MapCanvasControl : Control
             return cache;
         }
         private readonly System.Collections.Generic.Dictionary<int, (TileImageCache Tiles, ObjectOverviewCache Objects, CarvedLandCache Land, RenderImageCache Styled, RenderImageCache Terrain, ObjectOverviewCache Atlases, TerrainRefinement Refinement, StrokePreviewCache Preview, LayerImageCache Layers)> _contexts = [];
-        public (TileImageCache Tiles, ObjectOverviewCache Objects, CarvedLandCache Land, RenderImageCache Styled, RenderImageCache Terrain, ObjectOverviewCache Atlases, TerrainRefinement Refinement, StrokePreviewCache Preview, LayerImageCache Layers) Current()
+        public (TileImageCache Tiles, ObjectOverviewCache Objects, CarvedLandCache Land, RenderImageCache Styled, RenderImageCache Terrain, ObjectOverviewCache Atlases, TerrainRefinement Refinement, StrokePreviewCache Preview, LayerImageCache Layers) Current(IStampImageSource? source)
         {
             var thread = Environment.CurrentManagedThreadId;
+            var version = (source, source?.SourceRevision ?? 0);
+            if (_sourceVersions.TryGetValue(thread, out var previous) && previous != version && _contexts.Remove(thread, out var stale))
+            {
+                stale.Refinement.Dispose(); stale.Tiles.Dispose(); stale.Objects.Dispose(); stale.Land.Dispose();
+                stale.Styled.Dispose(); stale.Terrain.Dispose(); stale.Atlases.Dispose(); stale.Preview.Dispose(); stale.Layers.Dispose();
+                _disposedObjectImages += stale.Objects.Disposals;
+                if (_cameraFrames.Remove(thread, out var camera)) camera.Dispose();
+            }
+            _sourceVersions[thread] = version;
             if (!_contexts.TryGetValue(thread, out var context))
                 // Eight finished land pieces and six whole terrains, each a view-sized half-float
                 // image (about 10 MiB at 1440×900): enough that returning to a recent view, the
@@ -110,7 +146,8 @@ public sealed partial class MapCanvasControl : Control
                 // the frames of the zoom find a complete kept bucket instead of rebuilding tiles of
                 // 50 000 objects in the frame (64 MiB held about one and a half buckets). Under memory
                 // pressure the cache still drops to 16 MiB.
-                _contexts[thread] = context = (new(4096, 256L * 1024 * 1024), new(1024, 256L * 1024 * 1024), new(), new(8), new(6), new(6, 192L * 1024 * 1024), new(), new(), new());
+                _contexts[thread] = context = (new(4096, 256L * 1024 * 1024), new(1024, 256L * 1024 * 1024, memoryAccount: "object-overview"),
+                    new(), new(8), new(6), new(6, 192L * 1024 * 1024, memoryAccount: "object-atlas"), new(), new(), new());
             return context;
         }
         public (int Tiles, int Objects, long Bytes, long Disposals) Counts()
@@ -129,6 +166,8 @@ public sealed partial class MapCanvasControl : Control
             {
                 foreach (var hex in _hexChunks.Values) hex.Dispose();
                 _hexChunks.Clear();
+                foreach (var camera in _cameraFrames.Values) camera.Dispose();
+                _cameraFrames.Clear();
                 foreach (var context in _contexts.Values)
                 {
                     context.Refinement.Dispose(); context.Tiles.Dispose(); context.Objects.Dispose(); context.Land.Dispose(); context.Styled.Dispose(); context.Terrain.Dispose(); context.Atlases.Dispose(); context.Preview.Dispose(); context.Layers.Dispose();
@@ -136,6 +175,7 @@ public sealed partial class MapCanvasControl : Control
                     _disposedObjectImages += context.Objects.Disposals;
                 }
                 _contexts.Clear();
+                _sourceVersions.Clear();
             }
         }
     }
@@ -173,8 +213,9 @@ public sealed partial class MapCanvasControl : Control
     private Avalonia.Threading.DispatcherTimer? _settleTimer;
 
     /// <summary>The camera moved through the wheel or a pan: mark the motion and schedule the settled frame.</summary>
-    private void NoteCameraMotion()
+    private void NoteCameraMotion(bool pan = false)
     {
+        _journalCameraGesture = pan ? Map.Presentation.Services.PerformanceGesture.Pan : Map.Presentation.Services.PerformanceGesture.Zoom;
         _lastCameraMotion = Stopwatch.GetTimestamp();
         _settleTimer ??= new Avalonia.Threading.DispatcherTimer(CameraSettle + TimeSpan.FromMilliseconds(15),
             Avalonia.Threading.DispatcherPriority.Render, (_, _) => { _settleTimer!.Stop(); QueueVisualInvalidation(); });
@@ -192,7 +233,26 @@ public sealed partial class MapCanvasControl : Control
 
     /// <summary>Diagnostic: when MAP_MEASURE_GPU_FLUSH=1 the frame waits for its GPU work and records the wait.</summary>
     private static readonly bool MeasureGpuFlush = Environment.GetEnvironmentVariable("MAP_MEASURE_GPU_FLUSH") == "1";
+
+    /// <summary>
+    /// Diagnostic A/B: MAP_PERF_GESTURE_BUDGET=0 gives gesture frames the settled adoption budget and
+    /// lets overview prefetch run during gestures (the behaviour before the gesture budget).
+    /// </summary>
+    private static readonly bool GestureBudgetDisabled = Environment.GetEnvironmentVariable("MAP_PERF_GESTURE_BUDGET") == "0";
     public static double LastFrameGpuFlushMilliseconds { get; private set; }
+    /// <summary>Diagnostics: QPC (Stopwatch ticks) of the last canvas frame's start and of the end of its CPU work.</summary>
+    public static long LastFrameStartQpc { get; private set; }
+    public static long LastFrameEndQpc { get; private set; }
+    /// <summary>QPC start of the canvas frame whose GPU timer result is <see cref="LastFrameGpuTimerMilliseconds"/>.</summary>
+    public static long LastFrameGpuTimerFrameQpc => GpuTimer.LastFrameQpc;
+    /// <summary>GPU time of a recent canvas frame from the asynchronous timer query (DEC-111); null when unavailable.</summary>
+    public static double? LastFrameGpuTimerMilliseconds { get; private set; }
+    private static readonly GpuFrameTimer GpuTimer = new();
+    /// <summary>Whether the GPU timer works here, and how many results it read / dropped.</summary>
+    public static (bool Available, long Completed, long Dropped) GpuTimerStatistics => (GpuTimer.Available, GpuTimer.Completed, GpuTimer.Dropped);
+    /// <summary>Canvas work including resource locking, image adoption and GPU completion;
+    /// excludes diagnostic screenshot readback and monitor scan-out.</summary>
+    public static double LastFrameWorkMilliseconds { get; private set; }
 
     public double LastPressureSample => _input?.LastPressureSample ?? 1;
 
@@ -264,7 +324,7 @@ public sealed partial class MapCanvasControl : Control
     public long LastFrameTerrainHits { get; private set; }
     public long LastFrameTerrainMisses { get; private set; }
     public bool LastFrameHadGpuContext { get; private set; }
-    public string LastStyledLandMiss { get { lock (_renderResources.Gate) { var current = _renderResources.Current(); return "terrain: " + current.Terrain.LastMiss + "; land: " + current.Styled.LastMiss; } } }
+    public string LastStyledLandMiss { get { lock (_renderResources.Gate) { var current = _renderResources.Current(_editor?.StampImages); return "terrain: " + current.Terrain.LastMiss + "; land: " + current.Styled.LastMiss; } } }
     public long FramesRendered => System.Threading.Interlocked.Read(ref _framesRendered);
     private long _framesRendered;
     public Map.Core.Documents.MapDocument? LastRenderedDocument { get; private set; }
@@ -278,6 +338,7 @@ public sealed partial class MapCanvasControl : Control
     /// <summary>Own-process native-smoke hook; normal lifetime calls the same path on detach.</summary>
     public void DisposeRenderCaches()
     {
+        _overviewPreparation.Reset();
         lock (_renderResources.Gate)
         {
             _renderResources.Dispose();
@@ -297,7 +358,7 @@ public sealed partial class MapCanvasControl : Control
         }
 
         _editor.Session.Viewport.PanByScreenDelta(dx, dy);
-        NoteCameraMotion();
+        NoteCameraMotion(pan: true);
         ViewportChanged?.Invoke(this, EventArgs.Empty);
         QueueVisualInvalidation();
     }
@@ -434,7 +495,7 @@ public sealed partial class MapCanvasControl : Control
 
         if (result.ViewportChanged)
         {
-            NoteCameraMotion();
+            NoteCameraMotion(pan: _input is { ActiveGesture: CanvasInputGesture.Pan });
             ViewportChanged?.Invoke(this, EventArgs.Empty);
         }
 
@@ -471,6 +532,7 @@ public sealed partial class MapCanvasControl : Control
         _editor.SceneInvalidated += OnSceneInvalidated;
         _editor.CanvasGestureCancelled += OnCanvasGestureCancelled;
         _editor.HexTileLanded += OnHexTileLanded;
+        PrepareOverview();
         QueueVisualInvalidation();
     }
 
@@ -487,13 +549,23 @@ public sealed partial class MapCanvasControl : Control
         QueueVisualInvalidation();
     }
 
-    private void OnSceneChanged(object? sender, EventArgs e) =>
+    private void OnSceneChanged(object? sender, EventArgs e)
+    {
+        PrepareOverview();
         QueueVisualInvalidation();
+    }
+
+    private void PrepareOverview()
+    {
+        if (_editor is { } editor)
+            _overviewPreparation.UpdateDocument(editor.RenderDocument, editor.StampImages, QueueRefinedFrame);
+    }
 
     private void OnSceneInvalidated(object? sender, EditorSceneInvalidatedEventArgs e)
     {
         if (e.Has(EditorChangeReason.CanvasInvalidation))
         {
+            PrepareOverview();
             QueueVisualInvalidation();
         }
     }
@@ -593,16 +665,15 @@ public sealed partial class MapCanvasControl : Control
             new Rect(0, 0, Bounds.Width, Bounds.Height), _editor, _renderResources,
             _renderStats, PerformanceMode,
             _input is { ActiveGesture: not CanvasInputGesture.None and not CanvasInputGesture.Marquee },
+            _input is { ActiveGesture: CanvasInputGesture.Pan } || CameraMoving,
+            () => CameraMoving,
             // The terrain is drawn from its kept image only while the view itself moves (a pan,
             // or wheel notches within the last CameraSettle) or the geometry of water or a road
             // is being dragged. A stroke, an armed asset, a selection or an object drag leaves
             // the land and the water exactly as the idle frame draws them.
             _input is { ActiveGesture: CanvasInputGesture.Pan } || CameraMoving
                 || _editor.IsDraggingRiver || _editor.IsDraggingRoad,
-            () => Avalonia.Threading.Dispatcher.UIThread.Post(() =>
-            {
-                if (TopLevel.GetTopLevel(this) is not null) QueueVisualInvalidation();
-            }, Avalonia.Threading.DispatcherPriority.Render),
+            QueueRefinedFrame, _overviewPreparation,
             (surface, canvas) => CompleteGpuCapture(surface, canvas, sceneRevision),
             ShowFpsBadge ? DrawFpsBadge : null,
             (tier, elapsedMilliseconds, document, fastTerrain, styledHits, styledMisses, terrainHits, terrainMisses, gpu) =>
@@ -623,6 +694,7 @@ public sealed partial class MapCanvasControl : Control
                 LastRenderedDocument = document;
                 System.Threading.Interlocked.Exchange(ref _completedSceneRevision, sceneRevision);
                 RecordStatisticsFrame(requestedFrame, elapsedMilliseconds);
+                RecordPerformanceFrame();
                 TraceFrame(elapsedMilliseconds, tier, fastTerrain, _renderStats, System.Threading.Interlocked.Read(ref _requestedFrame), requestedFrame);
                 FrameRendered?.Invoke(this, EventArgs.Empty);
             },
@@ -724,7 +796,7 @@ public sealed partial class MapCanvasControl : Control
 
     private sealed class SceneDrawOperation(
         Rect bounds, EditorViewModel editor, CanvasRenderResources resources, RenderStats renderStats,
-        CanvasPerformanceMode performanceMode, bool fastPreview, bool fastTerrain, Action requestRefinedFrame, Action<SKSurface, SKCanvas> captureFrame,
+        CanvasPerformanceMode performanceMode, bool fastPreview, bool cameraMoving, Func<bool> cameraMotionNow, bool fastTerrain, Action requestRefinedFrame, SceneRenderer.OverviewPreparation overviewPreparation, Action<SKSurface, SKCanvas> captureFrame,
         Action<SKCanvas, float, float>? drawBadge,
         Action<RenderLodTier, double, Map.Core.Documents.MapDocument, bool, long, long, long, long, bool> frameRendered,
         Map.Rendering.BrushCursorPreview? brushCursor, bool hexAmbient, Action requestAmbientFrame) : ICustomDrawOperation
@@ -744,14 +816,17 @@ public sealed partial class MapCanvasControl : Control
                 return;
             }
 
-            lock (resources.Gate) RenderFrame(feature);
+            var frameStarted = Stopwatch.GetTimestamp();
+            lock (resources.Gate) RenderFrame(feature, frameStarted);
         }
 
-        private void RenderFrame(ISkiaSharpApiLeaseFeature feature)
+        private void RenderFrame(ISkiaSharpApiLeaseFeature feature, long frameStarted)
         {
-            var (tileCache, objectCache, carvedLandCache, styledLandCache, terrainCache, atlasCache, refinement, previewCache, layerImages) = resources.Current();
             // Pictures other threads push out of the stamp cache while this frame draws are freed after it.
+            if (editor.StampImages is Map.Presentation.Services.CatalogStampImageSource images)
+                images.SetFrameReady(requestRefinedFrame);
             using var stampFrame = editor.StampImages?.BeginFrame();
+            var (tileCache, objectCache, carvedLandCache, styledLandCache, terrainCache, atlasCache, refinement, previewCache, layerImages) = resources.Current(editor.StampImages);
             tileCache.BeginFrame();
             var overviewFrame = false;
             try
@@ -759,6 +834,8 @@ public sealed partial class MapCanvasControl : Control
                 objectCache.BeginFrame(); atlasCache.BeginFrame();
                 overviewFrame = true;
                 using var lease = feature.Lease();
+                // DEC-111 sensor: GPU time of this frame, read asynchronously a few frames later.
+                if (!MeasureGpuFlush) GpuTimer.Begin(lease);
                 // One Avalonia GPU context is shared by the windows. Bound its reusable texture
                 // cache; active frame resources remain owned by the borrowed lease/driver.
                 if (lease.GrContext is { } gpu && gpu.GetResourceCacheLimit() != GpuResourceCacheBytes)
@@ -802,7 +879,55 @@ public sealed partial class MapCanvasControl : Control
             var styledMissesBefore = styledLandCache.Misses;
             var terrainHitsBefore = terrainCache.Hits;
             var terrainMissesBefore = terrainCache.Misses;
-            SceneRenderer.Render(canvas, renderDocument, new Map.Rendering.RenderOptions
+            var cameraFrames = resources.CameraFrames();
+            // Fog is a scalar; CompareMarks returns a new immutable value snapshot. No view
+            // collection used by this identity is mutated in place by the editor.
+            cameraFrames.SetIdentity(renderDocument, lease.GrContext?.Handle ?? IntPtr.Zero,
+                editor.HexPresentation, editor.HexLevelShown, editor.HexGhostLevel, editor.FogVeilToDraw, editor.CompareMarks,
+                editor.CanvasBoundaryOverlay, editor.MaskEditLayerId, editor.CliffMaskLayerId,
+                editor.StampImages?.MissingRevision ?? 0L,
+                CameraFramePolicy.KeyOf(editor.CanvasWorkflowOpen ? null : editor.Session.SelectedObjectId,
+                    editor.CanvasWorkflowOpen ? [] : editor.Session.SelectedObjectIds));
+            var objectOverrides = editor.EditableAreaPreviewOverrides ?? editor.EditablePathPreviewOverrides ?? editor.DragPreview?.Proposed;
+            var riverOverrides = editor.RiverRenderOverrides;
+            var roadOverrides = editor.RoadRenderOverrides;
+            // A selection or an armed brush only decorates the scene: the kept camera frame holds the
+            // scene without them and they are drawn over it (DrawEditorOverlay below), so a pan with
+            // a selection moves the kept frame instead of redrawing the whole map every frame.
+            var cameraEligible = CameraFramePolicy.Eligible(new CameraFramePolicy.Inputs(
+                Enabled: Environment.GetEnvironmentVariable("MAP_PERF_CAMERA_FRAMES") != "0",
+                GpuSurface: lease.GrContext is not null && lease.SkSurface is not null,
+                LiveObjectPreview: hasLiveObjectPreview,
+                StrokePreview: editor.StrokePreview is not null,
+                CanvasWorkflowOpen: editor.CanvasWorkflowOpen,
+                Marquee: editor.MarqueeWorld is not null || editor.LandShapePreview is not null,
+                FogStroke: editor.FogStrokePreview is not null,
+                HexGesture: editor.HasHexGesture,
+                HexCursor: editor.HexCursorShown is not null,
+                SeamlessPlanet: renderDocument.Planet is { Enabled: true, SeamlessMeridian: true },
+                SceneOverrides: objectOverrides is { Count: > 0 } || riverOverrides is { Count: > 0 } || roadOverrides is { Count: > 0 },
+                Selection: editor.Session.SelectedObjectId is not null || editor.Session.SelectedObjectIds.Count > 0,
+                BrushCursor: brushCursor is not null));
+            if (!cameraEligible) cameraFrames.Clear();
+            var page = new SKRect(0, 0, renderDocument.Canvas.Width, renderDocument.Canvas.Height);
+            // An idle draw operation can still be queued when the next input changes the
+            // shared viewport. Do not start a cold exact render of that new, moving view.
+            var movingNow = cameraMoving || cameraMotionNow();
+            // The next frame's mip adoption takes the smaller gesture byte budget while the camera moves.
+            if (editor.StampImages is Map.Presentation.Services.CatalogStampImageSource movingImages) movingImages.FrameMoving = movingNow;
+            // Background derived work (lookups, overview prefetch) steps aside during gestures.
+            if (movingNow || fastPreview) Map.Core.Resources.BackgroundWork.NoteInteraction();
+            if (GestureBudgetDisabled) { objectCache.GestureAdoptedPixelsPerFrame = 0; overviewPreparation.YieldDuringGesture = false; }
+            var reusedCamera = cameraEligible && movingNow && cameraFrames.TryDraw(canvas,
+                new SKRect((float)X, (float)Y, (float)bottomRight.X, (float)bottomRight.Y), page);
+            if (reusedCamera)
+            {
+                renderStats.Reset();
+                renderStats.CameraFramesReused = 1;
+                // It is a moving preview, never a completed exact frame for captures or idle work.
+                renderStats.DetailTilesPending = 1;
+            }
+            var sceneOptions = new Map.Rendering.RenderOptions
             {
                 GpuContext = lease.GrContext,
                 SelectedObjectId = editor.CanvasWorkflowOpen ? null : editor.Session.SelectedObjectId,
@@ -833,10 +958,10 @@ public sealed partial class MapCanvasControl : Control
                 FogOverride = editor.FogStrokePreview,
                 VisibleWorld = new Map.Core.Documents.WorldBounds(
                     X, Y, bottomRight.X, bottomRight.Y),
-                ObjectOverrides = editor.EditableAreaPreviewOverrides ?? editor.EditablePathPreviewOverrides ?? editor.DragPreview?.Proposed,
-                RiverOverrides = editor.RiverRenderOverrides,
+                ObjectOverrides = objectOverrides,
+                RiverOverrides = riverOverrides,
                 RiverPreviewLayerId = editor.RiverPreviewLayerId,
-                RoadOverrides = editor.RoadRenderOverrides,
+                RoadOverrides = roadOverrides,
                 RoadPreviewLayerId = editor.RoadPreviewLayerId,
                 PlacementPreviewObjects = editor.PlacementPreviewObjects,
                 PlacementPreviewLayerId = editor.PlacementPreviewLayerId,
@@ -852,6 +977,7 @@ public sealed partial class MapCanvasControl : Control
                 PlacementInvalid = editor.PendingPlacement?.InvalidReason is not null,
                 TileCache = tileCache,
                 ObjectCache = objectCache,
+                OverviewPreparation = overviewPreparation,
                 AtlasCache = atlasCache,
                 CarvedLand = carvedLandCache,
                 StyledLand = styledLandCache,
@@ -869,9 +995,23 @@ public sealed partial class MapCanvasControl : Control
                 FastPreview = editor.StrokePreview is not ({ IsLandPaint: true } or { IsCliffMask: true })
                     && (fastPreview || hasLiveObjectPreview || editor.StrokePreview is not null || editor.HasPendingPlacement),
                 FastTerrain = fastTerrain,
+                CameraMoving = movingNow,
                 Stats = renderStats,
                 BoundaryOverlay = editor.CanvasBoundaryOverlay,
-            });
+                // With camera frames the decorations go over the scene after its capture.
+                DeferEditorOverlay = cameraEligible,
+            };
+            if (!reusedCamera) SceneRenderer.Render(canvas, renderDocument, sceneOptions);
+            if (!reusedCamera && cameraEligible && !movingNow && !fastTerrain && !fastPreview
+                && renderStats.UnresolvedImages == 0 && renderStats.DetailTilesPending == 0
+                && renderStats.TerrainRefinementsPending == 0 && renderStats.HexChunksPending == 0
+                && editor.StampImages?.ImageRequestsPending != true)
+            {
+                var rejected = cameraFrames.CapturesRejectedByBudget;
+                cameraFrames.Capture(lease.SkSurface!, canvas, page);
+                renderStats.CameraCapturesRejectedByBudget = cameraFrames.CapturesRejectedByBudget > rejected ? 1 : 0;
+            }
+            if (cameraEligible) SceneRenderer.DrawEditorOverlay(canvas, renderDocument, sceneOptions);
             sceneStopwatch.Stop();
             // R39 «Бесшовный меридиан»: past a side edge of a planet the other side of the world
             // shows, faint and read-only, so a coast crossing the seam can be matched.
@@ -1018,6 +1158,12 @@ public sealed partial class MapCanvasControl : Control
             }
 
             canvas.Restore();
+            GpuTimer.End(lease, lease.GrContext);
+            LastFrameGpuTimerMilliseconds = GpuTimer.LastMilliseconds;
+            var frameEnded = Stopwatch.GetTimestamp();
+            LastFrameWorkMilliseconds = Stopwatch.GetElapsedTime(frameStarted, frameEnded).TotalMilliseconds;
+            LastFrameStartQpc = frameStarted;
+            LastFrameEndQpc = frameEnded;
             if (lease.GrContext is not null && lease.SkSurface is { } nativeSurface) captureFrame(nativeSurface, canvas);
             // After the capture: the smokes compare map pixels, and the readout is not the map.
             drawBadge?.Invoke(canvas, (float)Bounds.Width, (float)Bounds.Height);

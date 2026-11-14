@@ -36,32 +36,13 @@ public static partial class SceneRenderer
         var width = Math.Max(1, (int)Math.Ceiling(worldWidth * texel));
         var height = Math.Max(1, (int)Math.Ceiling(worldHeight * texel));
 
-        var info = new SKImageInfo(width, height, SKColorType.Alpha8, SKAlphaType.Premul);
-        using var coverage = SKSurface.Create(info);
-        if (coverage is null) return;
-        coverage.Canvas.Clear(SKColors.Transparent);
-        coverage.Canvas.Scale((float)texel);
-        coverage.Canvas.Translate((float)-padded.Left, (float)-padded.Top);
-        using (var paint = new SKPaint { Color = SKColors.Black, IsAntialias = true })
-            DrawLandCoverage(coverage.Canvas, visible, padded, options, paint);
-        byte[] alpha;
-        using (var bitmap = new SKBitmap(info))
-        {
-            if (!coverage.ReadPixels(info, bitmap.GetPixels(), info.RowBytes, 0, 0)) return;
-            alpha = bitmap.GetPixelSpan().ToArray();
-        }
-        // With no shore within reach every texel lies at the far limit: the open sea at its deepest.
-        var distance = CoastDistanceField.SignedDistance(alpha, width, height);
-        var texels = new Half[width * height * 4];
-        var limit = (float)(reach * 2);
-        for (var i = 0; i < distance.Length; i++)
-        {
-            texels[i * 4] = (Half)Math.Clamp(distance[i] / (float)texel, -limit, limit);
-            texels[(i * 4) + 3] = (Half)1f;
-        }
+        var key = new TerrainFieldCache.Key("sea", document.Layers[0].Id, padded, texel,
+            (width, height, reach, options.ViewScale, UseCoarseCoverage(options)),
+            TerrainFieldCache.CoverageRevisions(visible, new WorldBounds(padded.Left - TileMap.TileSize,
+                padded.Top - TileMap.TileSize, padded.Right + TileMap.TileSize, padded.Bottom + TileMap.TileSize)));
+        var bytes = TerrainFieldCache.Shared.Get(key, (long)width * height * 8, Build);
+        if (bytes is null) return;
         var fieldInfo = new SKImageInfo(width, height, SKColorType.RgbaF16, SKAlphaType.Premul);
-        var bytes = new byte[texels.Length * 2];
-        System.Runtime.InteropServices.MemoryMarshal.AsBytes(texels.AsSpan()).CopyTo(bytes);
         using var data = SKData.CreateCopy(bytes);
         using var fieldImage = SKImage.FromPixels(fieldInfo, data, fieldInfo.RowBytes);
         if (fieldImage is null) return;
@@ -72,6 +53,36 @@ public static partial class SceneRenderer
         if (shader is null) return;
         using var sheet = new SKPaint { Shader = shader };
         canvas.DrawRect(ToRect(view), sheet);
+
+        byte[]? Build()
+        {
+            var info = new SKImageInfo(width, height, SKColorType.Alpha8, SKAlphaType.Premul);
+            using var coverage = SKSurface.Create(info);
+            if (coverage is null) return null;
+            coverage.Canvas.Clear(SKColors.Transparent);
+            coverage.Canvas.Scale((float)texel);
+            coverage.Canvas.Translate((float)-padded.Left, (float)-padded.Top);
+            using (var paint = new SKPaint { Color = SKColors.Black, IsAntialias = true })
+                DrawLandCoverage(coverage.Canvas, visible, padded, options, paint);
+            byte[] alpha;
+            using (var bitmap = new SKBitmap(info))
+            {
+                if (!coverage.ReadPixels(info, bitmap.GetPixels(), info.RowBytes, 0, 0)) return null;
+                alpha = bitmap.GetPixelSpan().ToArray();
+            }
+            // With no shore within reach every texel lies at the far limit: the open sea at its deepest.
+            var distance = CoastDistanceField.SignedDistance(alpha, width, height);
+            var texels = new Half[width * height * 4];
+            var limit = (float)(reach * 2);
+            for (var i = 0; i < distance.Length; i++)
+            {
+                texels[i * 4] = (Half)Math.Clamp(distance[i] / (float)texel, -limit, limit);
+                texels[(i * 4) + 3] = (Half)1f;
+            }
+            var bytes = new byte[texels.Length * 2];
+            System.Runtime.InteropServices.MemoryMarshal.AsBytes(texels.AsSpan()).CopyTo(bytes);
+            return bytes;
+        }
     }
 }
 

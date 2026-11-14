@@ -481,6 +481,7 @@ public sealed class Stage10LibraryStampTests : IAsyncLifetime
 
         var editor = AreaEditor("missing", out var catalog);
         File.Delete(Original(catalog, needed));
+        editor.PreparePlacementAssetsAsync(refresh: true).GetAwaiter().GetResult();
         var before = new Untouched(editor);
 
         Assert.False(editor.PlaceCurrentVariantAt(900, 500));
@@ -499,6 +500,7 @@ public sealed class Stage10LibraryStampTests : IAsyncLifetime
 
         var editor = AreaEditor("mismatch", out var catalog);
         File.WriteAllBytes(Original(catalog, needed), File.ReadAllBytes(Source("intruder", SKColors.Fuchsia)));
+        editor.PreparePlacementAssetsAsync(refresh: true).GetAwaiter().GetResult();
         var before = new Untouched(editor);
 
         Assert.False(editor.PlaceCurrentVariantAt(900, 500));
@@ -579,6 +581,8 @@ public sealed class Stage10LibraryStampTests : IAsyncLifetime
         // Exclusive share: the file is there and unchanged, but nothing else may read it.
         using var exclusive = new FileStream(
             Original(catalog, record.Sha256), FileMode.Open, FileAccess.Read, FileShare.None);
+
+        editor.PreparePlacementAssetsAsync(refresh: true).GetAwaiter().GetResult();
 
         Assert.False(editor.PlaceCurrentVariantAt(100, 100));
 

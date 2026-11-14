@@ -190,7 +190,8 @@ public sealed class PasteCompositionCommand(
     {
         var result = new AddObjectCommand(layerId, instance).Revert(document);
         return _introduced.Count == 0 ? result : result.WithAssets(
-            [.. result.Assets.Where(asset => !_introduced.Contains(asset.Sha256))]);
+            [.. result.Assets.Where(asset => !_introduced.Contains(asset.Sha256)
+                || AssetUsageIndex.Count(result, asset.Sha256) > 0)]);
     }
 }
 
@@ -208,7 +209,8 @@ public sealed class FlattenCompositionCommand(
     public MapDocument Revert(MapDocument document)
     {
         var restored = new ReplaceObjectsCommand([source], [flattened], Name).Revert(document);
-        return _introduced ? restored.WithAssets([.. restored.Assets.Where(item => item.Sha256 != asset.Sha256)]) : restored;
+        return _introduced && AssetUsageIndex.Count(restored, asset.Sha256) == 0
+            ? restored.WithAssets([.. restored.Assets.Where(item => !string.Equals(item.Sha256, asset.Sha256, StringComparison.OrdinalIgnoreCase))]) : restored;
     }
 }
 
@@ -233,6 +235,7 @@ public sealed class UpdateFilterWithAssetCommand(
     public MapDocument Revert(MapDocument document)
     {
         var restored = document.WithLayer(before.Id, _ => before);
-        return _introduced ? restored.WithAssets([.. restored.Assets.Where(item => item.Sha256 != asset.Sha256)]) : restored;
+        return _introduced && AssetUsageIndex.Count(restored, asset.Sha256) == 0
+            ? restored.WithAssets([.. restored.Assets.Where(item => !string.Equals(item.Sha256, asset.Sha256, StringComparison.OrdinalIgnoreCase))]) : restored;
     }
 }

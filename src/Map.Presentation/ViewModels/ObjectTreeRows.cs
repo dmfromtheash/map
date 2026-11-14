@@ -1,4 +1,5 @@
-﻿using Map.Core.Documents;
+﻿using System.Collections.Immutable;
+using Map.Core.Documents;
 
 namespace Map.Presentation.ViewModels;
 
@@ -139,6 +140,34 @@ public static class ObjectTreeRows
         return new(current.Objects.Count(o => o.GroupId is not null));
     }).Value;
 
+    /// <summary>
+    /// Builds the per-layer lookups of the side list (picture kinds, draw order, group counts)
+    /// that a first selection or placement would otherwise build on the input thread. Later
+    /// layer revisions derive them from their delta. Thread-safe; the document is not changed.
+    /// </summary>
+    public static void PrepareLayerIndexes(MapDocument document, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        foreach (var layer in document.Layers)
+        {
+            if (layer is not ObjectLayer objects || objects.Objects.Count == 0) continue;
+            cancellationToken.ThrowIfCancellationRequested();
+            Map.Core.Resources.BackgroundWork.YieldToInteraction(cancellationToken);
+            _ = GroupedCount(objects);
+            Map.Core.Resources.BackgroundWork.YieldToInteraction(cancellationToken);
+            _ = KindIndex.For(objects);
+        }
+    }
+
+    /// <summary>True when <see cref="PrepareLayerIndexes"/> has nothing left to build.</summary>
+    public static bool LayerIndexesPrepared(MapDocument document)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        foreach (var layer in document.Layers)
+            if (layer is ObjectLayer { Objects.Count: > 0 } objects && !KindIndex.IsPrepared(objects)) return false;
+        return true;
+    }
+
     public static IReadOnlyList<ObjectTreeRow> Build(
         MapDocument document,
         string searchText,
@@ -192,10 +221,10 @@ public static class ObjectTreeRows
     public static string AssetKeyOf(SceneObject sceneObject) =>
         sceneObject.Stamp?.AssetSha256 is { Length: > 0 } sha ? sha : "name:" + sceneObject.Name;
 
-    private static string KindTitle(string key, IReadOnlyList<SceneObject> members, Func<string, string?>? assetTitle)
+    private static string KindTitle(string key, SceneObject representative, Func<string, string?>? assetTitle)
     {
         if (!key.StartsWith("name:", StringComparison.Ordinal) && assetTitle?.Invoke(key) is { Length: > 0 } title) return title;
-        var name = members[0].Name;
+        var name = representative.Name;
         var cut = name.IndexOf(" · ", StringComparison.Ordinal);
         return cut > 0 ? name[..cut] : name;
     }
@@ -210,44 +239,57 @@ public static class ObjectTreeRows
     {
         private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<ObjectLayer, KindIndex> Cache = [];
         public List<string> Order { get; private init; } = [];
-        public Dictionary<string, List<SceneObject>> Kinds { get; private init; } = new(StringComparer.Ordinal);
+        public Dictionary<string, ImmutableList<SceneObject>> Kinds { get; private init; } = new(StringComparer.Ordinal);
 
         public static KindIndex For(ObjectLayer layer) => Cache.GetValue(layer, Build);
+        public static bool IsPrepared(ObjectLayer layer) => Cache.TryGetValue(layer, out _);
 
         private static KindIndex Build(ObjectLayer layer)
         {
-            if (ObjectLayerChanges.TryGet(layer, out var delta) && Cache.TryGetValue(delta.Source, out var previous))
-                return previous.Apply(delta, layer);
+            // Derive through the retained chain even when no one asked for the revisions in
+            // between (an edit burst coalesced into one side-list refresh, an undo of a drag):
+            // stopping at an unindexed predecessor regrouped every object of the layer.
+            // Iterative and bounded, so a long unindexed history cannot exhaust the stack.
+            var chain = new List<(ObjectLayerChange Delta, ObjectLayer Layer)>();
+            for (var current = layer; chain.Count < 256 && ObjectLayerChanges.TryGet(current, out var delta); current = delta.Source)
+            {
+                chain.Add((delta, current));
+                if (Cache.TryGetValue(delta.Source, out var known))
+                {
+                    for (var i = chain.Count - 1; i >= 0; i--)
+                    {
+                        var (step, target) = chain[i];
+                        known = i == 0 ? known.Apply(step, target) : Cache.GetValue(target, _ => known.Apply(step, target));
+                    }
+                    return known;
+                }
+            }
             var index = new KindIndex();
+            var builders = new Dictionary<string, ImmutableList<SceneObject>.Builder>(StringComparer.Ordinal);
             var ordered = StackOrder(layer);
             for (var i = ordered.Count - 1; i >= 0; i--)
             {
                 var sceneObject = ordered[i];
                 if (sceneObject.Kind != SceneObjectKind.Stamp) continue;
                 var key = AssetKeyOf(sceneObject);
-                if (!index.Kinds.TryGetValue(key, out var members)) { members = []; index.Kinds.Add(key, members); index.Order.Add(key); }
+                if (!builders.TryGetValue(key, out var members)) { members = ImmutableList.CreateBuilder<SceneObject>(); builders.Add(key, members); index.Order.Add(key); }
                 members.Add(sceneObject);
             }
+            foreach (var (key, members) in builders) index.Kinds.Add(key, members.ToImmutable());
             return index;
         }
 
         private KindIndex Apply(ObjectLayerChange delta, ObjectLayer layer)
         {
-            var next = new KindIndex { Order = [.. Order], Kinds = new Dictionary<string, List<SceneObject>>(Kinds, StringComparer.Ordinal) };
-            var owned = new HashSet<string>(StringComparer.Ordinal);
-            List<SceneObject> Own(string key)
-            {
-                if (owned.Add(key)) next.Kinds[key] = [.. next.Kinds[key]];
-                return next.Kinds[key];
-            }
+            var next = new KindIndex { Order = [.. Order], Kinds = new Dictionary<string, ImmutableList<SceneObject>>(Kinds, StringComparer.Ordinal) };
             foreach (var index in delta.Removed)
             {
                 var gone = delta.Source.Objects[index];
                 if (gone.Kind != SceneObjectKind.Stamp) continue;
                 var key = AssetKeyOf(gone);
                 if (!next.Kinds.ContainsKey(key)) continue;
-                var members = Own(key);
-                members.RemoveAll(member => member.Id == gone.Id);
+                var members = next.Kinds[key].RemoveAll(member => member.Id == gone.Id);
+                next.Kinds[key] = members;
                 if (members.Count == 0) { next.Kinds.Remove(key); next.Order.Remove(key); }
             }
             foreach (var index in delta.Added)
@@ -255,8 +297,8 @@ public static class ObjectTreeRows
                 var added = layer.Objects[index];
                 if (added.Kind != SceneObjectKind.Stamp) continue;
                 var key = AssetKeyOf(added);
-                if (!next.Kinds.ContainsKey(key)) { next.Kinds[key] = []; next.Order.Add(key); owned.Add(key); }
-                Own(key).Insert(0, added);
+                if (!next.Kinds.ContainsKey(key)) { next.Kinds[key] = []; next.Order.Add(key); }
+                next.Kinds[key] = next.Kinds[key].Insert(0, added);
             }
             return next;
         }
@@ -265,7 +307,7 @@ public static class ObjectTreeRows
     private static IReadOnlyList<ObjectTreeRow> AssetKindRows(
         MapDocument document, IReadOnlyCollection<ObjectId> selectedIds, string? openAssetKey, Func<string, string?>? assetTitle)
     {
-        var kinds = new Dictionary<string, List<SceneObject>>(StringComparer.Ordinal);
+        var kinds = new Dictionary<string, (int Count, SceneObject Representative)>(StringComparer.Ordinal);
         var order = new List<string>();
         var layers = document.Layers.OfType<ObjectLayer>().ToArray();
         for (var l = layers.Length - 1; l >= 0; l--)
@@ -274,31 +316,46 @@ public static class ObjectTreeRows
             foreach (var key in index.Order)
             {
                 var members = index.Kinds[key];
-                if (kinds.TryGetValue(key, out var merged))
-                {
-                    // The same picture on two layers: one row, upper layer's copies first.
-                    if (!ReferenceEquals(merged, members)) { if (merged.Count + members.Count > 0) { var joined = new List<SceneObject>(merged.Count + members.Count); joined.AddRange(merged); joined.AddRange(members); kinds[key] = joined; } }
-                }
-                else { kinds.Add(key, members); order.Add(key); }
+                if (kinds.TryGetValue(key, out var merged)) kinds[key] = (merged.Count + members.Count, merged.Representative);
+                else { kinds.Add(key, (members.Count, members[0])); order.Add(key); }
             }
         }
-        var selected = selectedIds as ISet<ObjectId> ?? new HashSet<ObjectId>(selectedIds);
+        var selected = SelectedAssetKeys(document, selectedIds);
         if (openAssetKey is { } open && kinds.TryGetValue(open, out var openMembers))
         {
             var crumb = new ObjectTreeRow(ObjectTreeRowKind.AssetKindBreadcrumb, "AssetKindBreadcrumb",
-                KindTitle(open, openMembers, assetTitle), EditorLabels.Objects(openMembers.Count), openMembers[0],
+                KindTitle(open, openMembers.Representative, assetTitle), EditorLabels.Objects(openMembers.Count), openMembers.Representative,
                 GroupId: null, ChildCount: openMembers.Count, Selected: false) { AssetKey = open };
-            var copies = new VirtualRowList([.. openMembers.Select(VirtualRowEntry.ForObject)], selectedIds);
+            var copies = new VirtualRowList([.. AssetMembers(document, open).Select(VirtualRowEntry.ForObject)], selectedIds);
             return new PrefixedRowList([crumb], copies);
         }
         return [.. order.Select(key =>
         {
             var members = kinds[key];
             return new ObjectTreeRow(ObjectTreeRowKind.AssetKind, $"AssetKindRow_{key}",
-                KindTitle(key, members, assetTitle), EditorLabels.Objects(members.Count), members[0],
-                GroupId: null, ChildCount: members.Count, Selected: members.Any(member => selected.Contains(member.Id)))
-            { AssetKey = key, MemberIds = [.. members.Select(member => member.Id)] };
+                KindTitle(key, members.Representative, assetTitle), EditorLabels.Objects(members.Count), members.Representative,
+                GroupId: null, ChildCount: members.Count, Selected: selected.Contains(key))
+            { AssetKey = key };
         })];
+    }
+
+    /// <summary>Only expanded kinds and explicit bulk selection enumerate their copies.</summary>
+    public static IEnumerable<SceneObject> AssetMembers(MapDocument document, string key)
+    {
+        foreach (var layer in document.Layers.OfType<ObjectLayer>().Reverse())
+            if (KindIndex.For(layer).Kinds.TryGetValue(key, out var members))
+                foreach (var member in members) yield return member;
+    }
+
+    /// <summary>O(selected IDs), independent of the number of copies in closed kind rows.</summary>
+    public static HashSet<string> SelectedAssetKeys(MapDocument document, IReadOnlyCollection<ObjectId> selectedIds)
+    {
+        var keys = new HashSet<string>(StringComparer.Ordinal);
+        if (selectedIds.Count == 0) return keys;
+        var revision = DocumentRevisionIndex.For(document);
+        foreach (var id in selectedIds)
+            if (revision.FindObject(id) is { Kind: SceneObjectKind.Stamp } item) keys.Add(AssetKeyOf(item));
+        return keys;
     }
 
     /// <summary>One row per piece of land, highest level first, matching the search and the type filter.</summary>
