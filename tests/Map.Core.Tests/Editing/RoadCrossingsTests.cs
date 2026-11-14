@@ -83,4 +83,34 @@ public sealed class RoadCrossingsTests
         Assert.Equal(copy.Branches[0].Id, copied.BranchId);
         Assert.Equal(RoadCrossingKind.Ford, copied.Kind);
     }
+
+    [Fact]
+    public void Kept_crossings_of_unchanged_pairs_equal_a_fresh_detection_in_the_same_order()
+    {
+        var roads = new List<Road>();
+        var rivers = new List<River>();
+        for (var i = 0; i < 6; i++)
+        {
+            roads.Add(RoadEditor.NewRoad([new(0, 40 + 60 * i), new(200, 70 + 60 * i), new(420, 40 + 60 * i)], 12));
+            rivers.Add(River(new(40 + 60 * i, 0), new(60 + 60 * i, 400)));
+        }
+        rivers.Add(River(new(0, 500), new(400, 520))); // crosses no road
+        var first = RoadCrossings.Detect(roads, rivers);
+        Assert.NotEmpty(first);
+        // The same records again: the kept pairs. Equal copies are new records: a fresh detection.
+        Assert.Equal(first, RoadCrossings.Detect(roads, rivers));
+        Assert.Equal(first, RoadCrossings.Detect([.. roads.Select(r => r with { })], [.. rivers.Select(r => r with { })]));
+
+        // One road edited (a new record): its crossings follow, the others stay exactly as they were.
+        var branch = roads[2].Branches[0].Id;
+        var hit = first.First(c => c.RoadId == roads[2].Id);
+        roads[2] = RoadEditor.SetCrossingKind(roads[2], branch, hit.ChannelId, hit.Ordinal, RoadCrossingKind.Ferry);
+        var after = RoadCrossings.Detect(roads, rivers);
+        Assert.Equal(first.Count, after.Count);
+        Assert.Equal(RoadCrossingKind.Ferry, after.Single(c => c.RoadId == hit.RoadId && c.ChannelId == hit.ChannelId && c.Ordinal == hit.Ordinal).Kind);
+        Assert.Equal(first.Where(c => c.RoadId != hit.RoadId), after.Where(c => c.RoadId != hit.RoadId));
+        // A hidden river is not crossed, kept or not.
+        rivers[0] = rivers[0] with { Visible = false };
+        Assert.DoesNotContain(RoadCrossings.Detect(roads, rivers), c => c.RiverId == rivers[0].Id);
+    }
 }

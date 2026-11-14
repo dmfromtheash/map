@@ -27,11 +27,16 @@ public static class LayerSurfaceOrder
         var seen = new HashSet<Guid>();
         if (!layer.SurfaceOrder.IsDefaultOrEmpty)
         {
+            // Sets of ids: asking the lists for every ordered id made a few hundred surfaces quadratic.
+            var roads = new HashSet<Guid>(layer.Roads.Length);
+            foreach (var road in layer.Roads) roads.Add(road.Id);
+            var rivers = new HashSet<Guid>(layer.Rivers.Length);
+            foreach (var river in layer.Rivers) rivers.Add(river.Id);
             foreach (var id in layer.SurfaceOrder)
             {
                 if (!seen.Add(id)) continue;
-                if (layer.Roads.Any(r => r.Id == id)) result.Add(new SurfaceEntry(SurfaceKind.Road, id));
-                else if (layer.Rivers.Any(r => r.Id == id)) result.Add(new SurfaceEntry(SurfaceKind.Water, id));
+                if (roads.Contains(id)) result.Add(new SurfaceEntry(SurfaceKind.Road, id));
+                else if (rivers.Contains(id)) result.Add(new SurfaceEntry(SurfaceKind.Water, id));
             }
         }
         foreach (var road in layer.Roads)

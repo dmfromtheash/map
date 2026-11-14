@@ -581,6 +581,15 @@ public sealed class RenderOptions
     public BrushCursorPreview? BrushCursor { get; init; }
 
     /// <summary>
+    /// The selection outline and handles, the marquee, the brush cursor and the canvas boundary
+    /// overlay are left out of this pass; the caller draws them afterwards with
+    /// <see cref="SceneRenderer.DrawEditorOverlay"/> (the same pixels in the same order). The canvas
+    /// does so to keep the frame of a moving camera free of these screen decorations, so a
+    /// selection or an armed brush no longer makes every pan frame redraw the whole map.
+    /// </summary>
+    public bool DeferEditorOverlay { get; init; }
+
+    /// <summary>
     /// Draws every coast with the filter passes instead of the distance field (CoastDistanceField),
     /// for comparing the two in tests and measurements without touching global state.
     /// </summary>
@@ -728,9 +737,9 @@ public static partial class SceneRenderer
             StarSystemRenderer.Draw(canvas, document, options);
             DrawChangeMarks(canvas, options);
             DrawPlacementPreview(canvas, document, options);
-            DrawSelectionChrome(canvas, document, options);
+            if (!options.DeferEditorOverlay) DrawSelectionChrome(canvas, document, options);
             canvas.Restore();
-            DrawBoundaryOverlay(canvas, options.BoundaryOverlay, options.ViewScale);
+            if (!options.DeferEditorOverlay) DrawBoundaryOverlay(canvas, options.BoundaryOverlay, options.ViewScale);
             return;
         }
         // The canvas without light or style gives back the video memory of its kept frames.
@@ -738,13 +747,39 @@ public static partial class SceneRenderer
         RenderScene(canvas, document, options, chrome: true);
     }
 
+    /// <summary>
+    /// The editor decorations a pass with <see cref="RenderOptions.DeferEditorOverlay"/> left out:
+    /// selection outline and handles, marquee and brush cursor inside the document clip, then the
+    /// canvas boundary overlay - exactly as <see cref="Render"/> draws them at the end of its pass.
+    /// They depend only on the options and the camera, never on the pixels below, so they can be
+    /// drawn over a kept camera frame too. The caller sets the same world transform.
+    /// </summary>
+    public static void DrawEditorOverlay(SKCanvas canvas, MapDocument document, RenderOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(canvas);
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(options);
+        if (HasSelectionChrome(options))
+        {
+            canvas.Save();
+            canvas.ClipRect(ToRect(new WorldBounds(0, 0, document.Canvas.Width, document.Canvas.Height)));
+            DrawSelectionChrome(canvas, document, options);
+            canvas.Restore();
+        }
+        DrawBoundaryOverlay(canvas, options.BoundaryOverlay, options.ViewScale);
+    }
+
+    private static bool HasSelectionChrome(RenderOptions options) =>
+        options.SelectedObjectId is not null || options.CoSelectedObjectIds is { Count: > 0 } || options.SelectionFrame is not null
+        || options.Marquee is not null || options.BrushCursor is not null;
+
     private static void RenderScene(SKCanvas canvas, MapDocument document, RenderOptions options, bool chrome)
     {
         var canvasBounds = new WorldBounds(0, 0, document.Canvas.Width, document.Canvas.Height);
         var requestedView = options.VisibleWorld ?? canvasBounds;
         if (!TryIntersect(requestedView, canvasBounds, out var view))
         {
-            if (chrome) DrawBoundaryOverlay(canvas, options.BoundaryOverlay, options.ViewScale);
+            if (chrome && !options.DeferEditorOverlay) DrawBoundaryOverlay(canvas, options.BoundaryOverlay, options.ViewScale);
             return;
         }
 
@@ -845,10 +880,10 @@ public static partial class SceneRenderer
             StarSystemRenderer.Draw(canvas, document, options);
             DrawChangeMarks(canvas, options);
             DrawPlacementPreview(canvas, document, options);
-            DrawSelectionChrome(canvas, document, options);
+            if (!options.DeferEditorOverlay) DrawSelectionChrome(canvas, document, options);
         }
         canvas.Restore();
-        if (chrome) DrawBoundaryOverlay(canvas, options.BoundaryOverlay, options.ViewScale);
+        if (chrome && !options.DeferEditorOverlay) DrawBoundaryOverlay(canvas, options.BoundaryOverlay, options.ViewScale);
         // Other image consumers (road caps, textures) also use the asynchronous working image.
         // Their worker notification schedules the next frame; never spin a redraw loop here.
         if (!options.IsExport && options.Stamps?.ImageRequestsPending == true && options.Stats is { } pending)
@@ -1095,27 +1130,53 @@ public static partial class SceneRenderer
 
     private static IEnumerable<Surface> LayerSurfaces(ObjectLayer layer, WorldBounds view, RenderOptions options)
     {
-        var rivers = RiverRenderer.Resolve(layer, options);
-        var roads = RoadRenderer.Resolve(layer, options);
-        if (rivers.Count == 0 && roads.Count == 0) yield break;
-        var resolved = layer with { Rivers = [.. rivers], Roads = [.. roads] };
-        var order = 0;
-        foreach (var entry in LayerSurfaceOrder.Resolve(resolved))
+        if (layer.Rivers.IsEmpty && layer.Roads.IsEmpty
+            && options.RiverOverrides is not { Count: > 0 } && options.RoadOverrides is not { Count: > 0 }) yield break;
+        var ordered = OrderedSurfaces(layer, options);
+        for (var order = 0; order < ordered.Length; order++)
         {
-            if (entry.Kind == SurfaceKind.Water)
+            var (river, road) = ordered[order];
+            if (river is not null)
             {
-                var river = rivers.First(r => r.Id == entry.Id);
                 if (river.Visible && river.Style.Opacity > 0 && RiverGeometry.Evaluate(river).Bounds.Intersects(view))
                     yield return new Surface(layer, order, river, null);
             }
-            else
-            {
-                var road = roads.First(r => r.Id == entry.Id);
-                if (road.Visible && road.Style.Opacity > 0 && RoadGeometry.Evaluate(road).Bounds.Intersects(view))
-                    yield return new Surface(layer, order, null, road);
-            }
-            order++;
+            else if (road!.Visible && road.Style.Opacity > 0 && RoadGeometry.Evaluate(road).Bounds.Intersects(view))
+                yield return new Surface(layer, order, null, road);
         }
+    }
+
+    /// <summary>A layer's own rivers and roads in its surface order, kept per layer revision (no live substitutions).</summary>
+    private static readonly ConditionalWeakTable<ObjectLayer, (River? River, Road? Road)[]> SurfaceOrders = new();
+
+    /// <summary>
+    /// The layer's rivers and roads (with the editor's live substitutions) in its surface order. Each
+    /// entry is found by id in a dictionary (the first of equal ids, as before): looking each one up
+    /// in the list made a map of a few hundred rivers and roads quadratic on every frame.
+    /// </summary>
+    private static (River? River, Road? Road)[] OrderedSurfaces(ObjectLayer layer, RenderOptions options)
+    {
+        var live = options.RiverOverrides is { Count: > 0 } || options.RoadOverrides is { Count: > 0 };
+        if (!live) return SurfaceOrders.GetValue(layer, static l => BuildSurfaceOrder(l, l.Rivers, l.Roads));
+        var rivers = RiverRenderer.Resolve(layer, options);
+        var roads = RoadRenderer.Resolve(layer, options);
+        if (rivers.Count == 0 && roads.Count == 0) return [];
+        return BuildSurfaceOrder(layer with { Rivers = [.. rivers], Roads = [.. roads] }, rivers, roads);
+    }
+
+    private static (River? River, Road? Road)[] BuildSurfaceOrder(ObjectLayer resolved, IReadOnlyList<River> rivers,
+        IReadOnlyList<Road> roads)
+    {
+        if (rivers.Count == 0 && roads.Count == 0) return [];
+        var riversById = new Dictionary<Guid, River>(rivers.Count);
+        foreach (var river in rivers) riversById.TryAdd(river.Id, river);
+        var roadsById = new Dictionary<Guid, Road>(roads.Count);
+        foreach (var road in roads) roadsById.TryAdd(road.Id, road);
+        var entries = LayerSurfaceOrder.Resolve(resolved);
+        var result = new (River?, Road?)[entries.Count];
+        for (var i = 0; i < entries.Count; i++)
+            result[i] = entries[i].Kind == SurfaceKind.Water ? (riversById[entries[i].Id], null) : (null, roadsById[entries[i].Id]);
+        return result;
     }
 
     /// <summary>
@@ -1150,21 +1211,36 @@ public static partial class SceneRenderer
             if (runRoads.Count > 0)
             {
                 var rivers = RiverRenderer.Resolve(run[0].Owner, options);
+                // Each road and river pair is detected once per revision of both (RoadCrossings caches
+                // it), and only the crossings that can reach the view are drawn.
                 var crossings = RoadCrossings.Detect(runRoads, rivers);
                 if (crossings.Count > 0)
                 {
+                    var roadLevels = new Dictionary<Guid, int>(runRoads.Count);
+                    foreach (var road in runRoads) roadLevels.TryAdd(road.Id, road.Level);
+                    var riverLevels = new Dictionary<Guid, int>(rivers.Count);
+                    foreach (var river in rivers) riverLevels.TryAdd(river.Id, river.Level);
                     // Water at a higher level than the road flows over it: no bridge there.
                     var kept = new List<RoadCrossing>(crossings.Count);
                     foreach (var crossing in crossings)
-                    {
-                        var roadLevel = runRoads.First(r => r.Id == crossing.RoadId).Level;
-                        var riverLevel = rivers.First(r => r.Id == crossing.RiverId).Level;
-                        if (riverLevel <= roadLevel) kept.Add(crossing);
-                    }
+                        if (riverLevels[crossing.RiverId] <= roadLevels[crossing.RoadId] && CrossingReaches(crossing, view, options.ViewScale))
+                            kept.Add(crossing);
                     if (kept.Count > 0) RoadCrossingRenderer.Draw(target, kept, options.ViewScale, options.FastPreview);
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Whether a crossing's drawing can touch the view: a circle around it wider than any bridge,
+    /// ford or ferry (half the span along the road, the deck's overhang, its shadow and blur, and the
+    /// strokes of a pixel or two), so leaving the others out changes no pixel.
+    /// </summary>
+    internal static bool CrossingReaches(RoadCrossing crossing, WorldBounds view, double viewScale)
+    {
+        var reach = crossing.SpanAlongRoad / 2 + 6 * crossing.RoadHalfWidth + 8 / Math.Max(viewScale, 1e-4);
+        return crossing.X + reach >= view.Left && crossing.X - reach <= view.Right
+            && crossing.Y + reach >= view.Top && crossing.Y - reach <= view.Bottom;
     }
 
     private static void DrawTerrain(SKCanvas canvas, MapDocument document, WorldBounds view, RenderOptions options)

@@ -110,6 +110,36 @@ public sealed class LightingRenderingTests
         Assert.Equal(2, asked);
     }
 
+    private static readonly Func<MapDocument, RenderOptions, bool> MayKeep = typeof(SceneRenderer).Assembly
+        .GetType("Map.Rendering.Lighting.LightingRenderer")!.GetMethod("MayKeep",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
+        .CreateDelegate<Func<MapDocument, RenderOptions, bool>>();
+
+    [Fact]
+    public void A_lit_map_without_a_hex_world_keeps_its_frame_through_ambient_frames()
+    {
+        // The canvas sets HexAmbient whenever its window is active and touched lately; only a hex
+        // world changes in those frames, a torch changes the light pass alone.
+        var torch = new MapLightSource(Guid.NewGuid(), 60, 330, "#ff9a42", 120, 1.1, Flicker: true);
+        var still = Scene(new MapLighting { TimeOfDay = 0.6 });
+        var flickering = Scene(new MapLighting { TimeOfDay = 1, Sources = [torch] });
+        var canvas = new RenderOptions { Stats = new RenderStats() };
+        var ambient = new RenderOptions { Stats = new RenderStats(), HexAmbient = true, LightAnimationSeconds = 3.5 };
+        Assert.True(MayKeep(still, canvas));
+        Assert.True(MayKeep(still, ambient));
+        Assert.True(MayKeep(flickering, ambient));
+
+        var board = HexBoard.Create(HexOrientation.Flat, 40, 4, 4);
+        var hex = still with { Layers = [.. still.Layers, new HexLayer(LayerId.New(), "Мир", true, false, 1, board)] };
+        Assert.True(MayKeep(hex, canvas));
+        Assert.False(MayKeep(hex, ambient));
+        // The rest of the rule is unchanged: gestures, previews, the export and a missing frame counter.
+        Assert.False(MayKeep(still, new RenderOptions { Stats = new RenderStats(), FastPreview = true }));
+        Assert.False(MayKeep(still, new RenderOptions { Stats = new RenderStats(), IsExport = true }));
+        Assert.False(MayKeep(still, new RenderOptions { Stats = new RenderStats(), HexGestureLive = true }));
+        Assert.False(MayKeep(still, new RenderOptions()));
+    }
+
     [Fact]
     public void Export_tiles_match_the_whole_frame()
     {

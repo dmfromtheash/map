@@ -171,14 +171,24 @@ internal static class LightingRenderer
     /// </summary>
     private static FrameKey? KeyFor(MapDocument document, RenderOptions options, GRContext? gpu, SKMatrix m, SKRectI device)
     {
-        if (gpu is null || options.IsExport || options.Stats is null || options.FastTerrain || options.FastPreview
-            || options.LodTier != RenderLodTier.Exact || options.Preview is not null || options.MaskEditLayerId is not null
-            || options.ObjectOverrides is { Count: > 0 } || options.RiverOverrides is { Count: > 0 } || options.RoadOverrides is { Count: > 0 }
-            || options.HexAmbient || options.HexGestureLive || options.HexSettles is not null)
-            return null;
+        if (gpu is null || !MayKeep(document, options)) return null;
         return new FrameKey(document with { Lighting = null }, m, device, gpu, options.HexCursor, options.HexOverlay,
             options.HexLevel, options.HexGhostLevel, options.HexPresentation, options.HexPlayerView, options.Stamps);
     }
+
+    /// <summary>
+    /// Whether the map under the light may be kept between frames. The canvas asks for ambient
+    /// frames whenever its window is active and touched lately (<see cref="RenderOptions.HexAmbient"/>),
+    /// but only a hex world actually changes in them; a flickering torch changes the light pass
+    /// alone, which runs over the kept frame. Without a hex layer every ambient frame redrew the
+    /// whole map under the light (as the style already knew, StyleRenderer.KeyFor).
+    /// </summary>
+    internal static bool MayKeep(MapDocument document, RenderOptions options) =>
+        !(options.IsExport || options.Stats is null || options.FastTerrain || options.FastPreview
+            || options.LodTier != RenderLodTier.Exact || options.Preview is not null || options.MaskEditLayerId is not null
+            || options.ObjectOverrides is { Count: > 0 } || options.RiverOverrides is { Count: > 0 } || options.RoadOverrides is { Count: > 0 }
+            || (options.HexAmbient && document.Layers.Any(l => l is HexLayer))
+            || options.HexGestureLive || options.HexSettles is not null);
 
     /// <summary>
     /// Whether the kept frame can stand in for this one while something moves: the same map and

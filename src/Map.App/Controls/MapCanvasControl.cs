@@ -867,14 +867,29 @@ public sealed partial class MapCanvasControl : Control
             cameraFrames.SetIdentity(renderDocument, lease.GrContext?.Handle ?? IntPtr.Zero,
                 editor.HexPresentation, editor.HexLevelShown, editor.HexGhostLevel, editor.FogVeilToDraw, editor.CompareMarks,
                 editor.CanvasBoundaryOverlay, editor.MaskEditLayerId, editor.CliffMaskLayerId,
-                editor.StampImages?.MissingRevision ?? 0L);
-            var cameraEligible = Environment.GetEnvironmentVariable("MAP_PERF_CAMERA_FRAMES") != "0"
-                && lease.GrContext is not null && lease.SkSurface is not null
-                && !hasLiveObjectPreview && editor.StrokePreview is null && !editor.CanvasWorkflowOpen
-                && editor.Session.SelectedObjectId is null && editor.Session.SelectedObjectIds.Count == 0
-                && editor.MarqueeWorld is null && editor.LandShapePreview is null && brushCursor is null
-                && editor.FogStrokePreview is null && !editor.HasHexGesture && editor.HexCursorShown is null
-                && renderDocument.Planet is not { Enabled: true, SeamlessMeridian: true };
+                editor.StampImages?.MissingRevision ?? 0L,
+                CameraFramePolicy.KeyOf(editor.CanvasWorkflowOpen ? null : editor.Session.SelectedObjectId,
+                    editor.CanvasWorkflowOpen ? [] : editor.Session.SelectedObjectIds));
+            var objectOverrides = editor.EditableAreaPreviewOverrides ?? editor.EditablePathPreviewOverrides ?? editor.DragPreview?.Proposed;
+            var riverOverrides = editor.RiverRenderOverrides;
+            var roadOverrides = editor.RoadRenderOverrides;
+            // A selection or an armed brush only decorates the scene: the kept camera frame holds the
+            // scene without them and they are drawn over it (DrawEditorOverlay below), so a pan with
+            // a selection moves the kept frame instead of redrawing the whole map every frame.
+            var cameraEligible = CameraFramePolicy.Eligible(new CameraFramePolicy.Inputs(
+                Enabled: Environment.GetEnvironmentVariable("MAP_PERF_CAMERA_FRAMES") != "0",
+                GpuSurface: lease.GrContext is not null && lease.SkSurface is not null,
+                LiveObjectPreview: hasLiveObjectPreview,
+                StrokePreview: editor.StrokePreview is not null,
+                CanvasWorkflowOpen: editor.CanvasWorkflowOpen,
+                Marquee: editor.MarqueeWorld is not null || editor.LandShapePreview is not null,
+                FogStroke: editor.FogStrokePreview is not null,
+                HexGesture: editor.HasHexGesture,
+                HexCursor: editor.HexCursorShown is not null,
+                SeamlessPlanet: renderDocument.Planet is { Enabled: true, SeamlessMeridian: true },
+                SceneOverrides: objectOverrides is { Count: > 0 } || riverOverrides is { Count: > 0 } || roadOverrides is { Count: > 0 },
+                Selection: editor.Session.SelectedObjectId is not null || editor.Session.SelectedObjectIds.Count > 0,
+                BrushCursor: brushCursor is not null));
             if (!cameraEligible) cameraFrames.Clear();
             var page = new SKRect(0, 0, renderDocument.Canvas.Width, renderDocument.Canvas.Height);
             // An idle draw operation can still be queued when the next input changes the
@@ -889,7 +904,7 @@ public sealed partial class MapCanvasControl : Control
                 // It is a moving preview, never a completed exact frame for captures or idle work.
                 renderStats.DetailTilesPending = 1;
             }
-            else SceneRenderer.Render(canvas, renderDocument, new Map.Rendering.RenderOptions
+            var sceneOptions = new Map.Rendering.RenderOptions
             {
                 GpuContext = lease.GrContext,
                 SelectedObjectId = editor.CanvasWorkflowOpen ? null : editor.Session.SelectedObjectId,
@@ -920,10 +935,10 @@ public sealed partial class MapCanvasControl : Control
                 FogOverride = editor.FogStrokePreview,
                 VisibleWorld = new Map.Core.Documents.WorldBounds(
                     X, Y, bottomRight.X, bottomRight.Y),
-                ObjectOverrides = editor.EditableAreaPreviewOverrides ?? editor.EditablePathPreviewOverrides ?? editor.DragPreview?.Proposed,
-                RiverOverrides = editor.RiverRenderOverrides,
+                ObjectOverrides = objectOverrides,
+                RiverOverrides = riverOverrides,
                 RiverPreviewLayerId = editor.RiverPreviewLayerId,
-                RoadOverrides = editor.RoadRenderOverrides,
+                RoadOverrides = roadOverrides,
                 RoadPreviewLayerId = editor.RoadPreviewLayerId,
                 PlacementPreviewObjects = editor.PlacementPreviewObjects,
                 PlacementPreviewLayerId = editor.PlacementPreviewLayerId,
@@ -959,7 +974,10 @@ public sealed partial class MapCanvasControl : Control
                 FastTerrain = fastTerrain,
                 Stats = renderStats,
                 BoundaryOverlay = editor.CanvasBoundaryOverlay,
-            });
+                // With camera frames the decorations go over the scene after its capture.
+                DeferEditorOverlay = cameraEligible,
+            };
+            if (!reusedCamera) SceneRenderer.Render(canvas, renderDocument, sceneOptions);
             if (!reusedCamera && cameraEligible && !movingNow && !fastTerrain && !fastPreview
                 && renderStats.UnresolvedImages == 0 && renderStats.DetailTilesPending == 0
                 && renderStats.TerrainRefinementsPending == 0 && renderStats.HexChunksPending == 0
@@ -969,6 +987,7 @@ public sealed partial class MapCanvasControl : Control
                 cameraFrames.Capture(lease.SkSurface!, canvas, page);
                 renderStats.CameraCapturesRejectedByBudget = cameraFrames.CapturesRejectedByBudget > rejected ? 1 : 0;
             }
+            if (cameraEligible) SceneRenderer.DrawEditorOverlay(canvas, renderDocument, sceneOptions);
             sceneStopwatch.Stop();
             // R39 «Бесшовный меридиан»: past a side edge of a planet the other side of the world
             // shows, faint and read-only, so a coast crossing the seam can be matched.
