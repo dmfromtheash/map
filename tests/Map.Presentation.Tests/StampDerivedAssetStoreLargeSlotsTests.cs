@@ -72,6 +72,53 @@ public sealed class StampDerivedAssetStoreLargeSlotsTests(ITestOutputHelper outp
         finally { store.Dispose(); await store.Completion; }
     }
 
+    [Fact]
+    public async Task Large_results_finish_without_waiting_for_the_canvas_and_give_their_bytes_back()
+    {
+        await using var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));
+        var records = ImportResizedOwners(catalog, 6);
+        var store = new StampDerivedAssetStore(catalog, Path.Combine(_root, "derived"));
+        try
+        {
+            var headers = (await Task.WhenAll(records.Select(r => store.Request(r.Sha256))).WaitAsync(TimeSpan.FromMinutes(2)))
+                .Select(h => h!).ToArray();
+            var tasks = headers.Select(h => { Assert.True(store.TryRequestPixels(h, 0, 0, out var t)); return t; }).ToArray();
+            // Before: one large raster waited for the canvas and the next one did not start. Now all six
+            // (< 128 MiB together) finish while nothing is taken.
+            var mips = await Task.WhenAll(tasks).WaitAsync(TimeSpan.FromMinutes(2));
+            Assert.All(mips, mip => Assert.NotNull(mip.Image));
+            Assert.True(store.LargeStatistics.WaitingBytes > 0);
+            if (StampDerivedAssetStore.LargeLaneCount > 1) Assert.True(store.LargeStatistics.PreparingPeak > 1);
+            foreach (var header in headers)
+            {
+                Assert.True(store.TryTakePixels(new(header.Sha.ToLowerInvariant(), 0, 0), out var mip));
+                mip?.Image?.Dispose();
+            }
+            Assert.Equal(0, store.LargeStatistics.WaitingBytes);
+        }
+        finally { store.Dispose(); await store.Completion; }
+    }
+
+    [Fact]
+    public async Task Forgotten_large_results_give_their_bytes_back()
+    {
+        await using var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));
+        var records = ImportResizedOwners(catalog, 3);
+        var store = new StampDerivedAssetStore(catalog, Path.Combine(_root, "derived"));
+        try
+        {
+            var headers = (await Task.WhenAll(records.Select(r => store.Request(r.Sha256))).WaitAsync(TimeSpan.FromMinutes(2)))
+                .Select(h => h!).ToArray();
+            var tasks = headers.Select(h => { Assert.True(store.TryRequestPixels(h, 0, 0, out var t)); return t; }).ToArray();
+            await Task.WhenAll(tasks).WaitAsync(TimeSpan.FromMinutes(2));
+            store.Forget();
+            var deadline = DateTime.UtcNow.AddSeconds(30);
+            while (store.LargeStatistics.WaitingBytes > 0 && DateTime.UtcNow < deadline) await Task.Delay(20);
+            Assert.Equal(0, store.LargeStatistics.WaitingBytes);
+        }
+        finally { store.Dispose(); await store.Completion; }
+    }
+
     // The owner's mountains, resized in the disposable catalog to distinct sides 512–1024 px: every result is a
     // large raster (> 256 px), no detail ladder. The repository fixtures are untouched.
     private AssetRecord[] ImportResizedOwners(AssetCatalog catalog, int count, int level = 0)

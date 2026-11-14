@@ -94,6 +94,8 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
     {
         public CancellationTokenSource Stop { get; } = stop;
         public bool Started { get; set; }
+        /// <summary>Large-raster bytes this request holds in the waiting budget until taken or retired.</summary>
+        public long LargeBytes;
         public Task<Mip> Task { get; set; } = null!;
     }
     // Finished small results waiting for the canvas: at most 64 × 256² × 4 B = 16 MiB. The canvas adopts them
@@ -101,9 +103,21 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
     private const int CompactMipSide = 256;
     private readonly SemaphoreSlim _mipSlots = new(64);
     private readonly SemaphoreSlim _mipReader = new(1);
-    // At most one completed large raster can wait for the canvas. Small results retain
-    // their own slots, so a large upload never fills memory with many 128 MiB masters.
-    private readonly SemaphoreSlim _largeSlot = new(1);
+    // Large rasters: several lanes prepare them at once (a lane is free again as soon as its raster is ready,
+    // not when the canvas takes it), and finished ones waiting for the canvas share one byte budget. One raster
+    // always passes, so a master larger than the budget cannot wait for ever. Small results keep their slots.
+    internal static readonly int LargeLaneCount = Math.Clamp(Environment.ProcessorCount - 2, 1, 4);
+    internal const long LargeWaitingByteBudget = 128L * 1024 * 1024;
+    private readonly SemaphoreSlim _largeLanes = new(LargeLaneCount);
+    // Under memory pressure only one large raster is prepared at a time.
+    private readonly SemaphoreSlim _pressureLane = new(1);
+    private readonly object _largeGate = new();
+    private long _largeWaitingBytes;
+    private int _largePreparing, _largePreparingPeak;
+    private TaskCompletionSource _largeFreed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    /// <summary>Bytes of finished large rasters not yet taken by the canvas, and the peak of lanes busy at once.</summary>
+    public (long WaitingBytes, int PreparingPeak) LargeStatistics { get { lock (_largeGate) return (_largeWaitingBytes, _largePreparingPeak); } }
+    private readonly object _preparedGate = new();
     private SKImage? _preparedSource;
     private readonly long _preparedSourceByteCapacity;
     private long _preparedSourceBytes;
@@ -222,7 +236,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
         var retirement = request.Task.ContinueWith(task =>
         {
             if (task.IsCompletedSuccessfully && task.Result.Reserved) _mipSlots.Release();
-            if (task.IsCompletedSuccessfully && task.Result.LargeReserved) _largeSlot.Release();
+            ReleaseLarge(request);
             if (task.IsCompletedSuccessfully) task.Result.Image?.Dispose();
             request.Stop.Dispose();
         }, TaskScheduler.Default);
@@ -322,8 +336,9 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
             // in a small slot. Holding every 8 px mip of a big asset to one per frame starved a dense view.
             var compact = small || record is not null
                 && Math.Max(Math.Max(1, record.Width >> key.Step) >> key.Level, Math.Max(1, record.Height >> key.Step) >> key.Level) <= CompactMipSide;
+            if (!compact && record is not null)
+                return await ReadLargeRaster(header, key, request, record).ConfigureAwait(false);
             if (compact) { await _mipSlots.WaitAsync(request.Stop.Token).ConfigureAwait(false); reserved = true; }
-            else { await _largeSlot.WaitAsync(request.Stop.Token).ConfigureAwait(false); largeReserved = true; }
             await _mipReader.WaitAsync(request.Stop.Token).ConfigureAwait(false);
             try
             {
@@ -366,11 +381,103 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
         catch (OperationCanceledException)
         {
             if (reserved) _mipSlots.Release();
-            if (largeReserved) _largeSlot.Release();
             return new Mip(null, 0, 0, false, Cancelled: true);
         }
         catch (Exception ex)
         { ReportFailure("pixels " + header.Sha, ex); return new Mip(null, 0, 0, reserved, LargeReserved: largeReserved); }
+    }
+
+    /// <summary>
+    /// A large raster on one of the lanes, outside the small-result reader: same <see cref="PrepareRaster"/> pixels
+    /// (portable file first), its bytes held in the waiting budget until the canvas takes it.
+    /// </summary>
+    private async Task<Mip> ReadLargeRaster(Header header, PixelKey key, MipRequest request, AssetRecord record)
+    {
+        var token = request.Stop.Token;
+        var bytes = (long)Math.Max(1, Math.Max(1, record.Width >> key.Step) >> key.Level)
+            * Math.Max(1, Math.Max(1, record.Height >> key.Step) >> key.Level) * 4;
+        var budgeted = false;
+        var pressure = false;
+        try
+        {
+            await _largeLanes.WaitAsync(token).ConfigureAwait(false);
+            try
+            {
+                if (Map.Core.Resources.WorkingMemoryBudget.Shared.IsUnderPressure)
+                { await _pressureLane.WaitAsync(token).ConfigureAwait(false); pressure = true; }
+                await ReserveLarge(bytes, token).ConfigureAwait(false);
+                budgeted = true;
+                lock (_requestsGate) { token.ThrowIfCancellationRequested(); request.Started = true; request.LargeBytes = bytes; }
+                lock (_largeGate) _largePreparingPeak = Math.Max(_largePreparingPeak, ++_largePreparing);
+                try
+                {
+                    if (header.PortablePath is not null && TryReadPortablePixels(header, key) is { } portable)
+                    {
+                        using var bitmap = new SKBitmap(new SKImageInfo(portable.Width, portable.Height, SKColorType.Rgba8888, SKAlphaType.Premul));
+                        System.Runtime.InteropServices.Marshal.Copy(portable.Pixels, 0, bitmap.GetPixels(), portable.Pixels.Length);
+                        bitmap.SetImmutable();
+                        return new Mip(null, portable.Width, portable.Height, false, Image: SKImage.FromBitmap(bitmap), LargeReserved: true);
+                    }
+                    if (header.PortablePath is not null && IsRejectedPortable(header.Sha, header.PortablePath))
+                    {
+                        var repaired = TryReadHeader(header.Sha, record) ?? LoadOrBuild(header.Sha);
+                        if (repaired is null) return new Mip(null, 0, 0, false, LargeReserved: true);
+                        header = repaired;
+                    }
+                    var image = PrepareRaster(header, key, token);
+                    return new Mip(null, image?.Width ?? 0, image?.Height ?? 0, false, Image: image, LargeReserved: true);
+                }
+                finally { lock (_largeGate) _largePreparing--; }
+            }
+            finally
+            {
+                if (pressure) _pressureLane.Release();
+                _largeLanes.Release();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            if (budgeted) { lock (_requestsGate) request.LargeBytes = 0; ReleaseLarge(bytes); }
+            return new Mip(null, 0, 0, false, Cancelled: true);
+        }
+        catch (Exception ex)
+        { ReportFailure("pixels " + header.Sha, ex); return new Mip(null, 0, 0, false, LargeReserved: budgeted); }
+    }
+
+    private async Task ReserveLarge(long bytes, CancellationToken token)
+    {
+        while (true)
+        {
+            Task freed;
+            lock (_largeGate)
+            {
+                if (_largeWaitingBytes == 0 || _largeWaitingBytes + bytes <= LargeWaitingByteBudget)
+                { _largeWaitingBytes += bytes; return; }
+                freed = _largeFreed.Task;
+            }
+            await freed.WaitAsync(token).ConfigureAwait(false);
+        }
+    }
+
+    private void ReleaseLarge(long bytes)
+    {
+        if (bytes <= 0) return;
+        TaskCompletionSource freed;
+        lock (_largeGate)
+        {
+            _largeWaitingBytes = Math.Max(0, _largeWaitingBytes - bytes);
+            freed = _largeFreed;
+            _largeFreed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+        freed.TrySetResult();
+    }
+
+    // Under _requestsGate or on a retired request: gives a finished large raster's bytes back once.
+    private void ReleaseLarge(MipRequest request)
+    {
+        var bytes = request.LargeBytes;
+        request.LargeBytes = 0;
+        ReleaseLarge(bytes);
     }
 
     public bool TryTakeMip(string sha, int level, out Mip? mip)
@@ -387,7 +494,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
             SignalCapacity();
             mip = request.Task.Result;
             if (mip.Reserved) _mipSlots.Release();
-            if (mip.LargeReserved) _largeSlot.Release();
+            ReleaseLarge(request);
             request.Stop.Dispose();
             return true;
         }
@@ -697,23 +804,30 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
         var sourceKey = key with { Level = 0 };
         var workingPath = _catalog.TryDetailLevelPath(record, key.Step, out var currentStep)
             ? currentStep : _catalog.SourcePath(record);
-        if (_preparedSource is null || _preparedKey != sourceKey
-            || _preparedOriginal?.Matches() != true || _preparedWorking?.Matches() != true
-            || !string.Equals(_preparedWorking.Path, workingPath, StringComparison.OrdinalIgnoreCase))
+        // Several lanes prepare large rasters at once: each takes the shared decoded source for itself
+        // (or decodes its own) and offers it back afterwards. The pixels are the same either way.
+        SKImage? source = null;
+        FileStamp? sourceOriginal = null, sourceWorking = null;
+        lock (_preparedGate)
         {
-            ClearPreparedSource();
-            _preparedSource = ReadSource(record, key.Step, header, out _preparedOriginal, out _preparedWorking);
-            Interlocked.Exchange(ref _preparedSourceBytes, _preparedSource is { } decoded ? (long)decoded.Width * decoded.Height * 4 : 0);
-            _preparedKey = sourceKey;
+            if (_preparedSource is not null && _preparedKey == sourceKey
+                && _preparedOriginal?.Matches() == true && _preparedWorking?.Matches() == true
+                && string.Equals(_preparedWorking.Path, workingPath, StringComparison.OrdinalIgnoreCase))
+            {
+                (source, sourceOriginal, sourceWorking) = (_preparedSource, _preparedOriginal, _preparedWorking);
+                _preparedSource = null;
+                Interlocked.Exchange(ref _preparedSourceBytes, 0);
+            }
         }
-        if (_preparedSource is not { } source) return null;
+        source ??= ReadSource(record, key.Step, header, out sourceOriginal, out sourceWorking);
+        if (source is null) return null;
         var requestedWidth = Math.Max(1, record.Width >> key.Step) / Math.Pow(2, key.Level);
         var requestedHeight = Math.Max(1, record.Height >> key.Step) / Math.Pow(2, key.Level);
         var level = Math.Clamp((int)Math.Floor(Math.Log2(Math.Max(1,
             Math.Min(source.Width / Math.Max(1, requestedWidth), source.Height / Math.Max(1, requestedHeight))))), 0, 15);
         // Missing ladder steps use the original's same linear mip path as ForPixelSize.
         // Each halving uses the previous pixels, never a direct downscale of the master.
-        SKImage current = source;
+        SKImage? current = source;
         try
         {
             for (var n = 1; n <= level; n++)
@@ -732,25 +846,44 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
             // Transfer ownership rather than copying a full master (or the last mip).
             // The result owns its pixels; the source cache never aliases a transferred image.
             var result = current;
-            if (ReferenceEquals(current, source))
-            {
-                _preparedSource = null;
-                Interlocked.Exchange(ref _preparedSourceBytes, 0);
-            }
-            current = source; // result is now owned by the caller, not the finally block
+            var transferred = ReferenceEquals(result, source);
+            current = null; // the caller owns the result now
+            if (!transferred) OfferPreparedSource(sourceKey, source, sourceOriginal, sourceWorking);
+            source = null; // transferred, or now owned by the shared source cache
             return result;
         }
         finally
         {
-            if (!ReferenceEquals(current, source)) current.Dispose();
-            if (PreparedSourceBytes > _preparedSourceByteCapacity) ClearPreparedSource();
+            // Failure or cancellation: an intermediate level and this lane's source are released.
+            if (current is not null && !ReferenceEquals(current, source)) current.Dispose();
+            source?.Dispose();
         }
+    }
+
+    // Keeps the last decoded source for the next level of the same asset, within its byte capacity.
+    private void OfferPreparedSource(PixelKey sourceKey, SKImage source, FileStamp? original, FileStamp? working)
+    {
+        var bytes = (long)source.Width * source.Height * 4;
+        lock (_preparedGate)
+        {
+            if (!_disposed && bytes <= _preparedSourceByteCapacity)
+            {
+                _preparedSource?.Dispose();
+                (_preparedSource, _preparedKey, _preparedOriginal, _preparedWorking) = (source, sourceKey, original, working);
+                Interlocked.Exchange(ref _preparedSourceBytes, bytes);
+                return;
+            }
+        }
+        source.Dispose();
     }
 
     private void ClearPreparedSource()
     {
-        _preparedSource?.Dispose(); _preparedSource = null;
-        Interlocked.Exchange(ref _preparedSourceBytes, 0);
+        lock (_preparedGate)
+        {
+            _preparedSource?.Dispose(); _preparedSource = null;
+            Interlocked.Exchange(ref _preparedSourceBytes, 0);
+        }
     }
 
     private static long FileBytes(string path)
@@ -814,7 +947,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
                 await Task.WhenAll(retiring.Append(_workers)).ConfigureAwait(false);
                 ClearPreparedSource();
                 lock (_memoryGate) { _memoryPixels.Clear(); _memoryBytes = 0; }
-                _mipReader.Dispose(); _mipSlots.Dispose(); _largeSlot.Dispose(); _stop.Dispose();
+                _mipReader.Dispose(); _mipSlots.Dispose(); _largeLanes.Dispose(); _pressureLane.Dispose(); _stop.Dispose();
             });
         }
     }
