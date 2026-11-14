@@ -219,7 +219,9 @@ public sealed class PlacementPathCommand : IEditCommand
         var paths = updatedLayer.PlacementPaths.Where(p => p.Id != _pathId).ToList();
         if (next is not null) paths.Insert(old is null ? paths.Count : Math.Min(paths.Count,
             layer.PlacementPaths.ToList().FindIndex(p => p.Id == _pathId)), next);
-        updated = WithPaths(updated, updatedLayer, paths);
+        updated = WithPaths(updated, updatedLayer, paths, _pathId, next,
+            _bake ? old?.Members.Select(m => m.ObjectId) ?? [] : removals.Concat(_detach is { } detached ? [detached] : []),
+            additions.Select(o => o.Id));
         _before = document; _after = updated;
         return updated;
     }
@@ -227,12 +229,14 @@ public sealed class PlacementPathCommand : IEditCommand
     public MapDocument Revert(MapDocument document) => _before
         ?? throw new InvalidOperationException("Команда пути ещё не выполнена.");
 
-    internal static MapDocument WithPaths(MapDocument document, ObjectLayer layer, IReadOnlyList<PlacementPath> paths)
+    internal static MapDocument WithPaths(MapDocument document, ObjectLayer layer, IReadOnlyList<PlacementPath> paths,
+        Guid? changedOwner = null, PlacementPath? owner = null, IEnumerable<ObjectId>? removed = null, IEnumerable<ObjectId>? added = null)
     {
         var layers = document.Layers.ToArray(); var li = Array.FindIndex(layers, l => l.Id == layer.Id);
         var targetLayer = layer with { PlacementPaths = paths.ToImmutableArray() }; layers[li] = targetLayer;
         var target = document.WithRevisedLayers(layers);
         DocumentRevisionIndex.RegisterReplacements(document, target, []); ObjectNameIndex.Share(document, target);
+        if (changedOwner is { } id) PlacementOwnershipIndex.Register(layer, targetLayer, id, owner, removed ?? [], added ?? []);
         ObjectLayerChanges.Register(layer, targetLayer, [], []);
         return target;
     }
@@ -242,26 +246,13 @@ public static class PlacementPathOwnership
 {
     public const string DetachFirst = "Объект связан с путём. Сначала нажмите «Отделить выбранный объект» в панели пути.";
     public static PlacementPath? Owner(MapDocument document, ObjectId id) =>
-        DocumentEditor.FindLayerOf(document, id)?.PlacementPaths.FirstOrDefault(p => p.Members.Any(m => m.ObjectId == id));
+        DocumentEditor.FindLayerOf(document, id) is { } layer
+            ? PlacementOwnershipIndex.For(layer).Owner(id) as PlacementPath : null;
 
     /// <summary>Generic commands cannot silently mutate, lose or steal an unchanged path's members.</summary>
     public static bool Allows(MapDocument before, MapDocument after, out string reason)
     {
         reason = DetachFirst;
-        foreach (var source in before.Layers.OfType<ObjectLayer>().Where(l => !l.PlacementPaths.IsEmpty))
-        {
-            if (after.FindLayer(source.Id) is not ObjectLayer target) continue; // deleting the owner layer
-            if (ReferenceEquals(source.Objects, target.Objects)) continue;
-            var index = DocumentRevisionIndex.For(after);
-            foreach (var path in source.PlacementPaths)
-            {
-                var current = target.PlacementPaths.FirstOrDefault(p => p.Id == path.Id);
-                if (!ReferenceEquals(path, current)) continue;
-                foreach (var member in path.Members)
-                    if (!index.TryFind(member.ObjectId, out var location) || location.LayerId != source.Id
-                        || location.Object != DocumentEditor.FindObject(before, member.ObjectId)) return false;
-            }
-        }
-        return true;
+        return PlacementOwnershipIndex.Allows<PlacementPath>(before, after);
     }
 }

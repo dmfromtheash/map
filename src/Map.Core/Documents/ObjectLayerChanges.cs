@@ -21,6 +21,7 @@ public static class ObjectLayerChanges
         Changes.Add(target, new Link(new(source), retain ? source : null, retain ? depth : 0, removed, added, orderCompacted));
         Editing.BoundObjectIndex.Register(source, target, removed, added);
         AssetUsageIndex.Register(source, target, removed, added);
+        PlacementOwnershipIndex.Share(source, target);
     }
 
     /// <summary>

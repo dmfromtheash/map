@@ -319,7 +319,7 @@ public sealed partial class EditorViewModel
         var layer = pending.LayerId is { } layerId ? Session.Document.FindLayer(layerId) as ObjectLayer : ActiveObjectLayer();
         if (layer is not { Visible: true, Locked: false }) return false;
         var radius = Math.Max(1, StampAreaRadius);
-        var ids = layer.Objects
+        var ids = ObjectSpatialIndex.For(layer).Query(new(worldX - radius, worldY - radius, worldX + radius, worldY + radius))
             .Where(o => o.Kind == SceneObjectKind.Stamp
                 && Math.Pow(o.X + (o.Width / 2) - worldX, 2) + Math.Pow(o.Y + (o.Height / 2) - worldY, 2) <= radius * radius)
             .Select(o => o.Id).ToList();

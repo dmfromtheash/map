@@ -269,7 +269,11 @@ public sealed record MapDocument
                 "Checkpoint ids are unique within a document.", nameof(checkpoints));
         }
         // Prepare at load/public construction, before the snapshot becomes editable.
-        foreach (var layer in Layers.OfType<ObjectLayer>()) _ = AssetUsageIndex.For(layer);
+        foreach (var layer in Layers.OfType<ObjectLayer>())
+        {
+            _ = AssetUsageIndex.For(layer);
+            _ = PlacementOwnershipIndex.For(layer);
+        }
     }
 
     public DocumentId Id { get; init; }
@@ -506,6 +510,8 @@ public sealed record MapDocument
                     "A replacement revision must preserve layer identity, kind and order.",
                     nameof(layers));
             }
+            if (Layers[index] is ObjectLayer source && layers[index] is ObjectLayer target
+                && !ReferenceEquals(source, target)) PlacementOwnershipIndex.Share(source, target);
         }
 
         return new MapDocument(this, revisedLayers: layers);

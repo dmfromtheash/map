@@ -437,6 +437,9 @@ public sealed class PlacementAreaCommand : IEditCommand
         var revisedLayer = updatedLayer with { PlacementAreas = areas }; layers[li] = revisedLayer;
         var result = updated.WithRevisedLayers(layers);
         DocumentRevisionIndex.RegisterReplacements(updated, result, []); ObjectNameIndex.Share(updated, result);
+        PlacementOwnershipIndex.Register(updatedLayer, revisedLayer, _id, next,
+            _bake ? old?.Members.Select(m => m.ObjectId) ?? [] : removals.Concat(_detach is { } detached ? [detached] : []),
+            additions.Select(o => o.Id));
         ObjectLayerChanges.Register(updatedLayer, revisedLayer, [], []);
         ChangedObjects = replacements.Count + additions.Count + removals.Count;
         _before = document; _after = result; return result;
@@ -465,27 +468,12 @@ public static class PlacementAreaOwnership
     {
         var index = DocumentRevisionIndex.For(document);
         if (!index.TryFind(id, out var location)) return null;
-        var item = location.Object;
-        var key = new PlacementAreaSlot(PlacementAreaGeometry.Cell(item.X + item.Width / 2),
-            PlacementAreaGeometry.Cell(item.Y + item.Height / 2), 0).Cell;
-        return (document.FindLayer(location.LayerId) as ObjectLayer)?.PlacementAreas
-            .FirstOrDefault(a => a.Cells.TryGetValue(key, out var members) && members.Any(m => m.ObjectId == id));
+        return document.FindLayer(location.LayerId) is ObjectLayer layer
+            ? PlacementOwnershipIndex.For(layer).Owner(id) as PlacementArea : null;
     }
     public static bool Allows(MapDocument before, MapDocument after, out string reason)
     {
         reason = DetachFirst;
-        foreach (var source in before.Layers.OfType<ObjectLayer>().Where(l => !l.PlacementAreas.IsEmpty))
-        {
-            if (after.FindLayer(source.Id) is not ObjectLayer target || ReferenceEquals(source.Objects, target.Objects)) continue;
-            var index = DocumentRevisionIndex.For(after); var previous = DocumentRevisionIndex.For(before);
-            foreach (var area in source.PlacementAreas)
-            {
-                if (!ReferenceEquals(area, target.PlacementAreas.FirstOrDefault(a => a.Id == area.Id))) continue;
-                foreach (var member in area.Members)
-                    if (!index.TryFind(member.ObjectId, out var location) || location.LayerId != source.Id
-                        || location.Object != previous.FindObject(member.ObjectId)) return false;
-            }
-        }
-        return true;
+        return PlacementOwnershipIndex.Allows<PlacementArea>(before, after);
     }
 }
