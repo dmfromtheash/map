@@ -86,6 +86,7 @@ public sealed partial class ZoomAssetsApplication
         _report.Checks["grid/routes-complete"] = scenario.Routes.Count(route => route.Name.StartsWith("wheel/", StringComparison.Ordinal)) == 6;
         _report.Checks["grid/fps-60"] = scenario.Routes.Where(route => route.MedianWindowFps is not null)
             .All(route => route.MedianWindowFps >= 60 && route.OnePercentLowFps >= 60 && route.FrameWorkMax <= 16.7);
+        if (PhaseEvidenceEnabled) await CapturePhaseEvidence(scenario, fit);
         await Finish(scenario);
 
         async Task ObserveBackgroundBeforeNavigation()

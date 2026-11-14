@@ -244,7 +244,9 @@ public sealed partial class ZoomAssetsApplication
         var path = Path.Combine(folder, name + "-gpu.png");
         using (var file = File.Create(path)) png.SaveTo(file);
         _report.Frames.Add(path);
-        // Window evidence includes the editor controls. The GPU capture above is the pixel source for comparisons.
+          // Full phase evidence supplies native windows separately after the timing routes.
+          if (PhaseEvidenceEnabled) return;
+          // Window evidence includes the editor controls. The GPU capture above is the pixel source for comparisons.
         var hwnd = _window.TryGetPlatformHandle()!.Handle;
         if (!GetWindowRect(hwnd, out var rect)) throw new InvalidOperationException("Window rectangle unavailable.");
         var width = rect.R - rect.L; var height = rect.B - rect.T;
