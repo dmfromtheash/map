@@ -6,7 +6,7 @@
 **Обновлено:** 2026-11-14 ~17:00: сессия закрыта, всё остановлено; пакет FPS в ветке, в main не взят (стоп пикселей).
 
 ## Где работать
-- Папка `C:\Projects\Map` (DEC-071); ветка `codex/stage-18-editable-areas` = `main` (`cde2345`). Push:
+- Папка `C:\Projects\Map` (DEC-071); ветка `codex/stage-18-editable-areas` = `main`. Push:
   `git push origin codex/stage-18-editable-areas:main`. Версия 0.5.0; `CHANGELOG.md` → `[Unreleased]`.
 - Временные копии — только `C:\Projects\Map-wt-<имя>` (иначе хук-автоформатер переформатирует .cs); в брифах агентов —
   только абсолютные пути. Схема `.mapproj` v55; CI: `quick` при коде, `full` до закрытия пакета.
