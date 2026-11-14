@@ -573,8 +573,12 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
         public SKImage? TryGetReadyImageForPixelSize(string sha256, double width, double height)
         {
             if (Synchronous) return TryGetImageForPixelSize(sha256, width, height);
-            var record = _records[sha256];
-            var wanted = PixelKey(record, width, height);
+            return NearestResident(PixelKey(_records[sha256], width, height));
+        }
+
+        private SKImage? NearestResident(Key wanted)
+        {
+            var record = _records[wanted.Sha];
             var depth = Depth(record);
             var desired = wanted.Step + wanted.Level;
             SKImage? At(int level)
@@ -603,6 +607,7 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
             public long Bytes { get; private set; }
             public long SourceRevision => 0;
             public IStampImageLease? Pin() => source.Background ? source.Pin(_keys) : null;
+            public IStampImageLease? PinResident() => source.Background ? source.Pin(_keys, resident: true) : null;
             public void Add(IEnumerable<(string Sha256, double Width, double Height)> stamps)
             {
                 var started = Stopwatch.GetTimestamp();
@@ -658,13 +663,15 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
             }
         }
 
-        internal IStampImageLease? Pin(IEnumerable<Key> keys)
+        internal IStampImageLease? Pin(IEnumerable<Key> keys, bool resident = false)
         {
             var images = new Dictionary<Key, SKImage>();
             foreach (var key in keys)
             {
-                if (!_resident.TryGetValue(key, out var node)) return null;
-                images[key] = node.Value.Image;
+                if (_resident.TryGetValue(key, out var node)) images[key] = node.Value.Image;
+                // As the real source's stand-in pin: the nearest resident level, or nothing (pending).
+                else if (!resident) return null;
+                else if (NearestResident(key) is { } other) images[key] = other;
             }
             lock (_pins) foreach (var image in images.Values.Distinct()) _pinned[image] = _pinned.GetValueOrDefault(image) + 1;
             var sizes = images.Keys.Select(k => k.Sha).Distinct().ToDictionary(sha => sha, sha => TryGetImageSize(sha)!.Value);
