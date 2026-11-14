@@ -501,27 +501,31 @@ public sealed class CatalogStampImageSource(
 
     private SKImage? ReadyFallback(AssetRecord record, string sha256, double width, double height)
     {
-        {
-            var wanted = PixelKey(record, width, height);
-            var depth = AssetCatalog.DetailLadderDepth(record.Width, record.Height);
-            var desired = wanted.Step + wanted.Level;
-            // Prefer a smaller resident level, then a larger one. In particular, a missing
-            // 16 px sample must not enqueue the multi-megabyte working original as fallback.
-            for (var level = desired; level <= 15; level++)
-                if (At(level) is { } smaller) return smaller;
-            for (var level = desired - 1; level >= 0; level--)
-                if (At(level) is { } larger) return larger;
-            return null;
+        var found = ResidentLevel(record, PixelKey(record, width, height));
+        return found is { } hit && CaptureMipSelections
+            ? ObserveMipSelection(sha256, width, height, hit.Image, "ready-fallback/" + hit.Name) : found?.Image;
+    }
 
-            SKImage? At(int level)
-            {
-                var step = Math.Min(depth, level);
-                var key = new StampDerivedAssetStore.PixelKey(wanted.Sha, step, level - step);
-                if (ReadyPixels(key) is not { } image) return null;
-                var name = PixelName(key);
-                var result = _samples.GetFallbackImage(name) ?? _cache.GetFallbackImage(name) ?? image;
-                return CaptureMipSelections ? ObserveMipSelection(sha256, width, height, result, "ready-fallback/" + name) : result;
-            }
+    /// <summary>The resident level nearest to <paramref name="wanted"/>: a smaller one first, then a larger one.</summary>
+    private (SKImage Image, string Name)? ResidentLevel(AssetRecord record, StampDerivedAssetStore.PixelKey wanted)
+    {
+        var depth = AssetCatalog.DetailLadderDepth(record.Width, record.Height);
+        var desired = wanted.Step + wanted.Level;
+        // Prefer a smaller resident level, then a larger one. In particular, a missing
+        // 16 px sample must not enqueue the multi-megabyte working original as fallback.
+        for (var level = desired; level <= 15; level++)
+            if (At(level) is { } smaller) return smaller;
+        for (var level = desired - 1; level >= 0; level--)
+            if (At(level) is { } larger) return larger;
+        return null;
+
+        (SKImage, string)? At(int level)
+        {
+            var step = Math.Min(depth, level);
+            var key = new StampDerivedAssetStore.PixelKey(wanted.Sha, step, level - step);
+            if (ReadyPixels(key) is not { } image) return null;
+            var name = PixelName(key);
+            return (_samples.GetFallbackImage(name) ?? _cache.GetFallbackImage(name) ?? image, name);
         }
     }
 
@@ -1049,13 +1053,14 @@ public sealed class CatalogStampImageSource(
         public void Add(IEnumerable<(string Sha256, double Width, double Height)> stamps) => source.AddToPlan(this, stamps);
         public bool Prepare(Action ready) => source.PreparePlan(this, ready);
         public IStampImageLease? Pin() => source.PinPlan(this);
+        public IStampImageLease? PinResident() => source.PinPlan(this, resident: true);
     }
 
     /// <summary>
     /// The plan's resident images, pinned for a background tile raster: the shelf may evict them meanwhile, but
     /// they are freed only when the raster lets go. Null while any of them is not resident.
     /// </summary>
-    private IStampImageLease? PinPlan(PreparationPlan plan)
+    private IStampImageLease? PinPlan(PreparationPlan plan, bool resident = false)
     {
         lock (_gate)
         {
@@ -1065,6 +1070,11 @@ public sealed class CatalogStampImageSource(
             foreach (var (pixel, name) in plan.Names ??= [.. plan.Keys.Select(key => (key, PixelName(key)))])
             {
                 if (ReadyPixels(name) is { } image) images[pixel] = image;
+                // A stand-in: the resident level the frame's own fallback would draw, or nothing (pending) for now.
+                else if (resident)
+                {
+                    if (plan.Records.TryGetValue(pixel.Sha, out var record) && ResidentLevel(record, pixel) is { } other) images[pixel] = other.Image;
+                }
                 // A failed key stays out: the raster comes back incomplete and the frame draws that tile as before.
                 else if (!_decodeFailed.Contains(name)) return null;
             }

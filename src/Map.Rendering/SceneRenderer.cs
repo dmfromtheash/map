@@ -96,6 +96,12 @@ public interface IStampPreparationPlan
     /// rastered on the frame thread as before. Render thread only.
     /// </summary>
     IStampImageLease? Pin() => null;
+    /// <summary>
+    /// The plan's images that are resident now, whether or not <see cref="Prepare"/> is true: a missing key answers with
+    /// a resident other level of the same image, as a frame's fallback does, or as pending when there is none. For a
+    /// stand-in raster that is replaced once the plan is ready; never a final picture. Render thread only.
+    /// </summary>
+    IStampImageLease? PinResident() => null;
 }
 
 /// <summary>See <see cref="IStampImageSource.Lease"/>.</summary>
@@ -174,6 +180,12 @@ public sealed class RenderStats
     /// <summary>Diagnostics: why a layer large enough for dense tiles was drawn object by object in this frame (null when it was not).</summary>
     public string? DenseSkip { get; set; }
     public int ExactObjects { get; set; }
+    /// <summary>Overview exact objects shown from their background screen layer this frame: 1 = the exact layer 1:1, 2 = an older one transformed.</summary>
+    public int OverviewExactLayer { get; set; }
+    /// <summary>Background rasters of the overview exact layer started this frame.</summary>
+    public int OverviewExactLayerStarted { get; set; }
+    /// <summary>Time of the overview's exact objects on this thread: the layer copy or the direct draws with their preflight.</summary>
+    public double OverviewExactMilliseconds { get; set; }
     public int OverviewObjects { get; set; }
     public int OverviewChunks { get; set; }
     public int OverviewVariantBuilds { get; set; }
@@ -264,6 +276,9 @@ public sealed class RenderStats
         TerrainPatches = 0;
         DenseSkip = null;
         ExactObjects = 0;
+        OverviewExactLayer = 0;
+        OverviewExactLayerStarted = 0;
+        OverviewExactMilliseconds = 0;
         OverviewObjects = 0;
         OverviewChunks = 0;
         OverviewVariantBuilds = 0;
@@ -6300,6 +6315,8 @@ public static partial class SceneRenderer
         var cacheMissesBefore = cache.Misses;
         var cacheInvalidationsBefore = cache.Invalidations;
         var exact = new Dictionary<ObjectId, SceneObject>();
+        var exactVariants = new List<OverviewVariant>();
+        var exactCandidates = 0;
         var overviewObjects = 0;
         var overviewChunks = 0;
         var overviewBatches = 0;
@@ -6427,19 +6444,19 @@ public static partial class SceneRenderer
                 cached.Image,
                 variant.Bounds,
                 new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None));
-            foreach (var sceneObject in variant.ExactObjects)
-            {
-                if (SceneGeometry.BoundsOf(sceneObject).Intersects(view)) exact.TryAdd(sceneObject.Id, sceneObject);
-            }
+            exactVariants.Add(variant);
+            exactCandidates += variant.ExactObjects.Count;
         }
 
         // Far zoom keeps spatial density cheap, but anything the user is manipulating remains an
         // exact object over the aggregate representation. The immutable base picture stays hot.
+        var exactStarted = Stopwatch.GetTimestamp();
+        var extras = new List<SceneObject>();
         if (options.SelectedObjectId is { } selected
             && DocumentRevisionIndex.For(document).TryFind(selected, out var primary)
             && primary.LayerId == layer.Id)
         {
-            exact[primary.Object.Id] = primary.Object;
+            extras.Add(primary.Object);
         }
         if (options.CoSelectedObjectIds is { Count: > 0 } selectedObjects)
         {
@@ -6448,10 +6465,22 @@ public static partial class SceneRenderer
                 if (DocumentRevisionIndex.For(document).TryFind(id, out var selectedObject)
                     && selectedObject.LayerId == layer.Id)
                 {
-                    exact[selectedObject.Object.Id] = selectedObject.Object;
+                    extras.Add(selectedObject.Object);
                 }
             }
         }
+
+        // Overview chunks keep larger stamps exact. Their pixels arrive independently of
+        // the tiny color metadata: a ready color does not make this complete frame ready.
+        // Without this preflight a kept layer could freeze whichever subset arrived first.
+        // Many of them: one background layer the frame copies (see TryDrawOverviewExactLayer), not one draw each.
+        var layered = fallbackScale is null && exactCandidates + extras.Count >= ExactLayerMinimumObjects
+            && TryDrawOverviewExactLayer(canvas, document, layer, plan, zoomBucket, bucketScale, extras, options);
+        if (!layered)
+            foreach (var variant in exactVariants)
+                foreach (var sceneObject in variant.ExactObjects)
+                    if (SceneGeometry.BoundsOf(sceneObject).Intersects(view)) exact.TryAdd(sceneObject.Id, sceneObject);
+        foreach (var extra in extras) exact[extra.Id] = extra;
         if (options.ObjectOverrides is { Count: > 0 } overrides)
         {
             foreach (var replacement in overrides)
@@ -6462,11 +6491,9 @@ public static partial class SceneRenderer
                 }
             }
         }
-
-        // Overview chunks keep larger stamps exact. Their pixels arrive independently of
-        // the tiny color metadata: a ready color does not make this complete frame ready.
-        // Without this preflight a kept layer could freeze whichever subset arrived first.
-        if (options.RequestRefinedFrame is { } refine && options.Stamps is { } exactSource)
+        // The layer carries the chunks' exact objects; the dictionary then holds the selection only.
+        var exactCount = layered ? exactCandidates + extras.Count : exact.Count;
+        if (!layered && options.RequestRefinedFrame is { } refine && options.Stamps is { } exactSource)
         {
             var matrix = canvas.TotalMatrix;
             var pixelScale = Math.Sqrt(matrix.ScaleX * matrix.ScaleX + matrix.SkewY * matrix.SkewY);
@@ -6479,28 +6506,30 @@ public static partial class SceneRenderer
         }
         var hiddenLabels = LabelPriority.ForFrame(document, options.ViewScale, options.IsExport ? null : options.RequestRefinedFrame);
         if (hiddenLabels.IsPending && options.Stats is { } labelStats) labelStats.DetailTilesPending++;
-        foreach (var sceneObject in exact.Values.OrderBy(item => item.Sublayer))
+        foreach (var sceneObject in layered ? (IEnumerable<SceneObject>)exact.Values : exact.Values.OrderBy(item => item.Sublayer))
         {
             if (GivesWay(sceneObject, hiddenLabels, options)) continue;
             if (sceneObject.Stamp is { } missing && !palette.Colors.ContainsKey(missing.AssetSha256)
                 && Math.Max(sceneObject.Width, sceneObject.Height) * bucketScale < OverviewExactScreenSize)
                 overviewMissing--;
+            if (layered) continue;
             DrawObject(canvas, sceneObject, document.StampForeground, options);
             options.Stats?.RecordExactObject(sceneObject);
         }
 
         if (options.Stats is { } stats)
         {
-            stats.ObjectCandidates += overviewObjects + exact.Count;
-            stats.ObjectsDrawn += overviewObjects + exact.Count;
+            stats.OverviewExactMilliseconds += Stopwatch.GetElapsedTime(exactStarted).TotalMilliseconds;
+            stats.ObjectCandidates += overviewObjects + exactCount;
+            stats.ObjectsDrawn += overviewObjects + exactCount;
             stats.OverviewObjects += overviewObjects;
             stats.MissingAssets += Math.Max(0, overviewMissing);
             // A cacheable miss is final, not pending: the palette scan already told them apart.
             if (overviewMissing > 0 && palette.Unresolved) stats.UnresolvedImages++;
             stats.OverviewChunks += overviewChunks;
             stats.OverviewBatches += overviewBatches;
-            stats.ExactObjects += exact.Count;
-            stats.DrawCalls += overviewChunks + exact.Count;
+            stats.ExactObjects += exactCount;
+            stats.DrawCalls += overviewChunks + (layered ? 0 : exact.Count);
             stats.ObjectCacheHits += cache.Hits - cacheHitsBefore;
             stats.ObjectCacheMisses += cache.Misses - cacheMissesBefore;
             stats.ObjectCacheInvalidations += cache.Invalidations - cacheInvalidationsBefore;
@@ -6769,6 +6798,51 @@ public static partial class SceneRenderer
         }
 
         public ImmutableArray<(long Order, SceneObject Item)> Objects { get; } = objects;
+
+        private readonly Dictionary<int, OverviewExactSet> _exactSets = [];
+        private readonly HashSet<int> _exactBuilding = [];
+
+        /// <summary>The chunk's exact objects at a zoom bucket, independent of the palette (null until <see cref="BuildExact"/> ran).</summary>
+        public OverviewExactSet? TryGetExact(int zoomBucket)
+        {
+            lock (_exactSets) return _exactSets.GetValueOrDefault(zoomBucket);
+        }
+
+        /// <summary>True when the caller should build the set (it is neither kept nor being built).</summary>
+        public bool BeginExact(int zoomBucket)
+        {
+            lock (_exactSets) return !_exactSets.ContainsKey(zoomBucket) && _exactBuilding.Add(zoomBucket);
+        }
+
+        /// <summary>The same selection as <see cref="GetVariant"/> makes, in the same order.</summary>
+        public void BuildExact(int zoomBucket, double bucketScale)
+        {
+            var exact = new List<SceneObject>();
+            var hash = 14_695_981_039_346_656_037UL;
+            var neutral = true;
+            try
+            {
+                foreach (var (_, sceneObject) in Objects)
+                {
+                    if (Math.Max(sceneObject.Width, sceneObject.Height) * bucketScale < OverviewExactScreenSize) continue;
+                    exact.Add(sceneObject);
+                    hash = HashObject(hash, sceneObject);
+                    neutral &= ExactLayerNeutral(sceneObject);
+                }
+            }
+            catch
+            {
+                lock (_exactSets) _exactBuilding.Remove(zoomBucket);
+                throw;
+            }
+            lock (_exactSets)
+            {
+                _exactBuilding.Remove(zoomBucket);
+                // A few buckets: a wheel zoom visits neighbours, the settled view keeps its own.
+                if (_exactSets.Count >= 4) _exactSets.Remove(_exactSets.Keys.First(key => key != zoomBucket));
+                _exactSets[zoomBucket] = new([.. exact], hash, neutral);
+            }
+        }
 
         public OverviewVariant GetVariant(int zoomBucket, double bucketScale,
             IReadOnlyDictionary<string, SKColor> colors, ulong tintRevision, CancellationToken cancellationToken = default)
