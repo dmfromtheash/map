@@ -24,9 +24,11 @@ public sealed class MapCheckpointSnapshot
         Title = document.Title;
         CreatedUtc = document.CreatedUtc;
         Canvas = document.Canvas;
-        Layers = new ReadOnlyCollection<MapLayer>([.. document.Layers]);
-        Assets = new ReadOnlyCollection<MapAssetReference>([.. document.Assets]);
-        Notes = new ReadOnlyCollection<MapNote>([.. document.Notes]);
+        // The document's own read-only collections never alias a caller list, so they are kept as
+        // they are: a restored snapshot then shares the layer-keyed derived indexes of its source.
+        Layers = Keep(document.Layers);
+        Assets = Keep(document.Assets);
+        Notes = Keep(document.Notes);
         StampForeground = document.StampForeground;
         Category = document.Category;
         Lighting = document.Lighting;
@@ -42,6 +44,9 @@ public sealed class MapCheckpointSnapshot
         Variants = document.Variants;
         Handout = document.Handout;
     }
+
+    private static IReadOnlyList<T> Keep<T>(IReadOnlyList<T> items) =>
+        items as ReadOnlyCollection<T> ?? new ReadOnlyCollection<T>([.. items]);
 
     public string Title { get; }
     public DateTimeOffset CreatedUtc { get; }
@@ -100,17 +105,8 @@ public sealed class MapCheckpointSnapshot
     /// </summary>
     public MapDocument Materialize(
         DocumentId currentDocumentId,
-        IReadOnlyList<MapCheckpoint>? checkpoints = null) => new(
-            currentDocumentId,
-            Title,
-            CreatedUtc,
-            Canvas,
-            Layers,
-            Assets,
-            Notes,
-            checkpoints,
-            StampForeground,
-            Category) { Lighting = Lighting, Style = Style, Entities = Entities, Labels = Labels, Fog = Fog, Transitions = Transitions, Timeline = Timeline, Pointcrawl = Pointcrawl, Planet = Planet, Isometric = Isometric, Variants = Variants, Handout = Handout };
+        IReadOnlyList<MapCheckpoint>? checkpoints = null) =>
+        MapDocument.FromSnapshot(this, currentDocumentId, checkpoints);
 }
 
 /// <summary>One named durable checkpoint with its bounded preview and immutable map snapshot.</summary>

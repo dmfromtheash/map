@@ -25,6 +25,18 @@ public static class ObjectLayerChanges
     }
 
     /// <summary>
+    /// A layer whose whole object storage was replaced (a rebuilt city, a returned layer record):
+    /// every source position leaves and every target position enters, so derivatives follow in
+    /// time proportional to that layer. A target that already carries a link keeps it.
+    /// </summary>
+    internal static void RegisterReplacement(ObjectLayer source, ObjectLayer target)
+    {
+        if (Changes.TryGetValue(target, out _)) return;
+        Register(source, target, [.. Enumerable.Range(0, source.Objects.Count)],
+            [.. Enumerable.Range(0, target.Objects.Count)], orderCompacted: true);
+    }
+
+    /// <summary>
     /// Links two records of a layer derived by a renderer (a style's map without its names) the way an edit links its
     /// source layers, so that their spatial index and scene plans follow the delta instead of being built afresh. Only
     /// the link is kept: the editing indexes never see derived layers. The indices are those of the derived lists.

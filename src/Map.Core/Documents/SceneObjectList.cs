@@ -25,6 +25,10 @@ public sealed class SceneObjectList : IReadOnlyList<SceneObject>
     internal static long IdentityRootBuilds => System.Threading.Interlocked.Read(ref _identityRootBuilds);
     private static long _identityRootBuilds;
 
+    /// <summary>Objects visited by those identity table builds. Diagnostics and tests only.</summary>
+    internal static long IdentityRootObjects => System.Threading.Interlocked.Read(ref _identityRootObjects);
+    private static long _identityRootObjects;
+
     /// <summary>
     /// Object id → position. The root is one plain hash table built once per loaded list (about
     /// 15x cheaper than a persistent tree of a million entries) and shared, never mutated, by
@@ -195,6 +199,7 @@ public sealed class SceneObjectList : IReadOnlyList<SceneObject>
             foreach (var chunk in _chunks)
                 for (var i = 0; i < chunk.Length; i++) root.Add(chunk[i].Id, new Slot(chunk, i));
             System.Threading.Interlocked.Increment(ref _identityRootBuilds);
+            System.Threading.Interlocked.Add(ref _identityRootObjects, Count);
             System.Threading.Interlocked.CompareExchange(ref _identitySlots,
                 new IdentityTable(root, NoOverlay, NoForward, NoHoldings), null);
             table = _identitySlots;

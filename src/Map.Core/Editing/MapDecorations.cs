@@ -183,7 +183,8 @@ public sealed class SetMapScaleCommand : IEditCommand
     public MapDocument Apply(MapDocument document) => With(document, _after);
     public MapDocument Revert(MapDocument document) => With(document, _before);
 
+    // Only the canvas changes: the layers stay the same validated list, and the map-wide light,
+    // style, cards and the rest are carried over (the former full constructor dropped them).
     private static MapDocument With(MapDocument document, MapScale? scale) =>
-        new(document.Id, document.Title, document.CreatedUtc, document.Canvas with { Scale = scale }, document.Layers,
-            document.Assets, document.Notes, document.Checkpoints, document.StampForeground, document.Category);
+        document.WithCanvas(document.Canvas with { Scale = scale });
 }
