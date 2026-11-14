@@ -1,95 +1,127 @@
-# Промпт сессии: включить Astra, Sol и ПК — свести пакет FPS, взять в main, довести 60 FPS; refs2 в библиотеку
+# Промпт сессии: довести пакет FPS до main (пиксели, кэш, живая проверка) и начать ядро DEC-111
 
 Ты — Claude Code в Windows-проекте Map. Модель — Claude Opus 5.5 (`claude-opus-5-5`). Рабочая папка `C:\Projects\Map`,
-ветка `codex/stage-18-editable-areas` (`main` — та же линия). Предыдущая сессия (13.11, закрыта ~23:45) остановила
-всё на всех машинах по слову владельца. Снимок ниже мог устареть: сначала проверь Git, процессы, Mac, USER.
+ветка `codex/stage-18-editable-areas` (= `main`, `cde2345`). Предыдущая сессия (14.11, закрыта ~17:00 по слову
+владельца) остановила всё на всех машинах аккуратно. Снимок ниже мог устареть: сначала проверь Git, процессы, USER, Mac.
 
-## Вход (по порядку)
-1. `docs/STATE.md`; `powershell -NoProfile -ExecutionPolicy Bypass -File tools/ai/Get-MapContext.ps1 -AsJson`. Чужие
-   незакоммиченные изменения — сообщить владельцу. Локальные ветки ПК: `review/astra-fps-1m` (= Astra c8765cf),
-   `claude/fps-pack` (self-diag + overview-delta WIP), `codex/roadmap-export-step5` (старая, не трогать без вопроса).
-2. Решения DEC-106…110 (`docs/DECISIONS.md`), журнал `docs/journal/2026-11.md` — записи 13.11 «(вечер)» и «(ночь)».
-   Правила `AGENTS.md` §Как работать (поиск перед решением, автоматизация, DEC-110).
-3. Ответы — по-русски, просто. Тихие проверки: о проблемах сразу, сводка раз в 30 мин.
+## 0. Вход (по порядку, ~10 минут)
+1. `docs/STATE.md`; `powershell -NoProfile -ExecutionPolicy Bypass -File tools/ai/Get-MapContext.ps1 -AsJson`.
+   Чужие незакоммиченные изменения — сразу сообщить владельцу. `git worktree list`: ожидаются `C:\Projects\Map-wt-integ`
+   (`claude/fps-pack-2` `af09b5f`) и `C:\Projects\Map-wt-blur` (`claude/blur-wip` + 24 снимка в `shots\`). Других быть не должно.
+2. Журнал `docs/journal/2026-11.md` — запись **2026-11-14** целиком (что сделано, числа, причины, подводные камни).
+   Решения DEC-106…111 (`docs/DECISIONS.md`, DEC-111 — сверху). Проект ядра: `docs/perf/perf-core-design.md`
+   (опись 22 механизмов + ядро из 5 служб), `docs/perf/perf-functions.md` (18 семейств функций, топ-10 рисков),
+   `docs/perf/core-research-astra.md` (готовые решения: Chromium, React, Filament, Skia, ANGLE), `docs/perf/LARGE_SLOTS_PLAN.md`.
+3. Ответы — по-русски, просто. Тихие проверки; о проблемах — сразу.
+4. **Спросить владельца (DEC-089)** одним вопросом: Astra на USER (полный доступ, как 14.11?), Sol 6.1 high на ПК/Mac
+   (владелец 14.11: «неважные задачи — Сол», БД/кэш — только Claude), свои агенты Claude — можно без вопроса.
 
-## Контекст: что сделано 13.11 (подробно — журнал)
-- **FPS, причина:** 78 % кадра — распаковка картинок в кадре, кэш на 64 записи (DEC-106). Решения DEC-106…110.
-- **Astra `astra/fps-1m` (USER, head c8765cf, в main НЕ взято):** `994b872` навигация готовыми GPU-кадрами по умолчанию
-  (100 000, USER: pan 11–28 → 52–56 FPS, колесо ~10 → 26–30, max работы в жесте 357–379 → 14–17 мс, первый кадр
-  1,15 с вместо 44–76 с, Rendering 480/480, пиксели ≤ 2/255; Mac-тесты зелёные кроме golden сетки); `243f46e` бюджет
-  кадров 4K/`UnresolvedImages`/край страницы (ревью Claude); `90096af` review-fixes (наблюдатель не поднимается к корню
-  диска; «кэшируемо отсутствующий» ассет, тихий повтор 60 с; поиск по SHA — правка Claude); `503949a` edit-fixes
-  (place 83 → 0,3 мс, панель 540 → 0,03 мс на 1 млн); `eaa41c2` derived-janitor (потолок/очистка кэша на диске);
-  `c8765cf` edit-fixes-2 (Undo 94 → 0,3 мс). Портативные заготовки (portable) — 9 файлов WIP у неё.
-  **Не готово:** 1 % low 22–31 FPS, точная дорисовка после жеста до 295 мс, колесо ~30 FPS.
-- **Claude `claude/fps-pack` (ПК, локально, от 243f46e):** `2909820` self-diag — журнал `<profile>/diagnostics/perf-*.jsonl`
-  (окна 10 с, 1 % low/интервалы только в жестах; Windows Presentation 1024/1025); `9ff64f1` overview-delta (Mac CPU
-  100 000 / 1 000 ассетов: сборок 10 000 → 100, медиана кадра 74 → 2,5 мс; слито с seed Astra; полные тесты НЕ прогнаны).
-- **Sol, Mac `~/MapWork/agents/`:** готово и использовано — review-fixes, edit-fixes(-2), derived-janitor, self-diag,
-  overview-delta, fps-matrix (`pack\fps-matrix.patch` + `FPS_MATRIX.md` у Astra — ещё не интегрирован), derived-bench
-  (`bench.patch`, Windows-замер не сделан), refs2-plan. Не доделаны: `mem-pressure` (патч есть, отчёта нет),
-  `overview-prep`. Ревью Claude к каждому патчу — письма в `D:\MapChecks\astra\INBOX.md` 13.11 22:04–23:12.
-- **Библиотека:** refs2 внедрён (`bf5bb9a`), апскейл 4 501/4 501; refs 38 987/38 990; проверка «нарисован» исправлена
-  (`c9f8c36`, `48fda19`); `live-check/live_all.ps1` (`95bf6bf`) — 13.11 battlemaps-classic №3–4 не прошли (321 с,
-  «вызов метода для NULL»), затем тестовая Map закрывалась — владелец закрывал окна; причину №3–4 не разбирали.
-- **Ошибки Claude 13.11 (не повторять):** regex-замена в `run_dbg.cmd` сломала `>>`; запуск `start_test_map.ps1` через
-  конвейер ждал выхода Map (исправлено в `live_all.ps1`); окна на ПК при работающем владельце мешали.
+## 1. Что сделано 14.11 (кратко; подробно — журнал)
+- Ветка **`claude/fps-pack-2` `af09b5f`** (22 коммита поверх Astra `a5a41b5`): журнал производительности; обзор в фоне
+  (холодный кадр 1 млн 1531 → 0,35 мс); память документа 1179 → 561 Б/объект (≈3,8 млн объектов в 2 ГиБ); справочники в фоне
+  (выбор 2 млн 7,3 с → 0,4 мс); удаление/перенос/владение областями/подписи — O(изменённого); стили без обхода N; свет
+  хранит кадр; кадры камеры при выделении; реки/дороги по словарям; кэш покрытия земли (fit 6,3 → 0,2 с); бюджет жеста
+  (GC 2 млн 863 → 44 мс, `Map.Core.Resources.BackgroundWork`); плотная карта сходится (8192/250к: никогда → 6,6 с);
+  исправлено зависание `Map.Presentation.Tests` (тест создавал Avalonia-контролы на потоке пула); `af09b5f` — бюджет
+  подготовленных данных до 5 ГиБ (доля пирамиды 40 % зарезервирована), janitor впервые реально работает, точечная чистка
+  без UI (`PurgeDerived/ByTag("Тестовое")/Unused`), ОЗУ кэшей 1/8–1/4 (`docs/perf/CACHE_BUDGET.md`).
+- Windows-тесты: на `f25e329` Core 637, Assets 173, Persistence 509, Presentation 1089/1090, Rendering 558/558; на
+  `af09b5f` Core 658, Assets 176, Presentation 1106/1107 (Rendering после него — перепрогнать первым делом).
+- **Astra** `review/astra-fps-1m` `04347d7` (на ПК): portable + `fd6253e`, матрица функций `f6d7b9d`, сетка FPS,
+  диагностика живых фаз и выбранных mip, её копии моих первых 7 коммитов пакета (`32a9b48`…`8e91a21`).
+- Сетка FPS USER (HD 630): ниже 20 FPS только плотные карты (8192 px с ≥ 250 тыс. объектов); на 32 768–262 144 px до
+  2 млн ~30/60. Колесо «ровно 30» — артефакт `MAP_MEASURE_GPU_FLUSH=1` замерщика; без него 53–60 FPS, **1 % low ≈ 28**.
+- Живое сравнение пакета (131 072/1–2 млн): выбор p95 3,3–6,7 → 0,36–0,45 с; место 2,2–4,7 → 0,32–0,42 с; max кадра с
+  открытием 5–10 → 0,55 с; память −0,5…−1 ГБ. Регресс pan/fit 1 % low (GC) исправлен `01d092b` — **вживую не перепроверен**.
+- Библиотека: refs2 залит полностью; правки `H:\MapLibrary\plan\exclusions.json` (пустой Grid Square D) и `trims.json`
+  (Rocks 64 МиБ → WebP без потерь; 6 космических 8192² → 4096²). Копия shop-* на USER `D:\MapLibrary`.
 
-## Слова владельца 13.11 (действуют)
-«используй максимально ПК/Mac/USER», «Сол запускай где нужно», «загрузи ПК тоже», «сделай максимально коммитов»,
-«разбить коммиты по устройствам, чтобы ускорить». На ПК окна (живые проходы, FPS-окна) 13.11 мешали — перед оконным
-прогоном на ПК спросить; Astra на USER — полный доступ там (слово владельца 13.11).
+## 2. Открытые проблемы (в порядке важности)
+1. **Разница пикселей (стоп приёмки пакета).** 32 768/500к: fit max 35/255 (4 378 px), после правок 28/255 (15 333 px).
+   Синтетика `a5a41b5` = `e97f523` байт-в-байт. Причина (ветка `claude/pixel-wip` `8e05957`, `PIXEL_BISECT.md`): с `64824fe`
+   растры кусков обзора с «нарисованными» горами строит фоновый поток через `Source.Lease()`
+   (`SceneRenderer.OverviewPreparation.cs:344–346`) → `CatalogStampImageSource` `CachedSample`/оригинал/
+   `AssetImageCache.GetForPixelSize` (при нехватке `ByteLimit` отдаёт оригинал, `AssetImageCache.cs:416–419`), а поток кадра
+   брал готовые derived-mip или соседний уровень (`SceneRenderer.cs:5186`, `CatalogStampImageSource.cs:243–266, 439–478`).
+   План: перед постановкой куска — `PrepareForPixelSizes` его штампов; в `PrepareChunk` брать только готовые точные
+   derived-mip (нет — отложить кусок); для запекаемых растров не отдавать оригинал. Проверка: каталожный повторитель
+   `tests/Map.Presentation.Tests/PixelBisectCatalogRepro.cs` (25–40 мин) — успокоенный кадр = синхронный эталон и = `a5a41b5`.
+2. **«Мыло» и недогрузка** (снимки Astra `D:\MapChecks\astra\shots\blur-review\`, разбор `blur-review.md`):
+   (а) сразу после колеса весь вид — кадр камеры, растянутый в 10–120 раз; (б) открытие — только центр обзора, вся карта
+   ~30 с; (в) плотная 400 %: `Art Deco Wall` 83×184 вместо 639×1408 через 30 с (pixelQueue 334) — один большой слот mip.
+   Ветка `claude/blur-wip` `97054eb` (предел растяжения 2×, мягкие пятна среднего цвета, цветное поле всей карты;
+   **блокер**: после отдаления кэш обзора 64 МБ переполнен — 108 записей, 7 325 вытеснений — fit не догружается) +
+   24 снимка `C:\Projects\Map-wt-blur\shots\` — **показать владельцу до внедрения** (он выбрал «быстро, с цветной заглушкой»).
+   Большие слоты: план `docs/perf/LARGE_SLOTS_PLAN.md` + замер `StampDerivedAssetStoreLargeSlotsTests` (`MAP_LARGE_SLOTS_BENCH=1`).
+3. **1 % low ≈ 28** без ожидания GPU: нужна трасса **PresentMon** (`D:\MapChecks\tools\PresentMon\PresentMon.exe`,
+   2.6.0, подпись Intel) — окно Astra не имеет прав ETW; запускать из ssh-сеанса Claude (администратор):
+   `PresentMon.exe --process_id <pid> --output_file <csv> --timed <s> --terminate_after_timed --no_console_stats`.
+   Схема: Astra кладёт `D:\MapChecks\astra\presentmon-request.json` {tag,pid,seconds,out}, Claude запускает и отвечает в INBOX.
+4. **Сохранение** (`claude/save-wip` `79245e2`): 2 млн 122,6 → 3,05 с; падает `Stage12D_unrelated_open_failure_keeps_recovery_cards_visible`
+   — карточки восстановления теперь приходят асинхронно; решить: поведение или тест.
+5. Плотная карта: кадры 61–70 мс в CPU-композиции стенда; точные плитки теперь рисует CPU (не GPU-атлас) — **сравнить
+   пиксели с прежним GPU-видом вживую**.
 
-## Шаг 1 — включить всё (первые 10 минут)
-- **Наблюдение:** CronCreate `*/5` тихой проверки (`bash tools/library-pipeline/monitor/check_mac.sh`), Monitor писем и
-  коммитов Astra (OUTBOX + `git rev-parse astra/fps-1m` через `r.ps1`), `tools/library-pipeline/fps/auto_check.ps1` в фоне.
-- **Astra (USER):** письмо `D:\MapChecks\astra\ASTRA-MSG-6.md` → запуск через задачу `MapAstraMsg` (Interactive, user1).
-  Рабочий запускатель — `D:\MapChecks\astra\run_dbg.cmd` (`exec resume` сессии `01a1d4ae-199b-7c40-a0d2-f997dd76f765`,
-  вывод в `dbg.log`); поменять в нём имя файла письма через `.Replace("ASTRA-MSG-5.md","ASTRA-MSG-6.md")` — не regex
-  (13.11 regex сломал `>>`). Проверить, что процесс `exec resume` жив и `dbg.log` растёт. Если «usage limit» — сказать владельцу.
-  Её задачи: (а) portable WIP (9 файлов) → коммит; (б) точный кадр после жеста порциями ≤ 16 мс (сейчас до 295 мс);
-  (в) 1 % low до 60 (сейчас 22–31) и колесо ~30 — честный A/B способа вывода (`MAP_WIN32_COMPOSITION`, DXGI);
-  (г) накатить `claude/fps-pack` (bundle от Claude) и интеграцию `overview-prep`/`mem-pressure` после ревью Claude;
-  (д) механизмы DEC-110 (автоподготовка, прогрев). Коммит после каждого зелёного шага, письмо в OUTBOX после коммита.
-- **Sol (Mac):** перезапустить `overview-prep` и `mem-pressure`: `bash ~/MapWork/agents/run_agent.sh <имя> high`
-  (брифы в `~/MapWork/agents/<имя>/brief/`). `mem-pressure.patch` уже есть — пусть агент доведёт проверку и SOL_REPORT.
-  Свободный Mac загружать новыми агентами по плану FPS (не дублируя Astra): например A/B-инструмент худших кадров
-  для `fps-matrix`, `derived-build` команда конвейера (DEC-107) — бриф по образцу `review-fixes`.
-- **Sol на ПК (где нужен Windows):** по DEC-089 — навык `codex`, Sol (GPT-6.1) с явным
-  `-c 'default_permissions=":workspace"'`, временная копия только под задачу. Кандидаты: Windows-замер `derived-bench`
-  (SQLite vs файлы) на реальном кэше заготовок (сначала спросить владельца про копию и назвать размер), Windows-прогон
-  `fps-matrix` без окон. Diff и прогон — проверяет Claude.
-- **ПК (Claude, без окон), параллельно сведению:** проверить по одному `EditorViewRefreshTests.Selection_burst…`;
-  Windows-замеры «до/после» в консоли — `tools/Map.EditLatency` (1 млн объектов, edit-fixes/-2) и бенчмарк обзора
-  (`~/MapWork/agents/overview-delta/benchmark/` — адаптировать пути на Windows); ревью `mem-pressure.patch`.
-- **ПК (Claude, без окон):** `claude/fps-pack` → `git rebase review/astra-fps-1m` (конфликты ожидаются в
-  `SceneRenderer.cs` у `DrawOverviewObjects`/интерфейса `IStampImageSource` и в `StampDerivedAssetStore.cs`: сохранить
-  локальный seed Astra — палитра только видимых ассетов + `UsesAsset`), Release `Map.slnx`, все 5 наборов тестов
-  (`fps/pc_review_tests.ps1`, ~25 мин), коммиты, bundle → `D:\MapChecks\astra\pack\` + письмо.
+## 3. План сессии
+**Шаг 1 — довести пакет до main (первым).**
+- Перепрогнать Rendering на `af09b5f` (после кэш-коммита не гонялся); где показать команды чистки в UI — спросить владельца.
+- Исправить разницу пикселей по п. 2.1 (агент Claude в `C:\Projects\Map-wt-pix2`), каталожный повторитель → байт-в-байт.
+- Свести с Astra: `git rebase --onto review/astra-fps-1m 0e2aa37 claude/fps-pack-2` (её копии моих коммитов до
+  `0e2aa37` включительно уже в её ветке: `32a9b48`…`8e91a21` и `fe5e9cf`), конфликты — сохранить обе стороны; Release `Map.slnx` + 5 наборов тестов.
+- Живая проверка Astra на USER: те же 4 ячейки (131072×1/2 млн, 32768×500к, 8192×250к), **продуктовый режим** (без
+  `MAP_MEASURE_GPU_FLUSH`), пиксели ≤ 2/255, снимки разных моментов (правило владельца) — Claude их отсматривает.
+- main: слияние в `codex/stage-18-editable-areas` (слияние, не перемотка: main ушёл вперёд документами; конфликт только
+  в `docs/journal/2026-11.md`), `CHANGELOG [Unreleased]`, push ветки и `main`, CI `quick` и `full`; если менялся `src/`
+  и Map владельца закрыта — `tools/ai/publish-local-r2r.ps1` и проверка запуска через ярлык.
+**Шаг 2 — мыло и загрузка:** большие слоты (план), `claude/blur-wip` без блокера кэша; снимки владельцу; внедрить по «да».
+**Шаг 3 — ядро DEC-111** по `docs/perf/perf-core-design.md` (каждый шаг сначала оборачивает старые константы потолками):
+датчики CPU/GPU (асинхронные `EXT_disjoint_timer_query` через `IGlContext.GlInterface.GetProcAddress`, не sync-flush) →
+единый бюджет кадра (сейчас 2/4/2/8/8 мс независимо) → вся память, включая GPU-поверхности `SKSurface.Create(gpu,false,…)`
+вне лимита Skia → общий планировщик на базе `BackgroundWork` (сроки против голодания, как React; потолок «ядра−2») →
+регулятор качества (ПИД Filament, Apache-2.0, + мёртвая зона и задержка между шагами) → сторожа O(N) для всех команд.
+Затем пирамида карты (доля 40 % бюджета 5 ГиБ уже зарезервирована в `PreparedDataBudget`).
+**Параллельно (без окон):** конвейер DEC-107 — после заливки каталога `--profile derived-build` (теперь пропускает
+готовые); полный замер SQLite vs файлы `tools/derived-bench` (n=2000, ~2,5 ГБ временно — назвать владельцу) — БД на Claude.
 
-## Шаг 2 — взять в main
-Когда `review/astra-fps-1m` + `claude/fps-pack` сведены и зелёные (Windows 5 наборов, Mac `mac_tests.sh`, ревью Claude
-пакетом, живое USER-сравнение Astra) — fast-forward/merge в `codex/stage-18-editable-areas`, CHANGELOG `[Unreleased]`,
-push ветки и `main`, CI `quick` (и `full` до закрытия пакета). Если менялся `src/` и Map владельца закрыта —
-`tools/ai/publish-local-r2r.ps1` и проверка запуска через ярлык. Числа FPS «до → после» — из отчётов Astra (USER).
+## 4. Машины и как запускать
+- **USER** (Intel HD 630): `& C:\Users\Leshe\.map-remote\r.ps1 -Script '<ps>'`; Astra — `D:\MapChecks\astra\` (INBOX/OUTBOX/
+  REPORT.md, `pack\`), запуск письмом: `run_dbg.cmd` (`exec resume` сессии `01a1d4ae-199b-7c40-a0d2-f997dd76f765`, codex
+  `C:\Users\user1\AppData\Local\OpenAI\Codex\bin\9e1da79431da526b\codex.exe` — путь меняется при обновлении приложения!),
+  задача `schtasks /run /tn MapAstraMsg`; замена имени письма — `.Replace(...)`, не regex. Проверить, что `exec resume` жив.
+  Письма в INBOX — новые сверху (вставка после заголовка). Наблюдение — Monitor по заголовку OUTBOX и `git rev-parse astra/fps-1m`.
+- **Mac** `user@192.168.31.78` (`-o HostKeyAlias=192.168.31.25`): агенты Sol — `~/MapWork/agents/<имя>/` (repo-клон из
+  bundle, `run-env.sh`, `mac.props`, `NuGet.Config`, `test-runner/`, `COMMANDS.md`, `brief/COMMON.md` + `brief/<имя>.md`),
+  запуск `bash ~/MapWork/agents/run_agent.sh <имя> high`; сверить `sandbox_policy` = workspace-write. Проверка Mac —
+  раз в 20 мин (CronCreate). 4 macOS-падения Core (именованный семафор) — норма.
+- **ПК, Sol:** `codex exec -m gpt-6.1-sol -c model_reasoning_effort=high -c 'default_permissions=":workspace"'
+  -s workspace-write -C C:\Projects\Map-wt-<имя> -o <scratch>\last.txt - < prompt.md` + сверка `sandbox_policy`.
+  Codex Astra для исследований — `-c 'default_permissions=":read-only"' -s read-only -c tools.web_search=true`.
+- Агенты Claude (Agent tool) — каждый в своей `C:\Projects\Map-wt-<имя>` от актуальной ветки; брифы с абсолютными путями,
+  требованием пиксельного равенства, тестов по фильтрам и отчёта `<ИМЯ>.md`. Сводить патчем
+  (`git diff --cached --binary <base> -- . ':!<ОТЧЁТ>.md'` → `git apply --3way`), сразу коммитить, копию удалять.
 
-## Шаг 3 — библиотека (параллельно, без окон)
-- refs2: план с refs2 (`H:\MapLibrary\pipeline\plan.py … --refs2-inventory/--refs2-files/--refs2-classification ×2/
-  --refs2-pixel-duplicates`, файлы в `H:\MapLibrary\plan\refs2\`), затем `plan/pour_all.ps1 -Catalogs
-  shop-surfaces,shop-effects,textures-2` (сотни без окна). Проверить отчёты `checks\<каталог>\`.
-- 3 узкие лестницы (6–16 px, ×2): свой путь на Mac (finish_asset `cycle_rgb=True`, factor 2) — или оставить и сказать.
-- Живые проходы сотен (`live-check/live_all.ps1`) и FPS-окно ПК (`fps/pc_live.ps1`, 144 Гц, заготовки включены) —
-  только по «можно» владельца; первым разобрать провал battlemaps-classic №3–4 (`H:\MapLibrary\sol\sol7\live\`).
+## 5. Подводные камни (не повторять)
+- Хук-автоформатер переформатирует .cs вне `C:\Projects\Map` и `C:\Projects\Map-wt-*` → копии только там.
+- Агенты дважды писали в `C:\Projects\Map` по относительному пути (откатывали) — проверять `git status` main.
+- `Blast Radius` держит `rm -rf`/`rm -f` в Bash → на ПК `Remove-Item` через PowerShell; на Mac — спросить владельца.
+- Удалять в `.git` на USER автоклассификатор не даёт (3 файла Astra, 170 КБ) — владелец: «пусть пока будут».
+- `MAP_MEASURE_GPU_FLUSH=1` занижает FPS (синхронное ожидание GPU каждый кадр) — для продуктовых чисел без него.
+- Тестовые проекты не в `Map.slnx`; `dotnet build-server shutdown` перед тяжёлыми прогонами; Presentation.Tests ~5 мин,
+  Rendering ~16–18 мин.
+- Пакет `claude/fps-pack-2` и ветка Astra содержат **разные хеши одних изменений** (первые 7) — сводить rebase `--onto`.
 
-## Правила и границы
-- Окна Map/замеров — только на неосновном экране, журнал положения обязателен. Без ИИ-зависимостей в продукте (DEC-110).
-- Новая проблема — сначала поиск готовых решений (`deep-code-research`), находки — исполнителю.
-- Mac: всё внутри `~/MapWork`; результаты агентов — только после проверки Claude (diff + прогон).
-- Чужая незакоммиченная работа (portable WIP Astra) — не трогать.
-- Удаление `refs`/`refs2` — только после условий в STATE и «да» владельца. Временное — удалять сразу.
-- Закрытие: остановить Astra (`taskkill /T` процесса `exec resume`), агентов (`pid`), автопроверку, cron/monitor;
-  забрать коммиты Astra bundle'ом; журнал, STATE, push.
+## 6. Слова владельца 14.11 (действуют)
+«самая большая карта и максимум объектов»; «механизм, чтобы сам улучшал FPS везде, на любой функции… ядро из того, что
+есть»; «реализуй, особенно 5 гигов… точечная чистка ненужных ассетов»; «БД вся на тебе»; «неважные задачи — Сол 6.1 high»;
+«Астра подкрепляет живые проверки скриншотами разных моментов, ты их отсматриваешь и находишь проблемы»; «коммить везде,
+чтобы не копилось»; «постоянно оповещай о результатах Астры по FPS»; «живые прогоны на ПК пока не делай» (на ту сессию —
+спросить снова); открытие карты — «быстро, но с цветной заглушкой».
+
+## 7. Закрытие сессии
+Остановить Astra (`taskkill /T` процесса `exec resume`), Sol/агентов, cron/monitor; забрать коммиты Astra bundle'ом;
+удалить свои временные копии и папки агентов; журнал (запись сверху), STATE (≤ 60 строк), DEC при новых решениях,
+промпт следующей сессии — по просьбе владельца; коммит документов + push.
 
 ## Итоговый отчёт
-По-русски: что взято в main (коммиты), FPS «до → после» (USER; ПК — если было окно), что у Astra/агентов, библиотека
-в числах, что не проверено; в конце `## ИТОГИ` (Сделано / Что дальше / Реализация проекта) по `AGENTS.md`.
+По-русски: что взято в main (коммиты), FPS «до → после» (USER, продуктовый режим), что у Astra/агентов, что не проверено;
+в конце `## ИТОГИ` (Сделано / Что дальше / Реализация проекта) по `AGENTS.md`.
