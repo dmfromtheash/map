@@ -18,10 +18,13 @@ public static class DocumentDerivedIndexes
         if (!DocumentRevisionIndex.IsPrepared(document) || !ObjectNameIndex.IsPrepared(document)) return false;
         if (!Editing.LabelPriority.IsPrepared(document)) return false;
         foreach (var layer in document.Layers)
+        {
+            if (layer is ObjectLayer features && !Editing.PlacementAreaRuleCheck.IsPrepared(features)) return false;
             if (layer is ObjectLayer objects && objects.Objects.Count > 0
                 && (!objects.ObjectStorage.HasIdentityTable || !ObjectSpatialIndex.IsPrepared(objects)
                     || !Editing.BoundObjectIndex.IsPrepared(objects)))
                 return false;
+        }
         return true;
     }
 
@@ -36,8 +39,10 @@ public static class DocumentDerivedIndexes
         // Between lookups a background caller steps aside while a gesture runs (no-op on other threads).
         foreach (var layer in document.Layers)
         {
-            if (layer is not ObjectLayer objects || objects.Objects.Count == 0) continue;
+            if (layer is not ObjectLayer objects) continue;
             cancellationToken.ThrowIfCancellationRequested();
+            Editing.PlacementAreaRuleCheck.Prepare(objects);
+            if (objects.Objects.Count == 0) continue;
             Resources.BackgroundWork.YieldToInteraction(cancellationToken);
             _ = objects.ObjectStorage.IndexOfId(objects.Objects[0].Id);
             Resources.BackgroundWork.YieldToInteraction(cancellationToken);

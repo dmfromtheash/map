@@ -9,6 +9,62 @@ namespace Map.Core.Documents;
 /// </summary>
 public sealed class ObjectSpatialIndex
 {
+    /// <summary>
+    /// The same bounded-cell broad phase for evaluated features that are not SceneObjects.
+    /// Callers cache it by immutable feature storage; predicates still use the exact geometry.
+    /// </summary>
+    internal sealed class BoundsGrid<T>
+    {
+        private readonly (T Item, WorldBounds Bounds)[] _items;
+        private readonly Dictionary<(int X, int Y), List<int>> _cells = [];
+        private readonly List<int> _oversized = [];
+
+        internal BoundsGrid(IEnumerable<(T Item, WorldBounds Bounds)> items)
+        {
+            _items = [.. items];
+            for (var i = 0; i < _items.Length; i++)
+            {
+                if (!Range(_items[i].Bounds, out var x0, out var x1, out var y0, out var y1))
+                { _oversized.Add(i); continue; }
+                for (var y = y0; y <= y1; y++) for (var x = x0; x <= x1; x++)
+                {
+                    if (!_cells.TryGetValue((x, y), out var cell)) _cells.Add((x, y), cell = []);
+                    cell.Add(i);
+                }
+            }
+        }
+
+        internal IEnumerable<T> Query(WorldBounds bounds)
+        {
+            // Unusual/non-finite probes retain the old exact bounds predicate.
+            if (!Range(bounds, out var x0, out var x1, out var y0, out var y1))
+            {
+                foreach (var entry in _items)
+                    if (entry.Bounds.Intersects(bounds)) yield return entry.Item;
+                yield break;
+            }
+            var seen = new HashSet<int>();
+            for (var y = y0; y <= y1; y++) for (var x = x0; x <= x1; x++)
+                if (_cells.TryGetValue((x, y), out var cell))
+                    foreach (var i in cell)
+                        if (seen.Add(i) && _items[i].Bounds.Intersects(bounds)) yield return _items[i].Item;
+            foreach (var i in _oversized)
+                if (_items[i].Bounds.Intersects(bounds)) yield return _items[i].Item;
+        }
+
+        private static bool Range(WorldBounds b, out int x0, out int x1, out int y0, out int y1)
+        {
+            x0 = x1 = y0 = y1 = 0;
+            var left = Math.Floor(b.Left / CellSize); var right = Math.Floor(b.Right / CellSize);
+            var top = Math.Floor(b.Top / CellSize); var bottom = Math.Floor(b.Bottom / CellSize);
+            if (!double.IsFinite(left) || !double.IsFinite(right) || !double.IsFinite(top) || !double.IsFinite(bottom)
+                || left < int.MinValue || right >= int.MaxValue || top < int.MinValue || bottom >= int.MaxValue
+                || right < left || bottom < top || (right - left + 1) * (bottom - top + 1) > 64) return false;
+            x0 = (int)left; x1 = (int)right; y0 = (int)top; y1 = (int)bottom;
+            return true;
+        }
+    }
+
     public const double CellSize = 1024;
     private static readonly ConditionalWeakTable<ObjectLayer, ObjectSpatialIndex> Cache = [];
     private readonly IReadOnlyList<SceneObject> _objects;
