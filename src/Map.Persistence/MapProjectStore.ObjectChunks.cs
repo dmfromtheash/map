@@ -231,7 +231,8 @@ public static partial class MapProjectStore
                         $"Object chunk {descriptor.Entry} contains {count} objects instead of {descriptor.Count}.");
                 }
 
-                var dtos = ParseJson<List<SceneObjectDto>>(bytes, descriptor.Entry);
+                // The budget pass above already admitted these bytes; ParseJson would walk them again.
+                var dtos = ParseJson<List<SceneObjectDto>>(bytes, descriptor.Entry, budgetChecked: true);
                 if (dtos.Count != descriptor.Count || dtos.Any(HasInvalidVectorDto))
                 {
                     throw new MapProjectCorruptedException(

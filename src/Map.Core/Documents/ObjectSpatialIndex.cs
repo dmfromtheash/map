@@ -3,13 +3,16 @@ using System.Runtime.CompilerServices;
 
 namespace Map.Core.Documents;
 
-/// <summary>Persistent uniform grid. A changed snapshot updates only cells touched by its delta.</summary>
+/// <summary>
+/// Persistent uniform grid. A changed snapshot updates only cells touched by its delta. A cell holds
+/// its object indices as one sorted array (4 bytes per object), replaced as a whole when it changes.
+/// </summary>
 public sealed class ObjectSpatialIndex
 {
     public const double CellSize = 1024;
     private static readonly ConditionalWeakTable<ObjectLayer, ObjectSpatialIndex> Cache = [];
     private readonly IReadOnlyList<SceneObject> _objects;
-    private readonly ImmutableDictionary<(int X, int Y), ImmutableHashSet<int>> _cells;
+    private readonly ImmutableDictionary<(int X, int Y), int[]> _cells;
     private readonly ImmutableHashSet<int> _oversized;
     private readonly ObjectSpatialIndex? _stableBasis;
     private readonly ImmutableDictionary<ObjectId, SceneObject?> _structuralOverrides = ImmutableDictionary<ObjectId, SceneObject?>.Empty;
@@ -42,19 +45,25 @@ public sealed class ObjectSpatialIndex
         }
         else
         {
-            var buckets = new Dictionary<(int X, int Y), HashSet<int>>();
+            // Indices arrive in increasing order, so every bucket is already sorted and unique.
+            var buckets = new Dictionary<(int X, int Y), List<int>>();
             var oversized = ImmutableHashSet.CreateBuilder<int>();
             for (var index = 0; index < _objects.Count; index++)
             {
-                var cells = CellsOf(_objects[index]);
-                if (cells is null) { oversized.Add(index); continue; }
-                foreach (var cell in cells)
+                if (!TryCellRange(_objects[index], out var minX, out var maxX, out var minY, out var maxY))
                 {
-                    if (!buckets.TryGetValue(cell, out var bucket)) buckets[cell] = bucket = [];
+                    oversized.Add(index);
+                    continue;
+                }
+                for (var y = minY; y <= maxY; y++) for (var x = minX; x <= maxX; x++)
+                {
+                    if (!buckets.TryGetValue((x, y), out var bucket)) buckets[(x, y)] = bucket = [];
                     bucket.Add(index);
                 }
             }
-            _cells = buckets.ToImmutableDictionary(p => p.Key, p => p.Value.ToImmutableHashSet());
+            var cells = ImmutableDictionary.CreateBuilder<(int X, int Y), int[]>();
+            foreach (var (key, bucket) in buckets) cells.Add(key, [.. bucket]);
+            _cells = cells.ToImmutable();
             _oversized = oversized.ToImmutable();
         }
     }
@@ -116,12 +125,12 @@ public sealed class ObjectSpatialIndex
         if (((long)maxX - minX + 1) * ((long)maxY - minY + 1) <= basis._cells.Count)
         {
             for (var y = minY; y <= maxY; y++) for (var x = minX; x <= maxX; x++)
-                if (basis._cells.TryGetValue((x, y), out var bucket) && (count += bucket.Count) >= threshold) return true;
+                if (basis._cells.TryGetValue((x, y), out var bucket) && (count += bucket.Length) >= threshold) return true;
         }
         else
         {
             foreach (var (cell, bucket) in basis._cells)
-                if (cell.X >= minX && cell.X <= maxX && cell.Y >= minY && cell.Y <= maxY && (count += bucket.Count) >= threshold) return true;
+                if (cell.X >= minX && cell.X <= maxX && cell.Y >= minY && cell.Y <= maxY && (count += bucket.Length) >= threshold) return true;
         }
         return false;
     }
@@ -161,29 +170,54 @@ public sealed class ObjectSpatialIndex
         return result.OrderBy(o => storage.IndexOfId(o.Id)).ToArray();
     }
 
-    private static void Change(ImmutableDictionary<(int X, int Y), ImmutableHashSet<int>>.Builder cells,
+    private static void Change(ImmutableDictionary<(int X, int Y), int[]>.Builder cells,
         ImmutableHashSet<int>.Builder oversized, SceneObject item, int index, bool add)
     {
-        var keys = CellsOf(item);
-        if (keys is null) { if (add) oversized.Add(index); else oversized.Remove(index); return; }
-        foreach (var key in keys)
+        if (!TryCellRange(item, out var minX, out var maxX, out var minY, out var maxY))
         {
-            var bucket = cells.GetValueOrDefault(key) ?? ImmutableHashSet<int>.Empty;
-            bucket = add ? bucket.Add(index) : bucket.Remove(index);
-            if (bucket.IsEmpty) cells.Remove(key); else cells[key] = bucket;
+            if (add) oversized.Add(index); else oversized.Remove(index);
+            return;
+        }
+        for (var y = minY; y <= maxY; y++) for (var x = minX; x <= maxX; x++)
+        {
+            var bucket = cells.GetValueOrDefault((x, y)) ?? [];
+            bucket = add ? WithIndex(bucket, index) : WithoutIndex(bucket, index);
+            if (bucket.Length == 0) cells.Remove((x, y)); else cells[(x, y)] = bucket;
         }
     }
 
-    private static IReadOnlyList<(int X, int Y)>? CellsOf(SceneObject item)
+    /// <summary>Set semantics on a sorted array: a copy with the index added, or the same array if present.</summary>
+    private static int[] WithIndex(int[] bucket, int index)
+    {
+        var at = Array.BinarySearch(bucket, index);
+        if (at >= 0) return bucket;
+        at = ~at;
+        var result = new int[bucket.Length + 1];
+        Array.Copy(bucket, 0, result, 0, at);
+        result[at] = index;
+        Array.Copy(bucket, at, result, at + 1, bucket.Length - at);
+        return result;
+    }
+
+    /// <summary>Set semantics on a sorted array: a copy without the index, or the same array if absent.</summary>
+    private static int[] WithoutIndex(int[] bucket, int index)
+    {
+        var at = Array.BinarySearch(bucket, index);
+        if (at < 0) return bucket;
+        var result = new int[bucket.Length - 1];
+        Array.Copy(bucket, 0, result, 0, at);
+        Array.Copy(bucket, at + 1, result, at, bucket.Length - at - 1);
+        return result;
+    }
+
+    /// <summary>The cells an object covers, or false when it spans more than 64 cells (kept apart).</summary>
+    private static bool TryCellRange(SceneObject item, out int minX, out int maxX, out int minY, out int maxY)
     {
         var bounds = SceneGeometry.BoundsOf(item);
-        var minX = (int)Math.Floor(bounds.Left / CellSize);
-        var maxX = (int)Math.Floor(bounds.Right / CellSize);
-        var minY = (int)Math.Floor(bounds.Top / CellSize);
-        var maxY = (int)Math.Floor(bounds.Bottom / CellSize);
-        if (((long)maxX - minX + 1) * ((long)maxY - minY + 1) > 64) return null;
-        var result = new List<(int, int)>();
-        for (var y = minY; y <= maxY; y++) for (var x = minX; x <= maxX; x++) result.Add((x, y));
-        return result;
+        minX = (int)Math.Floor(bounds.Left / CellSize);
+        maxX = (int)Math.Floor(bounds.Right / CellSize);
+        minY = (int)Math.Floor(bounds.Top / CellSize);
+        maxY = (int)Math.Floor(bounds.Bottom / CellSize);
+        return ((long)maxX - minX + 1) * ((long)maxY - minY + 1) <= 64;
     }
 }

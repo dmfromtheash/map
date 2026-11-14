@@ -1026,11 +1026,11 @@ public static partial class MapProjectStore
         }
     }
 
-    private static T ParseJson<T>(byte[] bytes, string entryName)
+    private static T ParseJson<T>(byte[] bytes, string entryName, bool budgetChecked = false)
     {
         try
         {
-            MapProjectJsonBudget.Validate(bytes, entryName);
+            if (!budgetChecked) MapProjectJsonBudget.Validate(bytes, entryName);
             return JsonSerializer.Deserialize<T>(bytes, JsonOptions)
                 ?? throw new MapProjectCorruptedException($"{entryName} is empty.");
         }

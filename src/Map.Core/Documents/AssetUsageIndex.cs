@@ -19,12 +19,14 @@ public sealed class AssetUsageIndex
 
     public static AssetUsageIndex For(ObjectLayer layer) => Cache.GetValue(layer.Objects, static objects =>
     {
-        var counts = ImmutableDictionary.CreateBuilder<string, long>(StringComparer.OrdinalIgnoreCase);
-        void Add(string hash) => counts[hash] = counts.GetValueOrDefault(hash) + 1;
+        // Count in a plain dictionary (an immutable builder allocated tree nodes per object), and
+        // make the counting delegate once instead of once per object.
+        var counts = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+        Action<string> add = hash => counts[hash] = counts.GetValueOrDefault(hash) + 1;
         var stamps = 0;
         foreach (var item in objects)
-        { Visit(item, Add); if (item.Kind == SceneObjectKind.Stamp) stamps++; }
-        return new(counts.ToImmutable(), stamps);
+        { Visit(item, add); if (item.Kind == SceneObjectKind.Stamp) stamps++; }
+        return new(counts.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase), stamps);
     });
 
     internal static void Register(ObjectLayer source, ObjectLayer target,
@@ -84,17 +86,17 @@ public sealed class AssetUsageIndex
 
     internal static void Visit(SceneObject item, Action<string> add)
     {
-        void Add(string? hash) { if (!string.IsNullOrWhiteSpace(hash)) add(hash); }
-        Add(item.Stamp?.AssetSha256);
-        Add(item.Stamp?.MaskAssetSha256);
-        Add(item.Line?.Stroke.AssetSha256);
-        Add(item.Shape?.Stroke.AssetSha256);
-        Add(item.Shape?.Fill.TextureAssetSha256);
-        Add(item.Room?.CapAssetSha256);
+        static void Add(Action<string> add, string? hash) { if (!string.IsNullOrWhiteSpace(hash)) add(hash); }
+        Add(add, item.Stamp?.AssetSha256);
+        Add(add, item.Stamp?.MaskAssetSha256);
+        Add(add, item.Line?.Stroke.AssetSha256);
+        Add(add, item.Shape?.Stroke.AssetSha256);
+        Add(add, item.Shape?.Fill.TextureAssetSha256);
+        Add(add, item.Room?.CapAssetSha256);
         if (item.Decoration is { } decoration)
-            foreach (var entry in decoration.Entries) Add(entry.AssetSha256);
+            foreach (var entry in decoration.Entries) Add(add, entry.AssetSha256);
         if (item.Composition is not { } composition) return;
         foreach (var child in composition.Items) Visit(child, add);
-        foreach (var filter in composition.Filters) Add(filter.TextureAssetSha256);
+        foreach (var filter in composition.Filters) Add(add, filter.TextureAssetSha256);
     }
 }
