@@ -180,6 +180,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
             Interlocked.Increment(ref _generation);
             _requests.Clear(); _previews.Clear(); _completedHeaders.Clear(); _failedHeaders.Clear();
             _quietMissing.Clear();
+            _portableTrust.Clear(); _rejectedPortable.Clear();
             foreach (var request in _mips.Values) Retire(request);
             _mips.Clear();
             SignalCapacity();
@@ -294,9 +295,13 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
                     bitmap.SetImmutable();
                     return new Mip(null, portable.Width, portable.Height, reserved, Image: SKImage.FromBitmap(bitmap), LargeReserved: largeReserved);
                 }
-                // A portable header does not imply that the machine-local mip file exists.
-                // Missing/corrupt portable chunks recover directly from the verified source
-                // on this worker; retrying LoadOrBuild would select the same portable header.
+                if (header.PortablePath is not null && IsRejectedPortable(header.Sha, header.PortablePath))
+                {
+                    var repaired = record is null ? null : TryReadHeader(header.Sha, record) ?? LoadOrBuild(header.Sha);
+                    if (repaired is null) return new Mip(null, 0, 0, reserved, LargeReserved: largeReserved);
+                    header = repaired;
+                }
+                // A valid portable asset may omit a large raster; prepare that raster only.
                 if (!small || header.PortablePath is not null)
                 {
                     var image = PrepareRaster(header, key, request.Stop.Token);
@@ -441,7 +446,9 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
         }
     }
 
-    private void FileChanged(string path)
+    private void FileChanged(string path) => InvalidateFile(path, cancelPixels: true);
+
+    private void InvalidateFile(string path, bool cancelPixels)
     {
         if (_disposed || !_watchedFiles.TryGetValue(path, out var sha)) return;
         lock (_requestsGate)
@@ -453,8 +460,9 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
             Interlocked.Increment(ref _generation);
             _requests.TryRemove(sha, out _); _previews.TryRemove(sha, out _);
             if (!quiet) _failedHeaders.TryRemove(sha, out _);
-            foreach (var key in _mips.Keys.Where(key => string.Equals(key.Sha, sha, StringComparison.OrdinalIgnoreCase)))
-                if (_mips.TryRemove(key, out var request)) Retire(request);
+            if (cancelPixels)
+                foreach (var key in _mips.Keys.Where(key => string.Equals(key.Sha, sha, StringComparison.OrdinalIgnoreCase)))
+                    if (_mips.TryRemove(key, out var request)) Retire(request);
             SignalCapacity();
             if (quiet) return;
             _invalidated[sha] = 0;
@@ -698,8 +706,8 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
                     && f.Name.Length == 101 && f.Name[..64].All(Uri.IsHexDigit)
                     && f.LastWriteTimeUtc < DateTime.UtcNow.AddHours(-1)))
                     try { file.Delete(); } catch (IOException) { } catch (UnauthorizedAccessException) { }
-                var entries = files.Where(f => f.Name.Length is 69 or 71 && f.Name[..64].All(Uri.IsHexDigit)
-                    && (f.Extension == ".json" || f.Extension == ".pixels"))
+                var entries = files.Where(f => f.Name.Length is 69 or 70 or 71 && f.Name[..64].All(Uri.IsHexDigit)
+                    && (f.Extension == ".json" || f.Extension == ".pixels" || f.Extension == ".trust"))
                     .GroupBy(f => f.Name[..64], StringComparer.OrdinalIgnoreCase)
                     .Select(group => new { Files = group.ToArray(), Used = group.Max(f => f.LastWriteTimeUtc), Bytes = group.Sum(f => f.Length) })
                     .OrderBy(entry => entry.Used).ToArray();

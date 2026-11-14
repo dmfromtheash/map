@@ -1,4 +1,6 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Security.Cryptography;
 using Map.Assets;
 using Map.Presentation.Services;
 using SkiaSharp;
@@ -135,7 +137,163 @@ public sealed class PortableDerivedAssetTests : IDisposable
         var deadline = DateTime.UtcNow.AddSeconds(10);
         while (reader.Generation == generation && DateTime.UtcNow < deadline) await Task.Delay(20);
         Assert.True(reader.Generation > generation);
+        // Metadata-only changes reverify the exact bytes instead of rejecting a moved library.
+        Assert.NotNull((await reader.Request(record.Sha256))!.PortablePath);
+    }
+
+    [Fact]
+    public async Task Missing_portable_is_a_quiet_miss()
+    {
+        await using var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));
+        var record = ImportOwner(catalog);
+        await using var reader = new StampDerivedAssetStore(catalog, Path.Combine(_root, "reader"));
         Assert.Null((await reader.Request(record.Sha256))!.PortablePath);
+        Assert.Equal(0, reader.Failures);
+    }
+
+    [Theory]
+    [InlineData("version")]
+    [InlineData("first-mip")]
+    [InlineData("mip-count")]
+    [InlineData("dimensions")]
+    [InlineData("offset")]
+    [InlineData("length")]
+    public async Task Invalid_manifest_recovers_in_machine_cache(string damage)
+    {
+        await using var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));
+        var record = ImportOwner(catalog);
+        string path;
+        await using (var builder = new StampDerivedAssetStore(catalog, Path.Combine(_root, "builder")))
+            path = await builder.BuildPortableAsync(record.Sha256);
+        RewriteManifest(path, node =>
+        {
+            var entry = node["Entries"]![0]!;
+            switch (damage)
+            {
+                case "version": node["Version"] = 99; break;
+                case "first-mip": node["Header"]!["FirstMip"] = 16; break;
+                case "mip-count": node["Header"]!["MipCount"] = 17; break;
+                case "dimensions": entry["Width"] = entry["Width"]!.GetValue<int>() - 1; break;
+                case "offset": entry["Offset"] = int.MaxValue; break;
+                case "length": entry["Length"] = int.MaxValue; break;
+            }
+        });
+        var before = File.ReadAllBytes(path);
+        await using var reader = new StampDerivedAssetStore(catalog, Path.Combine(_root, "reader"));
+        Assert.Null((await reader.Request(record.Sha256))!.PortablePath);
+        Assert.Equal(1, reader.Builds);
+        Assert.Equal(before, File.ReadAllBytes(path));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Changed_original_is_not_trusted_even_with_same_size_and_timestamp(bool preserveTimestamp)
+    {
+        await using var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));
+        var record = ImportOwner(catalog);
+        await using (var builder = new StampDerivedAssetStore(catalog, Path.Combine(_root, "builder")))
+            await builder.BuildPortableAsync(record.Sha256);
+        var path = catalog.SourcePath(record);
+        var timestamp = File.GetLastWriteTimeUtc(path);
+        var bytes = File.ReadAllBytes(path); bytes[^1] ^= 1;
+        File.WriteAllBytes(path, bytes);
+        if (preserveTimestamp) File.SetLastWriteTimeUtc(path, timestamp);
+        await using var reader = new StampDerivedAssetStore(catalog, Path.Combine(_root, "reader"));
+        Assert.Null(await reader.Request(record.Sha256));
+    }
+
+    [Fact]
+    public async Task Copied_source_with_new_timestamp_reuses_portable_after_hash_verification()
+    {
+        await using var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));
+        var record = ImportOwner(catalog);
+        await using (var builder = new StampDerivedAssetStore(catalog, Path.Combine(_root, "builder")))
+            await builder.BuildPortableAsync(record.Sha256);
+        File.SetLastWriteTimeUtc(catalog.SourcePath(record), DateTime.UtcNow.AddDays(-1));
+        var cache = Path.Combine(_root, "reader");
+        await using (var reader = new StampDerivedAssetStore(catalog, cache))
+        {
+            Assert.NotNull((await reader.Request(record.Sha256))!.PortablePath);
+            Assert.Equal(0, reader.Builds);
+            Assert.True(reader.DiskBytes > 0);
+        }
+        Assert.Single(Directory.GetFiles(cache, "*.trust", SearchOption.AllDirectories));
+        await using var reopened = new StampDerivedAssetStore(catalog, cache);
+        Assert.NotNull((await reopened.Request(record.Sha256))!.PortablePath);
+        Assert.Equal(0, reopened.Builds);
+    }
+
+    [Theory]
+    [InlineData("deleted")]
+    [InlineData("pixels")]
+    [InlineData("brotli-tail")]
+    public async Task Broken_portable_after_header_recovers_once_and_repeated_requests_use_local_mips(string damage)
+    {
+        await using var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));
+        var record = ImportOwner(catalog);
+        string path;
+        await using (var builder = new StampDerivedAssetStore(catalog, Path.Combine(_root, "builder")))
+            path = await builder.BuildPortableAsync(record.Sha256);
+        var cache = Path.Combine(_root, "reader");
+        await using var reader = new StampDerivedAssetStore(catalog, cache, startWatcher: _ => { });
+        var header = (await reader.Request(record.Sha256))!;
+        Assert.NotNull(header.PortablePath);
+        if (damage == "deleted") File.Delete(path);
+        else if (damage == "pixels")
+        {
+            var bytes = File.ReadAllBytes(path);
+            bytes[44 + BitConverter.ToInt32(bytes, 8)] ^= 0x7f;
+            File.WriteAllBytes(path, bytes);
+        }
+        else
+        {
+            var bytes = File.ReadAllBytes(path);
+            var length = BitConverter.ToInt32(bytes, 8);
+            var node = JsonNode.Parse(bytes.AsSpan(44, length))!;
+            var entries = node["Entries"]!.AsArray();
+            var firstLength = entries[0]!["Length"]!.GetValue<int>();
+            var data = bytes[(44 + length)..].ToList(); data.Insert(firstLength, 0x42);
+            entries[0]!["Length"] = firstLength + 1;
+            foreach (var entry in entries.Skip(1)) entry!["Offset"] = entry["Offset"]!.GetValue<int>() + 1;
+            WritePortable(path, node, data.ToArray());
+        }
+        await reader.RequestPixels(header, 0, 0).WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.True(reader.TryTakePixels(new(record.Sha256, 0, 0), out var ready));
+        Assert.True(ready!.Image is not null || ready.Pixels is not null);
+        ready.Image?.Dispose();
+        var failures = reader.Failures;
+        Assert.Equal(1, failures);
+        var repaired = (await reader.Request(record.Sha256))!;
+        Assert.Null(repaired.PortablePath);
+        Assert.Single(Directory.GetFiles(cache, "*.pixels", SearchOption.AllDirectories));
+        // Even a caller retaining the old header must not reopen the broken portable.
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            await reader.RequestPixels(header, 0, header.FirstMip).WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.True(reader.TryTakePixels(new(record.Sha256, 0, header.FirstMip), out ready));
+            Assert.NotNull(ready!.Pixels);
+            ready.Image?.Dispose();
+        }
+        Assert.Equal(failures, reader.Failures);
+    }
+
+    private static void RewriteManifest(string path, Action<JsonNode> mutate)
+    {
+        var bytes = File.ReadAllBytes(path);
+        var length = BitConverter.ToInt32(bytes, 8);
+        var node = JsonNode.Parse(bytes.AsSpan(44, length))!;
+        mutate(node);
+        WritePortable(path, node, bytes[(44 + length)..]);
+    }
+
+    private static void WritePortable(string path, JsonNode node, byte[] data)
+    {
+        var json = JsonSerializer.SerializeToUtf8Bytes(node);
+        using var file = File.Create(path);
+        using var writer = new BinaryWriter(file);
+        writer.Write("MAPDRV01"u8); writer.Write(json.Length); writer.Write(SHA256.HashData(json));
+        writer.Write(json); writer.Write(data);
     }
 
     public void Dispose()

@@ -12,17 +12,44 @@ public sealed partial class StampDerivedAssetStore
     private static readonly byte[] PortableMagic = "MAPDRV01"u8.ToArray();
     private const int PortableLimit = 16 * 1024 * 1024;
     private sealed record PortableEntry(int Step, int Level, int Width, int Height, int Offset, int Length, string Hash);
-    private sealed record PortableManifest(int Version, Header Header, FileStamp[] Sources, byte[] Alpha32, PortableEntry[] Entries);
+    private sealed record PortableManifest(int Version, Header Header, FileStamp[] Sources, byte[] Alpha32, PortableEntry[] Entries, string[] SourceHashes);
     private sealed record PortablePixels(int Width, int Height, byte[] Pixels);
+    private sealed record PortableTrust(FileStamp[] Sources, string[] Hashes);
+    private readonly Dictionary<string, FileStamp?> _rejectedPortable = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, PortableTrust> _portableTrust = new(StringComparer.OrdinalIgnoreCase);
 
-    private string PortablePath(AssetRecord record) => Path.Combine(_catalog.RootFor(record), "derived", "v1", record.Sha256.ToLowerInvariant() + ".mapderived");
+    private string PortablePath(AssetRecord record) => Path.Combine(_catalog.RootFor(record), "derived", "v" + Version, record.Sha256.ToLowerInvariant() + ".mapderived");
+
+    private bool IsRejectedPortable(string sha, string path)
+    {
+        FileStamp? rejected;
+        lock (_requestsGate)
+            if (!_rejectedPortable.TryGetValue(sha, out rejected)) return false;
+        return rejected == FileStamp.Read(path);
+    }
+
+    private void RejectPortable(Header header, Exception error)
+    {
+        if (IsRejectedPortable(header.Sha, header.PortablePath!)) return;
+        var stamp = FileStamp.Read(header.PortablePath!);
+        lock (_requestsGate)
+        {
+            while (_rejectedPortable.Count >= _metadataCapacity) _rejectedPortable.Remove(_rejectedPortable.Keys.First());
+            _rejectedPortable[header.Sha] = stamp;
+        }
+        ReportFailure("portable pixels " + header.Sha, error);
+        // Keep the running request alive so it can return the repaired raster. Future
+        // requests must obtain a local header instead of repeatedly selecting this file.
+        InvalidateFile(header.Original.Path, cancelPixels: false);
+    }
 
     private static PixelKey[] PortableKeys(AssetRecord record)
     {
         var depth = AssetCatalog.DetailLadderDepth(record.Width, record.Height);
         var result = new List<PixelKey>();
         for (var step = 0; step <= depth; step++)
-            for (var level = 0; level <= (step == depth ? 15 : 0); level++)
+            for (var level = 0; level <= (step == depth
+                ? Math.Min(15, (int)Math.Floor(Math.Log2(Math.Max(1, Math.Min(record.Width >> step, record.Height >> step))))) : 0); level++)
                 if (Math.Max(Math.Max(1, record.Width >> step) >> level, Math.Max(1, record.Height >> step) >> level) <= 1024)
                     result.Add(new(record.Sha256.ToLowerInvariant(), step, level));
         return result.ToArray();
@@ -39,9 +66,12 @@ public sealed partial class StampDerivedAssetStore
         var json = reader.ReadBytes(length);
         if (!SHA256.HashData(json).AsSpan().SequenceEqual(hash)) throw new InvalidDataException("Portable manifest hash.");
         var manifest = JsonSerializer.Deserialize<PortableManifest>(json) ?? throw new InvalidDataException("Portable manifest.");
-        if (manifest.Version != Version || manifest.Header is not { Version: Version, Sha.Length: 64, Width: > 0 and <= 32768, Height: > 0 and <= 32768 }
+        if (manifest.Version != Version || manifest.Header is not { Version: Version, Sha.Length: 64, Width: > 0 and <= 32768, Height: > 0 and <= 32768,
+                FirstMip: >= 0 and <= 15, MipCount: >= 0 and <= 16, PixelHash.Length: 64 }
             || manifest.Alpha32 is not { Length: 1024 } || manifest.Entries is not { Length: >= 1 and <= 32 }
-            || manifest.Sources is not { Length: >= 1 and <= 16 })
+            || manifest.Sources is not { Length: >= 1 and <= 16 }
+            || manifest.SourceHashes is null || manifest.SourceHashes.Length != manifest.Sources.Length
+            || manifest.SourceHashes.Any(hash => hash is not { Length: 64 } || !hash.All(Uri.IsHexDigit)))
             throw new InvalidDataException("Portable manifest version or dimensions.");
         var dataStart = file.Position;
         long end = 0;
@@ -63,6 +93,7 @@ public sealed partial class StampDerivedAssetStore
         try
         {
             var path = PortablePath(record);
+            if (!File.Exists(path) || IsRejectedPortable(record.Sha256, path)) return null;
             using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
             var (manifest, _) = ReadPortableManifest(file);
             var held = manifest.Header;
@@ -71,15 +102,74 @@ public sealed partial class StampDerivedAssetStore
             var working = FileStamp.Read(_catalog.TryDetailLevelPath(record, 1, out var step) ? step : _catalog.SourcePath(record));
             if (original is null || working is null || !string.Equals(held.Sha, record.Sha256, StringComparison.OrdinalIgnoreCase)
                 || !PortableStampMatches(held.Original, original, root) || !PortableStampMatches(held.Working, working, root)
-                || !PortableSourcesMatch(record, manifest)) return null;
+                || !PortableSourcesMatch(record, manifest) || !VerifyPortableSources(record, manifest)) return null;
+            foreach (var entry in manifest.Entries)
+                if (entry.Width != Math.Max(1, Math.Max(1, record.Width >> entry.Step) >> entry.Level)
+                    || entry.Height != Math.Max(1, Math.Max(1, record.Height >> entry.Step) >> entry.Level))
+                    throw new InvalidDataException("Portable pixel dimensions differ from catalog.");
             return held with { Original = original, Working = working, PortablePath = path };
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or JsonException or ArgumentException) { return null; }
     }
 
     private static bool PortableStampMatches(FileStamp? stored, FileStamp current, string root)
-        => stored is not null && stored.Length == current.Length && stored.WrittenTicks == current.WrittenTicks
+        => stored is not null && stored.Length == current.Length
             && string.Equals(stored.Path, Path.GetRelativePath(root, current.Path).Replace('\\', '/'), StringComparison.OrdinalIgnoreCase);
+
+    private bool VerifyPortableSources(AssetRecord record, PortableManifest manifest)
+    {
+        var sources = PortableSources(record);
+        var path = Stem(record.Sha256) + ".trust";
+        PortableTrust? trust;
+        lock (_requestsGate) _portableTrust.TryGetValue(record.Sha256, out trust);
+        if (trust is null)
+            try
+            {
+                if (new FileInfo(path) is { Exists: true, Length: <= 16 * 1024 })
+                    trust = JsonSerializer.Deserialize<PortableTrust>(File.ReadAllBytes(path));
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException) { }
+        if (trust?.Sources is not null && trust.Hashes is not null
+            && trust.Sources.SequenceEqual(sources) && trust.Hashes.SequenceEqual(manifest.SourceHashes))
+        {
+            RememberPortableTrust(record.Sha256, trust);
+            return true;
+        }
+        // A portable file is not a machine-local proof of the source identity. Verify
+        // the master once, and each ladder's exact bytes, without decoding any image.
+        if (_catalog.ReadVerified(record).Status != AssetResolutionStatus.Available) return false;
+        for (var i = 0; i < sources.Length; i++)
+        {
+            var hash = i == 0 ? record.Sha256.ToLowerInvariant()
+                : Convert.ToHexStringLower(SHA256.HashData(AssetImagePolicy.ReadEncodedFile(sources[i].Path)));
+            if (!string.Equals(hash, manifest.SourceHashes[i], StringComparison.OrdinalIgnoreCase) || !sources[i].Matches()) return false;
+        }
+        trust = new(sources, manifest.SourceHashes);
+        RememberPortableTrust(record.Sha256, trust);
+        var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        var previousBytes = FileBytes(path);
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllBytes(temporary, JsonSerializer.SerializeToUtf8Bytes(trust));
+            File.Move(temporary, path, overwrite: true);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { ReportFailure("portable trust persistence", error); }
+        finally { if (File.Exists(temporary)) File.Delete(temporary); }
+        Interlocked.Add(ref _diskBytes, FileBytes(path) - previousBytes);
+        if (DiskBytes > _diskBudget) TrimDisk();
+        return true;
+    }
+
+    private void RememberPortableTrust(string sha, PortableTrust trust)
+    {
+        lock (_requestsGate)
+        {
+            if (!_portableTrust.ContainsKey(sha))
+                while (_portableTrust.Count >= _metadataCapacity) _portableTrust.Remove(_portableTrust.Keys.First());
+            _portableTrust[sha] = trust;
+        }
+    }
 
     private FileStamp[] PortableSources(AssetRecord record)
     {
@@ -109,40 +199,35 @@ public sealed partial class StampDerivedAssetStore
     {
         try
         {
-            if (!header.Original.Matches() || !header.Working.Matches()) return null;
+            if (IsRejectedPortable(key.Sha, header.PortablePath!)) return null;
+            if (!header.Original.Matches() || !header.Working.Matches()) throw new InvalidDataException("Portable source changed.");
             using var file = new FileStream(header.PortablePath!, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
             var (manifest, start) = ReadPortableManifest(file);
             if (!string.Equals(manifest.Header.Sha, key.Sha, StringComparison.OrdinalIgnoreCase)
-                || _catalog.Find(key.Sha) is not { } record || !PortableSourcesMatch(record, manifest)) return null;
+                || _catalog.Find(key.Sha) is not { } record || !PortableSourcesMatch(record, manifest)
+                || !VerifyPortableSources(record, manifest)) throw new InvalidDataException("Portable source identity changed.");
             var entry = manifest.Entries.FirstOrDefault(entry => entry.Step == key.Step && entry.Level == key.Level);
             if (entry is null) return null;
+            if (entry.Width != Math.Max(1, Math.Max(1, record.Width >> key.Step) >> key.Level)
+                || entry.Height != Math.Max(1, Math.Max(1, record.Height >> key.Step) >> key.Level))
+                throw new InvalidDataException("Portable pixel dimensions differ from catalog.");
             file.Position = start + entry.Offset;
             var compressed = new byte[entry.Length];
             file.ReadExactly(compressed);
-            using var input = new MemoryStream(compressed, writable: false);
-            using var brotli = new BrotliStream(input, CompressionMode.Decompress);
             var pixels = new byte[checked(entry.Width * entry.Height * 4)];
-            int trailing;
-            try
-            {
-                brotli.ReadExactly(pixels);
-                trailing = brotli.ReadByte();
-            }
-            catch (InvalidOperationException error)
-            {
-                // Brotli reports malformed compressed input as InvalidOperationException.
-                // Classify that decoder failure as corrupt derived data, then recover normally.
-                throw new InvalidDataException("Portable compressed pixels.", error);
-            }
-            if (trailing != -1 || !string.Equals(Convert.ToHexStringLower(SHA256.HashData(pixels)), entry.Hash, StringComparison.Ordinal))
+            using var decoder = new BrotliDecoder();
+            var status = decoder.Decompress(compressed, pixels, out var consumed, out var written);
+            if (status != System.Buffers.OperationStatus.Done || consumed != compressed.Length || written != pixels.Length
+                || !string.Equals(Convert.ToHexStringLower(SHA256.HashData(pixels)), entry.Hash, StringComparison.Ordinal))
                 throw new InvalidDataException("Portable pixels hash or size.");
             return new(entry.Width, entry.Height, pixels);
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or JsonException or ArgumentException)
-        { ReportFailure("portable pixels " + key.Sha, ex); return null; }
+        { RejectPortable(header, ex); return null; }
     }
 
-    /// <summary>Explicit pipeline operation. Normal rendering only reads this file; it never writes into a mounted library.</summary>
+    /// <summary>Explicit pipeline operation, on a separate store instance only.
+    /// Normal rendering only reads this file; it never writes into a mounted library.</summary>
     public async Task<string> BuildPortableAsync(string sha, CancellationToken cancellation = default)
     {
         var record = _catalog.Find(sha) ?? throw new ArgumentException("Unknown asset.", nameof(sha));
@@ -192,7 +277,9 @@ public sealed partial class StampDerivedAssetStore
             throw new InvalidDataException("Source changed during preparation.");
         var portable = header with { Original = header.Original with { Path = relativeOriginal }, Working = header.Working with { Path = relativeWorking }, PortablePath = null };
         var relativeSources = sources.Select(stamp => stamp with { Path = Path.GetRelativePath(root, stamp.Path).Replace('\\', '/') }).ToArray();
-        var json = JsonSerializer.SerializeToUtf8Bytes(new PortableManifest(Version, portable, relativeSources, alpha, entries.ToArray()));
+        var hashes = sources.Select(stamp => Convert.ToHexStringLower(SHA256.HashData(AssetImagePolicy.ReadEncodedFile(stamp.Path)))).ToArray();
+        if (!sources.All(stamp => stamp.Matches())) throw new InvalidDataException("Source changed during hashing.");
+        var json = JsonSerializer.SerializeToUtf8Bytes(new PortableManifest(Version, portable, relativeSources, alpha, entries.ToArray(), hashes));
         if (44L + json.Length + data.Length > PortableLimit) throw new InvalidDataException("Portable size limit.");
         var destination = PortablePath(record);
         foreach (var directory in new[] { Path.Combine(root, "derived"), Path.GetDirectoryName(destination)! })
