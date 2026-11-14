@@ -137,6 +137,13 @@ public sealed class RenderStats
     public double OverviewVariantMilliseconds { get; set; }
     public double OverviewRasterMilliseconds { get; set; }
     public double OverviewRefinementMilliseconds { get; set; }
+    /// <summary>Ready background overview rasters taken by this frame, and their pixels (each is a new GPU upload).</summary>
+    public int OverviewAdoptions { get; set; }
+    public long OverviewAdoptedPixels { get; set; }
+    /// <summary>The adoption budget this frame ran under: the gesture budget while the camera moves, else the settled one.</summary>
+    public long OverviewAdoptionBudgetPixels { get; set; }
+    /// <summary>Chunks left on their previous picture because the frame's adoption budget was spent.</summary>
+    public int OverviewAdoptionsDeferred { get; set; }
     public int OverviewBatches { get; set; }
     public int DrawCalls { get; set; }
     public int StampAtlasBatches { get; set; }
@@ -206,6 +213,10 @@ public sealed class RenderStats
         OverviewVariantMilliseconds = 0;
         OverviewRasterMilliseconds = 0;
         OverviewRefinementMilliseconds = 0;
+        OverviewAdoptions = 0;
+        OverviewAdoptedPixels = 0;
+        OverviewAdoptionBudgetPixels = 0;
+        OverviewAdoptionsDeferred = 0;
         OverviewBatches = 0;
         DrawCalls = 0;
         StampAtlasBatches = 0;
@@ -573,6 +584,13 @@ public sealed class RenderOptions
     /// export evaluate the complete terrain.
     /// </summary>
     public bool FastTerrain { get; init; }
+
+    /// <summary>
+    /// The view itself is panning or zooming in this frame. The overview then takes at most the
+    /// gesture budget of ready background rasters (each is a fresh GPU upload) and its worker
+    /// leaves neighbour prefetch until a settled frame; the settled frame converges as before.
+    /// </summary>
+    public bool CameraMoving { get; init; }
 
     /// <summary>Export paths opt in so editor-only grids can be omitted independently.</summary>
     public bool IsExport { get; init; }
@@ -3295,7 +3313,14 @@ public static partial class SceneRenderer
         // into cached tiles: pan and revisits reuse them, and each tile is drawn as one atlas mesh.
         // A screen with a few hundred stamps draws them directly, which is faster than a tile
         // and needs no atlas at all, whatever the size of the layer behind it.
-        if (!options.IsExport && options.ViewScale >= .03
+        // A large layer whose spatial index is not built yet keeps its overview stand-in for this
+        // frame and gets the index on a background thread: built here, the first frame past the
+        // dense-tile scale stalled for 0.2-0.6 s on a million or two objects.
+        var indexPending = !options.IsExport && options.ViewScale >= .03 && options.LodTier == RenderLodTier.Overview
+            && options.ObjectCache is not null && options.VisibleWorld is not null
+            && layer.Objects.Count >= DenseTileMinimumObjects && !SpatialIndexReady(layer, options);
+        if (indexPending && options.Stats is { } waiting) waiting.DetailTilesPending++;
+        if (!indexPending && !options.IsExport && options.ViewScale >= .03
             && options.ObjectCache is not null && options.VisibleWorld is not null
             && options.ObjectOverrides is not { Count: > 0 } && layer.Objects.Count >= DenseTileMinimumObjects
             && ObjectSpatialIndex.For(layer).MayContainAtLeast(view, DenseTileMinimumVisible)
@@ -3306,7 +3331,8 @@ public static partial class SceneRenderer
             return;
         }
         if (options.Stats is { } skipped && !options.IsExport && layer.Objects.Count >= DenseTileMinimumObjects)
-            skipped.DenseSkip = options.ViewScale < .03 ? "far" : options.ObjectCache is null ? "no-cache" : options.VisibleWorld is null ? "no-view"
+            skipped.DenseSkip = options.ViewScale < .03 ? "far" : indexPending ? "index-pending"
+                : options.ObjectCache is null ? "no-cache" : options.VisibleWorld is null ? "no-view"
                 : options.ObjectOverrides is { Count: > 0 } ? "overrides" : !ObjectSpatialIndex.For(layer).MayContainAtLeast(view, DenseTileMinimumVisible) ? "sparse"
                 : !RevisionsFor(layer).CanCache ? "uncacheable" : "asset-missing";
 
@@ -4233,6 +4259,31 @@ public static partial class SceneRenderer
     /// (a few hundred atlas draws a frame) and needs no tile or atlas memory.
     /// </summary>
     private const int DenseTileMinimumObjects = 2000;
+
+    /// <summary>From this many objects an editor frame never builds a layer's spatial index itself.</summary>
+    internal const int BackgroundSpatialIndexObjects = 50_000;
+    private static readonly ConditionalWeakTable<ObjectLayer, Task> SpatialIndexBuilds = [];
+
+    /// <summary>
+    /// True when the frame may use the layer's spatial index now. Otherwise the index is being built
+    /// on a below-normal background thread (after any gesture), which asks for a frame when done.
+    /// Without a refined-frame callback (export, thumbnails, tests) the caller builds it inline.
+    /// </summary>
+    private static bool SpatialIndexReady(ObjectLayer layer, RenderOptions options)
+    {
+        if (layer.Objects.Count < BackgroundSpatialIndexObjects || ObjectSpatialIndex.IsReady(layer)
+            || options.RequestRefinedFrame is not { } ready) return true;
+        lock (SpatialIndexBuilds)
+            if (!SpatialIndexBuilds.TryGetValue(layer, out _))
+                SpatialIndexBuilds.Add(layer, Map.Core.Resources.BackgroundWork.RunAsync(() =>
+                {
+                    try { _ = ObjectSpatialIndex.For(layer); }
+                    catch (Exception error) when (error is not OutOfMemoryException)
+                    { lock (SpatialIndexBuilds) SpatialIndexBuilds.Remove(layer); } // a later frame tries again
+                    finally { ready(); }
+                }, "Map spatial index"));
+        return false;
+    }
     private const int DenseTileMinimumVisible = 1200;
 
     /// <summary>One raster atlas per zoom bucket holds every (asset, mip) a dense tile needs; the largest allowed.</summary>
@@ -5987,16 +6038,30 @@ public static partial class SceneRenderer
             }
             if (preparation is not null)
             {
-                if (cache.CanAcceptPreparedOverview && preparation.TryTakeOrRequest(layer, item.Chunk, palette,
-                    zoomBucket, document.StampForeground, out var raster) && raster is not null)
+                // Over the frame's adoption budget the chunk is still requested, so the worker keeps
+                // preparing centre-first, but its ready raster waits for a later frame.
+                var accept = cache.CanAcceptPreparedOverview(options.CameraMoving);
+                if (options.Stats is { } budget)
+                {
+                    budget.OverviewAdoptionBudgetPixels = cache.AdoptionBudgetPixels;
+                    if (!accept) budget.OverviewAdoptionsDeferred++;
+                }
+                if (preparation.TryTakeOrRequest(layer, item.Chunk, palette,
+                    zoomBucket, document.StampForeground, out var raster, take: accept) && raster is not null)
                 {
                     var started = Stopwatch.GetTimestamp();
                     variant = raster.Variant;
+                    var pixels = (long)raster.Image.Width * raster.Image.Height; // the cache owns the image after this call
                     drawn[(item.X, item.Y)] = (variant, cache.GetOrCreateOverview(layer.Id, item.X, item.Y,
                         zoomBucket, ImageHash(variant), variant, document.StampForeground, options, raster.Image));
                     var elapsed = cache.RecordOverviewBuild(started);
-                    cache.RecordAdoption(raster.Image);
-                    if (options.Stats is { } adoption) adoption.OverviewRefinementMilliseconds += elapsed;
+                    cache.RecordAdoption(pixels);
+                    if (options.Stats is { } adoption)
+                    {
+                        adoption.OverviewRefinementMilliseconds += elapsed;
+                        adoption.OverviewAdoptions++;
+                        adoption.OverviewAdoptedPixels += pixels;
+                    }
                     continue;
                 }
                 deferred = true;
@@ -6191,7 +6256,8 @@ public static partial class SceneRenderer
             return _colors.GetValue(source, static _ => new()).Get(assets, _assetCounts, source, options, samples, cancellationToken);
         }
 
-        public ObjectOverviewPlan(ObjectLayer layer, CancellationToken cancellationToken = default)
+        /// <param name="checkpoint">Called every 64K objects of a cold build: the background worker waits there while a gesture runs.</param>
+        public ObjectOverviewPlan(ObjectLayer layer, CancellationToken cancellationToken = default, Action? checkpoint = null)
         {
             if (ObjectLayerChanges.TryGet(layer, out var delta) && OverviewPlans.TryGetValue(delta.Source, out var previous))
             {
@@ -6233,30 +6299,45 @@ public static partial class SceneRenderer
             {
                 // Dense cold plans use flat builders and immutable arrays. An immutable
                 // tree node per object made the background plan itself cause long GC pauses.
-                var chunks = new Dictionary<(int, int), List<(long Order, SceneObject Item)>>();
+                // Two passes (count, then fill arrays of the exact size, sorted in place and handed
+                // over without a copy): a growing list per chunk plus its copy allocated about
+                // three times the plan on a million objects, all of it during the first gesture.
+                var chunks = new Dictionary<(int, int), ((long Order, SceneObject Item)[]? Items, int Count)>();
                 var assetCounts = new Dictionary<string, int>(StringComparer.Ordinal);
                 var index = 0;
                 foreach (var item in layer.Objects)
                 {
                     var order = index++;
                     if ((order & 255) == 0) cancellationToken.ThrowIfCancellationRequested();
+                    if ((order & 0xFFFF) == 0xFFFF) checkpoint?.Invoke();
                     if (!item.Visible) continue;
                     CountAsset(assetCounts, item, 1);
-                    var key = KeyOf(item);
-                    if (!chunks.TryGetValue(key, out var objects)) chunks[key] = objects = [];
-                    objects.Add((order, item));
+                    System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrAddDefault(chunks, KeyOf(item), out _).Count++;
                 }
-                Chunks = chunks.ToImmutableDictionary(p => p.Key,
-                    p =>
+                index = 0;
+                foreach (var item in layer.Objects)
+                {
+                    var order = index++;
+                    if ((order & 255) == 0) cancellationToken.ThrowIfCancellationRequested();
+                    if ((order & 0xFFFF) == 0xFFFF) checkpoint?.Invoke();
+                    if (!item.Visible) continue;
+                    ref var chunk = ref System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrNullRef(chunks, KeyOf(item));
+                    if (chunk.Items is null) { chunk.Items = new (long, SceneObject)[chunk.Count]; chunk.Count = 0; }
+                    chunk.Items[chunk.Count++] = (order, item);
+                }
+                var built = ImmutableDictionary.CreateBuilder<(int X, int Y), OverviewChunk>();
+                foreach (var (key, chunk) in chunks)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var items = chunk.Items!;
+                    Array.Sort(items, static (a, b) =>
                     {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        p.Value.Sort(static (a, b) =>
-                        {
-                            var band = a.Item.Sublayer.CompareTo(b.Item.Sublayer);
-                            return band != 0 ? band : a.Order.CompareTo(b.Order);
-                        });
-                        return new OverviewChunk(p.Key.Item1, p.Key.Item2, [.. p.Value]);
+                        var band = a.Item.Sublayer.CompareTo(b.Item.Sublayer);
+                        return band != 0 ? band : a.Order.CompareTo(b.Order);
                     });
+                    built.Add(key, new OverviewChunk(key.Item1, key.Item2, System.Runtime.InteropServices.ImmutableCollectionsMarshal.AsImmutableArray(items)));
+                }
+                Chunks = built.ToImmutable();
                 _assetCounts = assetCounts.ToImmutableDictionary(StringComparer.Ordinal);
             }
         }
@@ -6397,46 +6478,80 @@ public static partial class SceneRenderer
             // blur, colour) a dot cannot carry, which are painted exactly into the cached chunk once
             // instead of being drawn on every overview frame (1.5: 17 700 of the owner's mountains
             // with shadows took 4 s a frame at 50 000).
-            var steps = new List<object>();
+            // The steps and the dots of the open run are collected in pooled scratch arrays; only the
+            // final steps (a struct each, a point array only for a run of two or more dots) are
+            // allocated. With mixed assets almost every dot is its own run: an object, a list and
+            // two arrays per dot made each neighbour-bucket prefetch a burst of garbage.
+            var length = Objects.Length;
+            var stepScratch = System.Buffers.ArrayPool<OverviewStep>.Shared.Rent(Math.Max(1, length));
+            var pointScratch = System.Buffers.ArrayPool<SKPoint>.Shared.Rent(Math.Max(1, length));
+            var stepCount = 0;
+            var batches = 0;
+            var runStart = 0;
+            var runLength = 0;
+            var runColor = default(SKColor);
             var exact = new List<SceneObject>();
             var hash = 14_695_981_039_346_656_037UL;
             var overviewCount = 0;
             var missingCount = 0;
             var painted = false;
-            foreach (var (_, sceneObject) in Objects)
+            void CloseRun()
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                hash = HashObject(hash, sceneObject);
-                if (Math.Max(sceneObject.Width, sceneObject.Height) * bucketScale >= OverviewExactScreenSize)
-                {
-                    exact.Add(sceneObject);
-                    continue;
-                }
-
-                overviewCount++;
-                if (sceneObject.Stamp is { } detailStamp && colors.ContainsKey(detailStamp.AssetSha256) && detailStamp is not
-                        { Blur: 0, ShadowOpacity: 0, ClipMaskEnabled: false, Blend: "Normal", Hue: 0,
-                          Saturation: 0, Brightness: 0, Contrast: 0 })
-                {
-                    steps.Add(sceneObject);
-                    painted = true;
-                    continue;
-                }
-
-                if (sceneObject.Stamp is { } absent && !colors.ContainsKey(absent.AssetSha256)) missingCount++;
-                var color = sceneObject.Stamp is { } stamp && colors.TryGetValue(stamp.AssetSha256, out var tint)
-                    ? tint.WithScaledAlpha(Alpha(sceneObject.ObjectOpacity)) : OverviewColor(sceneObject);
-                hash = (hash ^ (uint)color.GetHashCode()) * 1_099_511_628_211UL;
-                if (steps.Count == 0 || steps[^1] is not DotRun run || run.Color != color)
-                    steps.Add(run = new DotRun(color));
-                run.Points.Add(new SKPoint(
-                    (float)(sceneObject.X + (sceneObject.Width / 2)),
-                    (float)(sceneObject.Y + (sceneObject.Height / 2))));
+                if (runLength == 0) return;
+                stepScratch[stepCount++] = runLength == 1
+                    ? new OverviewStep(runColor, pointScratch[runStart], null, null)
+                    : new OverviewStep(runColor, default, pointScratch.AsSpan(runStart, runLength).ToArray(), null);
+                batches++;
+                runLength = 0;
             }
+            try
+            {
+                foreach (var (_, sceneObject) in Objects)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    hash = HashObject(hash, sceneObject);
+                    if (Math.Max(sceneObject.Width, sceneObject.Height) * bucketScale >= OverviewExactScreenSize)
+                    {
+                        exact.Add(sceneObject);
+                        continue;
+                    }
 
-            var immutableSteps = steps
-                .Select(step => step is DotRun dots ? new OverviewBatch(dots.Color, [.. dots.Points]) : step)
-                .ToArray();
+                    overviewCount++;
+                    if (sceneObject.Stamp is { } detailStamp && colors.ContainsKey(detailStamp.AssetSha256) && detailStamp is not
+                            { Blur: 0, ShadowOpacity: 0, ClipMaskEnabled: false, Blend: "Normal", Hue: 0,
+                              Saturation: 0, Brightness: 0, Contrast: 0 })
+                    {
+                        CloseRun();
+                        stepScratch[stepCount++] = new OverviewStep(default, default, null, sceneObject);
+                        painted = true;
+                        continue;
+                    }
+
+                    if (sceneObject.Stamp is { } absent && !colors.ContainsKey(absent.AssetSha256)) missingCount++;
+                    var color = sceneObject.Stamp is { } stamp && colors.TryGetValue(stamp.AssetSha256, out var tint)
+                        ? tint.WithScaledAlpha(Alpha(sceneObject.ObjectOpacity)) : OverviewColor(sceneObject);
+                    hash = (hash ^ (uint)color.GetHashCode()) * 1_099_511_628_211UL;
+                    if (runLength == 0 || runColor != color)
+                    {
+                        CloseRun();
+                        runColor = color;
+                        runStart = 0;
+                    }
+                    pointScratch[runStart + runLength++] = new SKPoint(
+                        (float)(sceneObject.X + (sceneObject.Width / 2)),
+                        (float)(sceneObject.Y + (sceneObject.Height / 2)));
+                }
+                CloseRun();
+            }
+            catch
+            {
+                System.Buffers.ArrayPool<OverviewStep>.Shared.Return(stepScratch, clearArray: true);
+                System.Buffers.ArrayPool<SKPoint>.Shared.Return(pointScratch);
+                throw;
+            }
+            var immutableSteps = stepScratch.AsSpan(0, stepCount).ToArray();
+            System.Buffers.ArrayPool<OverviewStep>.Shared.Return(stepScratch, clearArray: true); // it held object references
+            System.Buffers.ArrayPool<SKPoint>.Shared.Return(pointScratch);
             // A painted mountain's shadow and blur may reach past the chunk edge.
             var margin = painted ? (float)(AppearanceLimits.MaxShadowOffset + AppearanceLimits.MaxShadowBlur * 3) : 0f;
             var bounds = new SKRect(
@@ -6449,6 +6564,7 @@ public static partial class SceneRenderer
                 bounds,
                 bucketScale,
                 immutableSteps,
+                batches,
                 exact,
                 overviewCount,
                 missingCount,
@@ -6476,7 +6592,8 @@ public static partial class SceneRenderer
         ulong contentHash,
         SKRect bounds,
         double bucketScale,
-        IReadOnlyList<object> steps,
+        OverviewStep[] steps,
+        int batchCount,
         IReadOnlyList<SceneObject> exactObjects,
         int overviewObjectCount,
         int missingCount,
@@ -6486,7 +6603,7 @@ public static partial class SceneRenderer
         public IReadOnlyList<SceneObject> ExactObjects { get; } = exactObjects;
         public int OverviewObjectCount { get; } = overviewObjectCount;
         public int MissingCount { get; } = missingCount;
-        public int BatchCount => steps.Count(step => step is OverviewBatch);
+        public int BatchCount => batchCount;
         public bool Painted => painted;
         public SKRect Bounds => bounds;
 
@@ -6505,38 +6622,38 @@ public static partial class SceneRenderer
             recording.Clear(SKColors.Transparent);
             recording.Scale((float)imageScale);
             recording.Translate(-bounds.Left, -bounds.Top);
+            // One paint for every run (only its colour changes): a native paint per dot run was
+            // a managed handle and a finalizer per object when the assets are mixed.
+            using var paint = new SKPaint
+            {
+                IsAntialias = false,
+                StrokeWidth = (float)(1.25 / bucketScale),
+                StrokeCap = SKStrokeCap.Square,
+            };
             foreach (var step in steps)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (step is SceneObject mountain)
+                if (step.Mountain is { } mountain)
                 {
                     // A raster surface: the GPU effect path does not apply here.
                     DrawObject(recording, mountain, stampForeground, options, prepareGpuEffect: false);
                     continue;
                 }
-                var batch = (OverviewBatch)step;
-                using var paint = new SKPaint
-                {
-                    Color = batch.Color,
-                    IsAntialias = false,
-                    StrokeWidth = (float)(1.25 / bucketScale),
-                    StrokeCap = SKStrokeCap.Square,
-                };
-                recording.DrawPoints(SKPointMode.Points, batch.Points, paint);
+                paint.Color = step.Color;
+                // Skia draws one point exactly as a points call with a single point.
+                if (step.Points is { } points) recording.DrawPoints(SKPointMode.Points, points, paint);
+                else recording.DrawPoint(step.Point, paint);
             }
             recording.Flush();
             return surface.Snapshot();
         }
     }
 
-    private sealed record OverviewBatch(SKColor Color, SKPoint[] Points);
-
-    /// <summary>A run of same-coloured overview dots while a chunk variant is collected.</summary>
-    private sealed class DotRun(SKColor color)
-    {
-        public SKColor Color { get; } = color;
-        public List<SKPoint> Points { get; } = [];
-    }
+    /// <summary>
+    /// One draw step of a chunk variant, in draw order: a painted mountain, or a run of
+    /// same-coloured dots (one point inline, two or more in their own array).
+    /// </summary>
+    internal readonly record struct OverviewStep(SKColor Color, SKPoint Point, SKPoint[]? Points, SceneObject? Mountain);
 
     private static ulong HashObject(ulong hash, SceneObject sceneObject)
     {

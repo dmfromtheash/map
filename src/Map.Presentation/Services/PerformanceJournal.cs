@@ -20,7 +20,8 @@ public readonly record struct PerformanceFrame(
     long CacheHits = 0, long CacheMisses = 0, long CacheInvalidations = 0,
     int DetailTilesPending = 0, int UnresolvedImages = 0, int MissingAssets = 0,
     PerformanceQueues Queues = default, bool QueueSnapshotUnavailable = false,
-    int TerrainRefinementsPending = 0, int HexChunksPending = 0);
+    int TerrainRefinementsPending = 0, int HexChunksPending = 0,
+    long OverviewAdoptedPixels = 0, long OverviewAdoptionBudgetPixels = 0, int OverviewStartsDuringGesture = 0);
 
 /// <summary>
 /// One render-thread producer, one background consumer. RecordFrame never locks, allocates or does IO.
@@ -59,6 +60,7 @@ public sealed class PerformanceJournal : IDisposable
     private long _processPeakWorkingSet;
     private int _workCount, _intervalCount;
     private int _detail, _unresolved, _missing, _refinements, _hex;
+    private long _maxAdopted, _maxGestureAdopted, _gestureAdoptionBudget, _overviewStartsDuringGesture;
     private PerformanceQueues _queues;
     private Sample _worstWindow, _worstSession;
     // A seqlock preserves even a dropped frame if it is the session's slowest. The consumer tries once.
@@ -206,6 +208,13 @@ public sealed class PerformanceJournal : IDisposable
         _missing = Math.Max(_missing, frame.MissingAssets);
         _refinements = Math.Max(_refinements, frame.TerrainRefinementsPending);
         _hex = Math.Max(_hex, frame.HexChunksPending);
+        _maxAdopted = Math.Max(_maxAdopted, frame.OverviewAdoptedPixels);
+        if (frame.Gesture is PerformanceGesture.Pan or PerformanceGesture.Zoom)
+        {
+            _maxGestureAdopted = Math.Max(_maxGestureAdopted, frame.OverviewAdoptedPixels);
+            if (frame.OverviewAdoptionBudgetPixels > 0) _gestureAdoptionBudget = frame.OverviewAdoptionBudgetPixels;
+        }
+        _overviewStartsDuringGesture += frame.OverviewStartsDuringGesture;
         _queues = new(Math.Max(_queues.Metadata, frame.Queues.Metadata), Math.Max(_queues.Builds, frame.Queues.Builds),
             Math.Max(_queues.Pixels, frame.Queues.Pixels), Math.Max(_queues.Decodes, frame.Queues.Decodes),
             Math.Max(_queues.LatePixels, frame.Queues.LatePixels));
@@ -242,6 +251,19 @@ public sealed class PerformanceJournal : IDisposable
             gestures = new { pan = _pan, zoom = _zoom, idle = _idle, edit = _edit },
             maxQueues = _queues, maxDetailTilesPending = _detail, maxUnresolvedImages = _unresolved,
             maxMissingAssets = _missing, maxTerrainRefinementsPending = _refinements, maxHexChunksPending = _hex,
+            // The gesture budget at work: new overview raster pixels per frame, their budget while the
+            // camera moved, and background work that ran or waited during gestures.
+            overviewAdoption = new
+            {
+                maxPixelsPerFrame = _maxAdopted, maxPixelsPerGestureFrame = _maxGestureAdopted,
+                gestureBudgetPixels = _gestureAdoptionBudget, startsDuringGesture = _overviewStartsDuringGesture,
+            },
+            background = new
+            {
+                concurrency = Map.Core.Resources.BackgroundWork.Concurrency,
+                yieldsSession = Map.Core.Resources.BackgroundWork.Yields,
+                startsDuringInteractionSession = Map.Core.Resources.BackgroundWork.StartsDuringInteraction,
+            },
             peakWorkingSetBytes = _peakWorkingSet, workingSetSamplingMs = 1000,
             processLifetimePeakWorkingSetBytes = _processPeakWorkingSet,
             worstFrame = Moment(_worstWindow), queueSnapshotsUnavailable = _queueUnavailable,
@@ -251,6 +273,7 @@ public sealed class PerformanceJournal : IDisposable
         _pan = _zoom = _idle = _edit = _queueUnavailable = _peakWorkingSet = 0;
         _workCount = _intervalCount = _detail = _unresolved = _missing = _refinements = _hex = 0;
         _maxWork = 0; _queues = default;
+        _maxAdopted = _maxGestureAdopted = _gestureAdoptionBudget = _overviewStartsDuringGesture = 0;
     }
 
     private double Percentile(double fraction) => _work[(int)Math.Ceiling(_workCount * fraction) - 1];

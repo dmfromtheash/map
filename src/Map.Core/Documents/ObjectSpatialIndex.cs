@@ -61,23 +61,34 @@ public sealed class ObjectSpatialIndex
         else
         {
             // Indices arrive in increasing order, so every bucket is already sorted and unique.
-            var buckets = new Dictionary<(int X, int Y), List<int>>();
+            // Two passes (count, then fill arrays of the exact size): growing a list per cell and
+            // copying it out allocated about three times the index on a million objects.
+            var buckets = new Dictionary<(int X, int Y), (int[]? Items, int Count)>();
             var oversized = ImmutableHashSet.CreateBuilder<int>();
             for (var index = 0; index < _objects.Count; index++)
             {
+                // A background build pauses here while the user pans or zooms (no-op elsewhere).
+                if ((index & 0xFFFF) == 0xFFFF) Resources.BackgroundWork.YieldToInteraction();
                 if (!TryCellRange(_objects[index], out var minX, out var maxX, out var minY, out var maxY))
                 {
                     oversized.Add(index);
                     continue;
                 }
                 for (var y = minY; y <= maxY; y++) for (var x = minX; x <= maxX; x++)
+                    System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrAddDefault(buckets, (x, y), out _).Count++;
+            }
+            for (var index = 0; index < _objects.Count; index++)
+            {
+                if (!TryCellRange(_objects[index], out var minX, out var maxX, out var minY, out var maxY)) continue;
+                for (var y = minY; y <= maxY; y++) for (var x = minX; x <= maxX; x++)
                 {
-                    if (!buckets.TryGetValue((x, y), out var bucket)) buckets[(x, y)] = bucket = [];
-                    bucket.Add(index);
+                    ref var bucket = ref System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrNullRef(buckets, (x, y));
+                    if (bucket.Items is null) { bucket.Items = new int[bucket.Count]; bucket.Count = 0; }
+                    bucket.Items[bucket.Count++] = index;
                 }
             }
             var cells = ImmutableDictionary.CreateBuilder<(int X, int Y), int[]>();
-            foreach (var (key, bucket) in buckets) cells.Add(key, [.. bucket]);
+            foreach (var (key, bucket) in buckets) cells.Add(key, bucket.Items!);
             _cells = cells.ToImmutable();
             _oversized = oversized.ToImmutable();
         }
@@ -105,6 +116,9 @@ public sealed class ObjectSpatialIndex
 
     internal static bool IsPrepared(ObjectLayer layer) =>
         Cache.TryGetValue(layer, out _) || ByObjects.TryGetValue(layer.Objects, out _);
+
+    /// <summary>Whether <see cref="For"/> returns at once (the index of these objects exists), without building it.</summary>
+    public static bool IsReady(ObjectLayer layer) => IsPrepared(layer);
     // All three edit kinds now use the same lazy ObjectLayerChanges handoff.
     internal static void RegisterReplacements(ObjectLayer source, ObjectLayer target,
         IReadOnlyDictionary<int, SceneObject> replacements) { }

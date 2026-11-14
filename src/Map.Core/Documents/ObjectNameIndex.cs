@@ -49,10 +49,13 @@ internal sealed class ObjectNameIndex
     public static ObjectNameIndex For(MapDocument document) => Cache.GetValue(document, static value =>
     {
         var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var visited = 0;
         foreach (var layer in value.Layers)
             if (layer is ObjectLayer objects)
                 foreach (var item in objects.Objects)
                 {
+                    // A background build pauses here while the user pans or zooms (no-op elsewhere).
+                    if ((++visited & 0xFFFF) == 0) Resources.BackgroundWork.YieldToInteraction();
                     ref var count = ref CollectionsMarshal.GetValueRefOrAddDefault(counts, item.Name, out _);
                     count++;
                 }
@@ -67,24 +70,40 @@ internal sealed class ObjectNameIndex
     /// placement of «Гора» in a session tried every occupied number in turn. The first hole of
     /// a family of k names is at most k + 1, so larger numbers are not tracked.
     /// </summary>
-    private static IEnumerable<KeyValuePair<string, int>> FirstHoles(IEnumerable<string> names)
+    private static IEnumerable<KeyValuePair<string, int>> FirstHoles(IReadOnlyCollection<string> names)
     {
-        var families = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
+        // Two passes over the names, looked up by span: the family size first, then the marks in
+        // an array of exactly that size. A substring and a growing list per numbered name were
+        // most of what this build allocated on a million «Гора N» objects.
+        var families = new Dictionary<string, (int Count, bool[]? Seen)>(StringComparer.OrdinalIgnoreCase);
+        var lookup = families.GetAlternateLookup<ReadOnlySpan<char>>();
         foreach (var name in names)
         {
-            var space = name.LastIndexOf(' ');
-            if (space <= 0 || !int.TryParse(name.AsSpan(space + 1), NumberStyles.None, CultureInfo.InvariantCulture, out var suffix)
-                || suffix <= 0 || name.Length - space - 1 != CountDigits(suffix)) continue; // «Гора 01» does not occupy «Гора 1»
-            ref var family = ref CollectionsMarshal.GetValueRefOrAddDefault(families, name[..space], out _);
-            (family ??= []).Add(suffix);
+            if (!Suffix(name, out var space, out _)) continue;
+            ref var family = ref CollectionsMarshal.GetValueRefOrAddDefault(lookup, name.AsSpan(0, space), out _);
+            family.Count++;
         }
-        foreach (var (basis, suffixes) in families)
+        foreach (var name in names)
         {
-            var seen = new bool[suffixes.Count + 2];
-            foreach (var suffix in suffixes) if (suffix < seen.Length) seen[suffix] = true;
+            if (!Suffix(name, out var space, out var suffix)) continue;
+            ref var family = ref CollectionsMarshal.GetValueRefOrAddDefault(lookup, name.AsSpan(0, space), out _);
+            family.Seen ??= new bool[family.Count + 2];
+            if (suffix < family.Seen.Length) family.Seen[suffix] = true;
+        }
+        foreach (var (basis, family) in families)
+        {
+            var seen = family.Seen!;
             var hole = 1;
             while (seen[hole]) hole++;
             yield return new(basis, hole);
+        }
+
+        static bool Suffix(string name, out int space, out int suffix)
+        {
+            space = name.LastIndexOf(' ');
+            suffix = 0;
+            return space > 0 && int.TryParse(name.AsSpan(space + 1), NumberStyles.None, CultureInfo.InvariantCulture, out suffix)
+                && suffix > 0 && name.Length - space - 1 == CountDigits(suffix); // «Гора 01» does not occupy «Гора 1»
         }
     }
 

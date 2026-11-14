@@ -22,8 +22,48 @@ public static partial class SceneRenderer
         private readonly HashSet<Work> _queued = [];
         internal sealed record Raster(OverviewVariant Variant, SKImage Image);
         private readonly Dictionary<Work, Raster> _ready = [];
-        private Task? _worker;
+        // One below-normal thread of its own (not the thread pool the UI's continuations share). It
+        // waits for work and leaves after IdleExitMilliseconds without any; _busy is "work in hand".
+        private const int IdleExitMilliseconds = 2000;
+        private Thread? _thread;
+        private bool _busy;
         private bool _disposed;
+        private readonly Func<bool> _interaction;
+        private bool _frameMoving;
+        private long _openedAt;
+
+        /// <summary>Neighbour prefetch starts no sooner than this after the first layer of a map arrived.</summary>
+        public double PrefetchAfterOpenMilliseconds { get; set; } = 1000;
+        private long _startedDuringGesture, _prefetchDeferred, _gestureWaits;
+        private long _planBytes, _paletteBytes, _variantBytes, _rasterBytes, _prefetchBytes;
+
+        /// <summary>Managed bytes the worker allocated per kind of job (raster pixels are native and not counted).</summary>
+        public (long Plan, long Palette, long Variants, long Rasters, long Prefetch) AllocatedBytes
+        {
+            get { lock (_gate) return (_planBytes, _paletteBytes, _variantBytes, _rasterBytes, _prefetchBytes); }
+        }
+
+        // Worker thread, never under _gate: a cold plan waits here while the user pans or zooms.
+        private void WaitWhileGesture(CancellationToken token)
+        {
+            if (!YieldDuringGesture || !_interaction()) return;
+            lock (_gate) _gestureWaits++;
+            while (YieldDuringGesture && _interaction() && !token.IsCancellationRequested && !_disposed) Thread.Sleep(10);
+        }
+
+        /// <param name="interaction">Whether the user is panning, zooming or dragging right now; by default
+        /// <see cref="Map.Core.Resources.BackgroundWork.InteractionActive"/>, which the canvas feeds.</param>
+        public OverviewPreparation(Func<bool>? interaction = null) =>
+            _interaction = interaction ?? (static () => Map.Core.Resources.BackgroundWork.InteractionActive);
+
+        /// <summary>
+        /// While a gesture runs, neighbour-bucket prefetch waits (visible chunks are still prepared).
+        /// False restores the previous behaviour, for comparisons.
+        /// </summary>
+        public bool YieldDuringGesture { get; set; } = true;
+
+        // Under _gate.
+        private bool GestureActive => YieldDuringGesture && (_frameMoving || _interaction());
         private long _plansBuilt;
         private long _cancelled;
         private long _prefetched;
@@ -112,6 +152,7 @@ public static partial class SceneRenderer
                 || !ReferenceEquals(state.Source, source))
             {
                 var previous = state?.Snapshot;
+                if (_layers.Count == 0) _openedAt = Stopwatch.GetTimestamp();
                 if (state is not null) Cancel(state);
                 state = new(layer, assets, source, ready, previous);
                 _layers[layer.Id] = state;
@@ -126,6 +167,8 @@ public static partial class SceneRenderer
             lock (_gate)
             {
                 if (_disposed) return null;
+                // The latest frame says whether the view moves; a settled frame releases the prefetch.
+                if (primaryView) _frameMoving = options.CameraMoving;
                 var state = GetLayer(layer, document.Assets, options.Stamps, options.RequestRefinedFrame ?? (() => { }));
                 var view = new View(bounds, zoom, document.StampForeground);
                 if (state.View != view)
@@ -177,8 +220,9 @@ public static partial class SceneRenderer
             { _ready[key].Image.Dispose(); _ready.Remove(key); }
         }
 
+        /// <param name="take">False only requests the chunk: a ready raster stays in the handoff for a later frame.</param>
         internal bool TryTakeOrRequest(ObjectLayer layer, OverviewChunk chunk, OverviewPalette palette,
-            int zoom, StampForegroundSurface? foreground, out Raster? raster)
+            int zoom, StampForegroundSurface? foreground, out Raster? raster, bool take = true)
         {
             lock (_gate)
             {
@@ -187,6 +231,7 @@ public static partial class SceneRenderer
                     || state.Snapshot is not { } snapshot || !ReferenceEquals(snapshot.Layer, layer)
                     || !ReferenceEquals(snapshot.Palette, palette)) return false;
                 var work = new Work(state, chunk, palette, zoom, foreground, ViewToken: state.ViewStop.Token);
+                if (!take && _ready.ContainsKey(work)) return false;
                 if (_ready.Remove(work, out raster)) { StartWorker(); return true; }
                 Enqueue(work);
                 StartWorker();
@@ -217,29 +262,65 @@ public static partial class SceneRenderer
             }
         }
 
+        // Under _gate.
         private void StartWorker()
         {
-            if (_disposed || _worker is not null || _queue.Count == 0) return;
-            _worker = Task.Run(Pump);
+            if (_disposed || _queue.Count == 0) return;
+            if (_busy) { Monitor.PulseAll(_gate); return; } // a worker waiting out a gesture re-checks the queue
+            _busy = true;
+            if (_thread is not null) { Monitor.PulseAll(_gate); return; }
+            _thread = new Thread(Run) { IsBackground = true, Name = "Map overview preparation" };
+            _thread.Start();
+        }
+
+        private void Run()
+        {
+            Map.Core.Resources.BackgroundWork.EnterOwnedThread();
+            while (true)
+            {
+                lock (_gate)
+                {
+                    while (!_busy && !_disposed)
+                        if (!Monitor.Wait(_gate, IdleExitMilliseconds) && !_busy) { _thread = null; return; }
+                    if (_disposed) { _busy = false; _thread = null; return; }
+                }
+                Pump();
+            }
         }
 
         private void Pump()
         {
+            var waiting = false;
             while (true)
             {
                 Work work;
+                bool gesture;
                 lock (_gate)
                 {
-                    if (_disposed || _queue.First is null) { _worker = null; return; }
+                    if (_disposed || _queue.First is null) { _busy = false; return; }
                     work = _queue.First.Value;
                     if (work.Chunk is not null && !work.Prefetch && _ready.Count >= HandoffLimit)
-                    { _worker = null; return; }
+                    { _busy = false; return; }
+                    gesture = GestureActive;
+                    if (work.Prefetch && gesture)
+                    {
+                        // Visible work always precedes prefetch, so only prefetch is left: it waits for
+                        // the gesture to end. A frame flag alone is cleared by the settled frame, which
+                        // restarts the worker; the interaction clock runs out by itself.
+                        if (!waiting) { _prefetchDeferred++; waiting = true; }
+                        if (!_interaction()) { _busy = false; return; }
+                        Monitor.Wait(_gate, 15);
+                        continue;
+                    }
+                    waiting = false;
                     _queue.RemoveFirst();
+                    if (gesture) _startedDuringGesture++;
                     // Retain the dedup key until publication: repeated frames cannot queue the running work.
                 }
                 try
                 {
                     work.Layer.Token.ThrowIfCancellationRequested();
+                    using var slot = Map.Core.Resources.BackgroundWork.EnterSlot(work.Layer.Token);
                     if (work.Chunk is null) PreparePlan(work.Layer);
                     else PrepareChunk(work);
                 }
@@ -265,14 +346,19 @@ public static partial class SceneRenderer
         {
             var token = state.Token;
             var started = Stopwatch.GetTimestamp();
+            var allocated = GC.GetAllocatedBytesForCurrentThread();
             if (!OverviewPlans.TryGetValue(state.Layer, out var plan))
             {
-                var built = new ObjectOverviewPlan(state.Layer, token);
+                // A cold plan of a million objects allocates its whole chunk directory: it waits
+                // while a gesture runs, so its collections do not land in the gesture's frames.
+                var built = new ObjectOverviewPlan(state.Layer, token, () => WaitWhileGesture(token));
                 token.ThrowIfCancellationRequested();
                 plan = OverviewPlans.GetValue(state.Layer, _ => built);
                 Interlocked.Increment(ref _plansBuilt);
             }
             var planMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+            var planBytes = GC.GetAllocatedBytesForCurrentThread() - allocated;
+            allocated = GC.GetAllocatedBytesForCurrentThread();
             var revision = state.Source?.OverviewColorRevision;
             var sourceRevision = state.Source?.SourceRevision ?? 0;
             var missingRevision = state.Source?.MissingRevision ?? 0;
@@ -298,6 +384,7 @@ public static partial class SceneRenderer
                 state.Snapshot = new(state.Layer, plan, palette, revision, sourceRevision, missingRevision, stats.DetailTilesPending > 0,
                     palette.Colors.Count < palette.UsedAssets.Count, Stopwatch.GetTimestamp());
                 _planMilliseconds += planMs; _paletteMilliseconds += paletteMs;
+                _planBytes += planBytes; _paletteBytes += GC.GetAllocatedBytesForCurrentThread() - allocated;
                 ArmPrefetch(state);
             }
             SignalReady(state);
@@ -331,22 +418,27 @@ public static partial class SceneRenderer
             var token = stop.Token;
             token.ThrowIfCancellationRequested();
             var started = Stopwatch.GetTimestamp();
+            var allocated = GC.GetAllocatedBytesForCurrentThread();
             var revision = work.Chunk!.GetTintRevision(work.Palette!);
             var variant = work.Chunk.GetVariant(work.Zoom, Math.Pow(2, work.Zoom / 4d), work.Palette!.Colors, revision, token);
             token.ThrowIfCancellationRequested();
             var variantMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+            var variantBytes = GC.GetAllocatedBytesForCurrentThread() - allocated;
             if (work.Prefetch)
             {
-                lock (_gate) { _variantMilliseconds += variantMs; _prefetched++; }
+                lock (_gate) { _variantMilliseconds += variantMs; _prefetched++; _prefetchBytes += variantBytes; }
                 return;
             }
             started = Stopwatch.GetTimestamp();
+            allocated = GC.GetAllocatedBytesForCurrentThread();
             using var lease = state.Source?.Lease();
             var options = new RenderOptions { Stamps = lease, LodTier = RenderLodTier.Overview, ViewScale = Math.Pow(2, work.Zoom / 4d) };
             var image = variant.BuildImage(work.Foreground, options, token);
             var rasterMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+            var rasterBytes = GC.GetAllocatedBytesForCurrentThread() - allocated;
             lock (_gate)
             {
+                _variantBytes += variantBytes; _rasterBytes += rasterBytes;
                 if (_disposed || token.IsCancellationRequested || !ReferenceEquals(state.Snapshot?.Palette, work.Palette))
                 { image.Dispose(); return; }
                 _ready.Add(work, new(variant, image));
@@ -362,6 +454,21 @@ public static partial class SceneRenderer
             state.ScheduleNeighbours(_ =>
             {
                 if (viewToken.IsCancellationRequested || state.Token.IsCancellationRequested) return;
+                // Wheel notches and pan steps must not start neighbour buckets: look again a little
+                // later, until a settled view (the same view, if nothing changed it meanwhile).
+                lock (_gate)
+                {
+                    if (_disposed) return;
+                    // Nor in the first second after open, while the first view and gesture need the core.
+                    if (GestureActive || YieldDuringGesture && _openedAt != 0
+                        && Stopwatch.GetElapsedTime(_openedAt).TotalMilliseconds < PrefetchAfterOpenMilliseconds)
+                    {
+                        _prefetchDeferred++;
+                        if (!viewToken.IsCancellationRequested && !state.Token.IsCancellationRequested
+                            && ReferenceEquals(state.View, view)) ArmPrefetch(state);
+                        return;
+                    }
+                }
                 // The plan is immutable. Enumerating a large layer's chunk directory never holds
                 // the gate a frame uses to request/take its next raster.
                 var neighbours = snapshot.Plan.Chunks.Where(item =>
@@ -415,9 +522,18 @@ public static partial class SceneRenderer
         {
             get
             {
-                lock (_gate) return (_plansBuilt, _cancelled, _queue.Count, _ready.Count, _worker is null, _prefetched,
+                lock (_gate) return (_plansBuilt, _cancelled, _queue.Count, _ready.Count, !_busy, _prefetched,
                 _planMilliseconds, _paletteMilliseconds, _variantMilliseconds, _rasterMilliseconds, _lastError);
             }
+        }
+
+        /// <summary>
+        /// Live check of the gesture rule: work items started while a gesture ran (visible chunks only,
+        /// never prefetch) and the times neighbour prefetch waited for a settled view.
+        /// </summary>
+        public (long StartedDuringGesture, long PrefetchDeferred, long PlanWaits, bool GestureActive) GestureStatistics
+        {
+            get { lock (_gate) return (_startedDuringGesture, _prefetchDeferred, _gestureWaits, GestureActive); }
         }
 
         /// <summary>Cancels a closed editor without waiting on its worker or touching render-owned images.</summary>
@@ -432,7 +548,7 @@ public static partial class SceneRenderer
 
         public void Dispose()
         {
-            lock (_gate) { Reset(); _disposed = true; }
+            lock (_gate) { Reset(); _disposed = true; Monitor.PulseAll(_gate); }
         }
     }
 }

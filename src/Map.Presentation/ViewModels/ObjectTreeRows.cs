@@ -152,7 +152,9 @@ public static class ObjectTreeRows
         {
             if (layer is not ObjectLayer objects || objects.Objects.Count == 0) continue;
             cancellationToken.ThrowIfCancellationRequested();
+            Map.Core.Resources.BackgroundWork.YieldToInteraction(cancellationToken);
             _ = GroupedCount(objects);
+            Map.Core.Resources.BackgroundWork.YieldToInteraction(cancellationToken);
             _ = KindIndex.For(objects);
         }
     }

@@ -49,8 +49,13 @@ public sealed class DocumentRevisionIndex
         Interlocked.Increment(ref _rootBuilds);
         _document = document;
         _root = this;
-        var positions = new Dictionary<ObjectId, int>();
-        var locations = new List<DocumentObjectLocation>();
+        // Presized: on a million objects the doubling of these two alone allocated (and promoted)
+        // about as much again as their final size, in large-object arrays, during the first gesture.
+        var total = 0;
+        foreach (var candidate in document.Layers)
+            if (candidate is ObjectLayer counted) total += counted.Objects.Count;
+        var positions = new Dictionary<ObjectId, int>(total);
+        var locations = new List<DocumentObjectLocation>(total);
         var groups = new Dictionary<Guid, List<ObjectId>>();
         var identities = new Dictionary<IdentityKey, ObjectId>();
         for (var layerIndex = 0; layerIndex < document.Layers.Count; layerIndex++)
@@ -66,6 +71,8 @@ public sealed class DocumentRevisionIndex
 
             for (var objectIndex = 0; objectIndex < layer.Objects.Count; objectIndex++)
             {
+                // A background build pauses here while the user pans or zooms (no-op elsewhere).
+                if ((objectIndex & 0xFFFF) == 0xFFFF) Resources.BackgroundWork.YieldToInteraction();
                 var sceneObject = layer.Objects[objectIndex];
                 positions.Add(sceneObject.Id, locations.Count);
                 locations.Add(new DocumentObjectLocation(

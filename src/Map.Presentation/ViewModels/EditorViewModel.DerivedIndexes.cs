@@ -31,7 +31,9 @@ public sealed partial class EditorViewModel
         if (DocumentDerivedIndexes.ObjectCount(document) < DerivedIndexPreparationMinimumObjects
             || IsPrepared(document) || _workingMemory.IsUnderPressure) return;
         if (Interlocked.Exchange(ref _derivedIndexPreparationRunning, 1) == 1) return;
-        DerivedIndexPreparation = Task.Run(() =>
+        // A below-normal thread of its own that steps aside between lookups while the canvas pans
+        // or zooms: right after open it would otherwise take a core from the first gestures.
+        DerivedIndexPreparation = Map.Core.Resources.BackgroundWork.RunAsync(() =>
         {
             try
             {
@@ -42,6 +44,7 @@ public sealed partial class EditorViewModel
                     var current = Session.Document;
                     if (IsPrepared(current)) break;
                     DocumentDerivedIndexes.Prepare(current);
+                    Map.Core.Resources.BackgroundWork.YieldToInteraction();
                     ObjectTreeRows.PrepareLayerIndexes(current);
                 }
             }
@@ -54,6 +57,6 @@ public sealed partial class EditorViewModel
             {
                 Volatile.Write(ref _derivedIndexPreparationRunning, 0);
             }
-        });
+        }, "Map derived lookups");
     }
 }

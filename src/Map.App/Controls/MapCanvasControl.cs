@@ -233,6 +233,12 @@ public sealed partial class MapCanvasControl : Control
 
     /// <summary>Diagnostic: when MAP_MEASURE_GPU_FLUSH=1 the frame waits for its GPU work and records the wait.</summary>
     private static readonly bool MeasureGpuFlush = Environment.GetEnvironmentVariable("MAP_MEASURE_GPU_FLUSH") == "1";
+
+    /// <summary>
+    /// Diagnostic A/B: MAP_PERF_GESTURE_BUDGET=0 gives gesture frames the settled adoption budget and
+    /// lets overview prefetch run during gestures (the behaviour before the gesture budget).
+    /// </summary>
+    private static readonly bool GestureBudgetDisabled = Environment.GetEnvironmentVariable("MAP_PERF_GESTURE_BUDGET") == "0";
     public static double LastFrameGpuFlushMilliseconds { get; private set; }
     /// <summary>Canvas work including resource locking, image adoption and GPU completion;
     /// excludes diagnostic screenshot readback and monitor scan-out.</summary>
@@ -895,6 +901,9 @@ public sealed partial class MapCanvasControl : Control
             // An idle draw operation can still be queued when the next input changes the
             // shared viewport. Do not start a cold exact render of that new, moving view.
             var movingNow = cameraMoving || cameraMotionNow();
+            // Background derived work (lookups, overview prefetch) steps aside during gestures.
+            if (movingNow || fastPreview) Map.Core.Resources.BackgroundWork.NoteInteraction();
+            if (GestureBudgetDisabled) { objectCache.GestureAdoptedPixelsPerFrame = 0; overviewPreparation.YieldDuringGesture = false; }
             var reusedCamera = cameraEligible && movingNow && cameraFrames.TryDraw(canvas,
                 new SKRect((float)X, (float)Y, (float)bottomRight.X, (float)bottomRight.Y), page);
             if (reusedCamera)
@@ -972,6 +981,7 @@ public sealed partial class MapCanvasControl : Control
                 FastPreview = editor.StrokePreview is not ({ IsLandPaint: true } or { IsCliffMask: true })
                     && (fastPreview || hasLiveObjectPreview || editor.StrokePreview is not null || editor.HasPendingPlacement),
                 FastTerrain = fastTerrain,
+                CameraMoving = movingNow,
                 Stats = renderStats,
                 BoundaryOverlay = editor.CanvasBoundaryOverlay,
                 // With camera frames the decorations go over the scene after its capture.

@@ -30,16 +30,21 @@ public static class DocumentDerivedIndexes
         ArgumentNullException.ThrowIfNull(document);
         // The revision index also builds the identity slots of every object layer.
         _ = DocumentRevisionIndex.For(document);
+        // Between lookups a background caller steps aside while a gesture runs (no-op on other threads).
         foreach (var layer in document.Layers)
         {
             if (layer is not ObjectLayer objects || objects.Objects.Count == 0) continue;
             cancellationToken.ThrowIfCancellationRequested();
+            Resources.BackgroundWork.YieldToInteraction(cancellationToken);
             _ = objects.ObjectStorage.IndexOfId(objects.Objects[0].Id);
+            Resources.BackgroundWork.YieldToInteraction(cancellationToken);
             _ = ObjectSpatialIndex.For(objects);
+            Resources.BackgroundWork.YieldToInteraction(cancellationToken);
             // Labels on paths and regions: the follow passes of the first edit.
             _ = Editing.BoundObjectIndex.For(objects);
         }
         cancellationToken.ThrowIfCancellationRequested();
+        Resources.BackgroundWork.YieldToInteraction(cancellationToken);
         _ = ObjectNameIndex.For(document);
     }
 

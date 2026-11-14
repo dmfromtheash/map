@@ -22,6 +22,7 @@ public sealed partial class MapCanvasControl
     private long _journalPreviousFrame;
     private PerformanceQueues _journalQueues;
     private PerformanceGesture _journalCameraGesture;
+    private long _journalOverviewStarts;
 
     private void RecordPerformanceFrame()
     {
@@ -41,10 +42,14 @@ public sealed partial class MapCanvasControl
             : _input is { ActiveGesture: not CanvasInputGesture.None } || _editor?.StrokePreview is not null
                 || _editor is { HasRiverGesture: true } or { HasRoadGesture: true } or { HasHexGesture: true }
                 ? PerformanceGesture.Edit : PerformanceGesture.Idle;
+        var started = _overviewPreparation.GestureStatistics.StartedDuringGesture;
+        var startedDelta = (int)System.Math.Min(int.MaxValue, System.Math.Max(0, started - _journalOverviewStarts));
+        _journalOverviewStarts = started;
         journal.RecordFrame(new PerformanceFrame(LastFrameWorkMilliseconds, interval, gesture,
             _renderStats.ObjectCacheHits + LastFrameStyledLandHits,
             _renderStats.ObjectCacheMisses + LastFrameStyledLandMisses, _renderStats.ObjectCacheInvalidations,
             _renderStats.DetailTilesPending, _renderStats.UnresolvedImages, _renderStats.MissingAssets,
-            _journalQueues, unavailable, _renderStats.TerrainRefinementsPending, _renderStats.HexChunksPending));
+            _journalQueues, unavailable, _renderStats.TerrainRefinementsPending, _renderStats.HexChunksPending,
+            _renderStats.OverviewAdoptedPixels, _renderStats.OverviewAdoptionBudgetPixels, startedDelta));
     }
 }

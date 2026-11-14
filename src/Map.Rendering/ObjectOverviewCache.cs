@@ -114,7 +114,7 @@ public sealed class ObjectOverviewCache : IDisposable
 
     internal void BeginOverviewPass()
     {
-        if (!_frameOpen) { _overviewBuildMilliseconds = 0; _overviewBuilds = 0; _adoptedPixels = 0; }
+        if (!_frameOpen) { _overviewBuildMilliseconds = 0; _overviewBuilds = 0; _adoptedPixels = 0; _adoptions = 0; _adoptionMoving = false; }
     }
 
     // One indivisible chunk is allowed to make progress even if it alone exceeds the budget.
@@ -122,10 +122,40 @@ public sealed class ObjectOverviewCache : IDisposable
     // Taking a ready background raster costs microseconds here, but its first draw uploads it to
     // the GPU. Bound the new pixels per frame too (at least one picture always goes through).
     internal const long AdoptedPixelsPerFrame = 8L * 1024 * 1024;
+
+    /// <summary>
+    /// New raster pixels a frame of a moving camera may take (about four full 512-pixel chunks):
+    /// on an integrated GPU a frame that uploads megapixels mid-gesture is a visible stall. The
+    /// rest keep their previous or neighbouring-zoom picture and follow, centre first, in later
+    /// frames; the settled frame takes up to <see cref="AdoptedPixelsPerFrame"/>. Zero or less
+    /// restores the settled budget for gestures (the previous behaviour, for comparisons).
+    /// </summary>
+    public long GestureAdoptedPixelsPerFrame { get; set; } = 1L * 1024 * 1024;
+
+    /// <summary>Ready rasters a moving frame may take at all, however small (each is its own upload).</summary>
+    public int GestureAdoptionsPerFrame { get; set; } = 8;
+
     private long _adoptedPixels;
-    internal bool CanAcceptPreparedOverview => _overviewBuildMilliseconds < _overviewBuildBudgetMilliseconds
-        && _adoptedPixels < AdoptedPixelsPerFrame;
-    internal void RecordAdoption(SKImage image) => _adoptedPixels += (long)image.Width * image.Height;
+    private int _adoptions;
+    private bool _adoptionMoving;
+
+    /// <summary>The pixel budget of the current frame, for its counters.</summary>
+    internal long AdoptionBudgetPixels => _adoptionMoving && GestureAdoptedPixelsPerFrame > 0
+        ? GestureAdoptedPixelsPerFrame : AdoptedPixelsPerFrame;
+
+    internal bool CanAcceptPreparedOverview(bool cameraMoving)
+    {
+        _adoptionMoving |= cameraMoving;
+        if (_overviewBuildMilliseconds >= _overviewBuildBudgetMilliseconds) return false;
+        if (_adoptions == 0) return true; // one indivisible picture always goes through
+        if (_adoptionMoving && GestureAdoptedPixelsPerFrame > 0 && _adoptions >= GestureAdoptionsPerFrame) return false;
+        return _adoptedPixels < AdoptionBudgetPixels;
+    }
+
+    internal void RecordAdoption(long pixels) { _adoptedPixels += pixels; _adoptions++; }
+
+    /// <summary>Pixels and pictures adopted so far in the open frame (all overview layers together).</summary>
+    internal (long Pixels, int Count) FrameAdoptions => (_adoptedPixels, _adoptions);
 
     internal double RecordOverviewBuild(long started)
     {
@@ -207,6 +237,8 @@ public sealed class ObjectOverviewCache : IDisposable
         _overviewBuildMilliseconds = 0;
         _overviewBuilds = 0;
         _adoptedPixels = 0;
+        _adoptions = 0;
+        _adoptionMoving = false;
         _framePins.Clear();
         // A neighbouring level can serve this frame and be evicted by the new detail it
         // builds. Keep the page fallback available too, even before that frame needs it.

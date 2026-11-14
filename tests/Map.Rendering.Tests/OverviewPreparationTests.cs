@@ -214,6 +214,80 @@ public sealed class OverviewPreparationTests
         Assert.Null(prep.Statistics.Error);
     }
 
+    [Fact]
+    public void A_moving_frame_takes_only_its_gesture_budget_of_ready_rasters_and_settles_to_the_synchronous_pixels()
+    {
+        using var source = new Mountains();
+        using var prep = new SceneRenderer.OverviewPreparation(static () => false);
+        using var cache = new ObjectOverviewCache { GestureAdoptionsPerFrame = 1 };
+        var document = Document(Enumerable.Range(0, 256).Select(i => Stamp(i, true)).ToArray(), 131072);
+        const double scale = 1d / 32;
+        prep.UpdateDocument(document, source, source.Ready);
+        Wait(() => prep.Statistics.Idle && prep.Statistics.Plans > 0);
+        // The first moving frame only requests the visible chunks; the worker prepares all of them.
+        var first = Draw(document, source, cache, prep, scale, origin: 0, moving: true);
+        Assert.Equal(0, first.Stats.OverviewAdoptions);
+        Wait(() => prep.Statistics.Idle);
+        var ready = prep.Statistics.ReadyImages;
+        Assert.True(ready >= 3, $"only {ready} rasters were ready");
+        var moving = Draw(document, source, cache, prep, scale, origin: 0, moving: true);
+        Assert.Equal(1, moving.Stats.OverviewAdoptions);
+        Assert.True(moving.Stats.OverviewAdoptionsDeferred >= ready - 1);
+        Assert.Equal(cache.GestureAdoptedPixelsPerFrame, moving.Stats.OverviewAdoptionBudgetPixels);
+        Assert.True(moving.Stats.DetailTilesPending > 0);
+        Assert.Equal(ready - 1, prep.Statistics.ReadyImages); // the rest wait in the handoff, not rebuilt
+        // The settled frame has the larger budget and converges to the synchronous picture.
+        var settled = Settle(document, source, cache, prep, scale, origin: 0);
+        Assert.True(settled.Stats.OverviewAdoptionBudgetPixels == 0 || settled.Stats.OverviewAdoptionBudgetPixels == 8L * 1024 * 1024);
+        using var reference = new ObjectOverviewCache();
+        Assert.Equal(Draw(document, source, reference, scale: scale, origin: 0).Pixels, settled.Pixels);
+        Assert.Null(prep.Statistics.Error);
+    }
+
+    [Fact]
+    public void Neighbour_prefetch_waits_while_the_view_moves_and_follows_the_settled_frame()
+    {
+        using var source = new Mountains();
+        var interacting = true;
+        using var prep = new SceneRenderer.OverviewPreparation(() => Volatile.Read(ref interacting));
+        using var cache = new ObjectOverviewCache();
+        var document = Document([Stamp(0, false)]);
+        prep.UpdateDocument(document, source, source.Ready);
+        Wait(() =>
+        {
+            var frame = Draw(document, source, cache, prep, moving: true);
+            Assert.Null(prep.Statistics.Error);
+            return frame.Stats.DetailTilesPending == 0;
+        });
+        // The 150 ms prefetch timer fired at least twice (a busy thread pool may delay it) and found the gesture.
+        Wait(() => prep.GestureStatistics.PrefetchDeferred >= 2);
+        Assert.Equal(0, prep.Statistics.Prefetched);
+        Assert.True(prep.GestureStatistics.GestureActive);
+        Volatile.Write(ref interacting, false);
+        Draw(document, source, cache, prep); // the settled frame
+        Wait(() => prep.Statistics.Prefetched >= 2 && prep.Statistics.Idle);
+        Assert.False(prep.GestureStatistics.GestureActive);
+        Assert.Null(prep.Statistics.Error);
+    }
+
+    [Fact]
+    public void Gesture_budget_off_restores_the_settled_adoption_budget()
+    {
+        using var source = new Mountains();
+        using var prep = new SceneRenderer.OverviewPreparation(static () => false);
+        using var cache = new ObjectOverviewCache { GestureAdoptedPixelsPerFrame = 0, GestureAdoptionsPerFrame = 1 };
+        var document = Document(Enumerable.Range(0, 256).Select(i => Stamp(i, true)).ToArray(), 131072);
+        prep.UpdateDocument(document, source, source.Ready);
+        Wait(() => prep.Statistics.Idle && prep.Statistics.Plans > 0);
+        Draw(document, source, cache, prep, 1d / 32, origin: 0, moving: true);
+        Wait(() => prep.Statistics.Idle);
+        var ready = prep.Statistics.ReadyImages;
+        var moving = Draw(document, source, cache, prep, 1d / 32, origin: 0, moving: true);
+        // Only the settled limits apply (8 Mpx and the 4 ms build budget), not the one-picture gesture limit.
+        Assert.True(ready > 1 && moving.Stats.OverviewAdoptions > 1, $"{moving.Stats.OverviewAdoptions} of {ready}");
+        Assert.Equal(8L * 1024 * 1024, moving.Stats.OverviewAdoptionBudgetPixels);
+    }
+
     private static (byte[] Pixels, RenderStats Stats) Settle(MapDocument document, Mountains source,
         ObjectOverviewCache cache, SceneRenderer.OverviewPreparation prep, double scale = Scale, double? origin = null)
     {
@@ -240,7 +314,7 @@ public sealed class OverviewPreparationTests
 
     private static (byte[] Pixels, RenderStats Stats) Draw(MapDocument document, Mountains source,
         ObjectOverviewCache cache, SceneRenderer.OverviewPreparation? prep = null, double scale = Scale, int extent = 32768,
-        double? origin = null)
+        double? origin = null, bool moving = false)
     {
         using var surface = SKSurface.Create(new SKImageInfo(512, 512, SKColorType.Rgba8888, SKAlphaType.Premul))!;
         surface.Canvas.Scale((float)scale);
@@ -255,7 +329,7 @@ public sealed class OverviewPreparationTests
             {
                 ObjectCache = cache, OverviewPreparation = prep, Stamps = source, Stats = stats,
                 ViewScale = scale, LodTier = RenderLodTier.Overview, VisibleWorld = visible,
-                RequestRefinedFrame = prep is null ? null : source.Ready,
+                RequestRefinedFrame = prep is null ? null : source.Ready, CameraMoving = moving,
             });
             using var snapshot = surface.Snapshot();
             using var bitmap = SKBitmap.FromImage(snapshot);
