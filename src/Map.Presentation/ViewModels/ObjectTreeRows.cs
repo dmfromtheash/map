@@ -140,6 +140,32 @@ public static class ObjectTreeRows
         return new(current.Objects.Count(o => o.GroupId is not null));
     }).Value;
 
+    /// <summary>
+    /// Builds the per-layer lookups of the side list (picture kinds, draw order, group counts)
+    /// that a first selection or placement would otherwise build on the input thread. Later
+    /// layer revisions derive them from their delta. Thread-safe; the document is not changed.
+    /// </summary>
+    public static void PrepareLayerIndexes(MapDocument document, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        foreach (var layer in document.Layers)
+        {
+            if (layer is not ObjectLayer objects || objects.Objects.Count == 0) continue;
+            cancellationToken.ThrowIfCancellationRequested();
+            _ = GroupedCount(objects);
+            _ = KindIndex.For(objects);
+        }
+    }
+
+    /// <summary>True when <see cref="PrepareLayerIndexes"/> has nothing left to build.</summary>
+    public static bool LayerIndexesPrepared(MapDocument document)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        foreach (var layer in document.Layers)
+            if (layer is ObjectLayer { Objects.Count: > 0 } objects && !KindIndex.IsPrepared(objects)) return false;
+        return true;
+    }
+
     public static IReadOnlyList<ObjectTreeRow> Build(
         MapDocument document,
         string searchText,
@@ -214,11 +240,28 @@ public static class ObjectTreeRows
         public Dictionary<string, ImmutableList<SceneObject>> Kinds { get; private init; } = new(StringComparer.Ordinal);
 
         public static KindIndex For(ObjectLayer layer) => Cache.GetValue(layer, Build);
+        public static bool IsPrepared(ObjectLayer layer) => Cache.TryGetValue(layer, out _);
 
         private static KindIndex Build(ObjectLayer layer)
         {
-            if (ObjectLayerChanges.TryGet(layer, out var delta) && Cache.TryGetValue(delta.Source, out var previous))
-                return previous.Apply(delta, layer);
+            // Derive through the retained chain even when no one asked for the revisions in
+            // between (an edit burst coalesced into one side-list refresh, an undo of a drag):
+            // stopping at an unindexed predecessor regrouped every object of the layer.
+            // Iterative and bounded, so a long unindexed history cannot exhaust the stack.
+            var chain = new List<(ObjectLayerChange Delta, ObjectLayer Layer)>();
+            for (var current = layer; chain.Count < 256 && ObjectLayerChanges.TryGet(current, out var delta); current = delta.Source)
+            {
+                chain.Add((delta, current));
+                if (Cache.TryGetValue(delta.Source, out var known))
+                {
+                    for (var i = chain.Count - 1; i >= 0; i--)
+                    {
+                        var (step, target) = chain[i];
+                        known = i == 0 ? known.Apply(step, target) : Cache.GetValue(target, _ => known.Apply(step, target));
+                    }
+                    return known;
+                }
+            }
             var index = new KindIndex();
             var builders = new Dictionary<string, ImmutableList<SceneObject>.Builder>(StringComparer.Ordinal);
             var ordered = StackOrder(layer);

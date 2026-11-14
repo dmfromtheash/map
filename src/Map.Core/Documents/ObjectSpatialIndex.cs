@@ -87,6 +87,9 @@ public sealed class ObjectSpatialIndex
     }
 
     private static readonly ConditionalWeakTable<object, ObjectSpatialIndex> ByObjects = [];
+
+    internal static bool IsPrepared(ObjectLayer layer) =>
+        Cache.TryGetValue(layer, out _) || ByObjects.TryGetValue(layer.Objects, out _);
     // All three edit kinds now use the same lazy ObjectLayerChanges handoff.
     internal static void RegisterReplacements(ObjectLayer source, ObjectLayer target,
         IReadOnlyDictionary<int, SceneObject> replacements) { }

@@ -7,8 +7,28 @@ namespace Map.Core.Documents;
 /// </summary>
 public sealed class SceneObjectList : IReadOnlyList<SceneObject>
 {
-    private System.Collections.Immutable.ImmutableDictionary<ObjectId, (SceneObject[] Chunk, int Offset)>? _identitySlots;
+    private IdentityTable? _identitySlots;
     private readonly Dictionary<SceneObject[], int> _chunkStarts = new(ReferenceEqualityComparer.Instance);
+
+    /// <summary>Number of full identity tables built (every object visited). Diagnostics and tests only.</summary>
+    internal static long IdentityRootBuilds => System.Threading.Interlocked.Read(ref _identityRootBuilds);
+    private static long _identityRootBuilds;
+
+    /// <summary>
+    /// Object id → (chunk, offset). The root is one plain hash table built once per loaded list
+    /// (about 15x cheaper than a persistent tree of a million entries) and shared, never
+    /// mutated, by every derived list. A derived list adds the items of its new chunks to a
+    /// small persistent overlay and drops the items of chunks it no longer holds; a root entry
+    /// whose chunk is no longer part of the list is stale and ignored. Chunks are immutable
+    /// once stored, so a slot whose chunk is current always names the right object.
+    /// </summary>
+    private sealed class IdentityTable(
+        Dictionary<ObjectId, (SceneObject[] Chunk, int Offset)> root,
+        System.Collections.Immutable.ImmutableDictionary<ObjectId, (SceneObject[] Chunk, int Offset)> overlay)
+    {
+        public Dictionary<ObjectId, (SceneObject[] Chunk, int Offset)> Root { get; } = root;
+        public System.Collections.Immutable.ImmutableDictionary<ObjectId, (SceneObject[] Chunk, int Offset)> Overlay { get; } = overlay;
+    }
     public const int ChunkSize = 256;
 
     private static readonly SceneObjectList EmptyInstance = new([], 0);
@@ -34,14 +54,19 @@ public sealed class SceneObjectList : IReadOnlyList<SceneObject>
         }
         if (source?._identitySlots is { } slots)
         {
-            var builder = slots.ToBuilder();
-            foreach (var chunk in source._chunks.Where(c => !_chunkStarts.ContainsKey(c)))
-                foreach (var item in chunk) builder.Remove(item.Id);
-            foreach (var chunk in chunks.Where(c => !source._chunkStarts.ContainsKey(c)))
-                for (var i = 0; i < chunk.Length; i++) builder[chunk[i].Id] = (chunk, i);
-            _identitySlots = builder.ToImmutable();
+            var builder = slots.Overlay.ToBuilder();
+            foreach (var chunk in source._chunks)
+                if (!_chunkStarts.ContainsKey(chunk))
+                    foreach (var item in chunk) builder.Remove(item.Id);
+            foreach (var chunk in chunks)
+                if (!source._chunkStarts.ContainsKey(chunk))
+                    for (var i = 0; i < chunk.Length; i++) builder[chunk[i].Id] = (chunk, i);
+            _identitySlots = new IdentityTable(slots.Root, builder.ToImmutable());
         }
     }
+
+    /// <summary>True when id lookups of this list no longer visit every object.</summary>
+    internal bool HasIdentityTable => _identitySlots is not null;
 
     public static SceneObjectList Empty => EmptyInstance;
 
@@ -80,14 +105,21 @@ public sealed class SceneObjectList : IReadOnlyList<SceneObject>
 
     public int IndexOfId(ObjectId id)
     {
-        if (_identitySlots is null)
+        var table = _identitySlots;
+        if (table is null)
         {
-            var builder = System.Collections.Immutable.ImmutableDictionary.CreateBuilder<ObjectId, (SceneObject[], int)>();
+            var root = new Dictionary<ObjectId, (SceneObject[], int)>(Count);
             foreach (var chunk in _chunks)
-                for (var i = 0; i < chunk.Length; i++) builder.Add(chunk[i].Id, (chunk, i));
-            System.Threading.Interlocked.CompareExchange(ref _identitySlots, builder.ToImmutable(), null);
+                for (var i = 0; i < chunk.Length; i++) root.Add(chunk[i].Id, (chunk, i));
+            System.Threading.Interlocked.Increment(ref _identityRootBuilds);
+            System.Threading.Interlocked.CompareExchange(ref _identitySlots,
+                new IdentityTable(root, System.Collections.Immutable.ImmutableDictionary<ObjectId, (SceneObject[], int)>.Empty), null);
+            table = _identitySlots;
         }
-        return _identitySlots.TryGetValue(id, out var slot) ? _chunkStarts[slot.Chunk] + slot.Offset : -1;
+        // The overlay holds exactly the items of chunks newer than the root, all current.
+        if (table.Overlay.TryGetValue(id, out var slot)) return _chunkStarts[slot.Chunk] + slot.Offset;
+        return table.Root.TryGetValue(id, out slot) && _chunkStarts.TryGetValue(slot.Chunk, out var start)
+            ? start + slot.Offset : -1;
     }
 
     internal SceneObjectList RemoveIds(IReadOnlySet<ObjectId> ids)

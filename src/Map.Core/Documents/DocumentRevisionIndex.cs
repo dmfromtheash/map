@@ -126,6 +126,8 @@ public sealed class DocumentRevisionIndex
         return Cache.GetValue(document, static snapshot => new DocumentRevisionIndex(snapshot));
     }
 
+    internal static bool IsPrepared(MapDocument document) => Cache.TryGetValue(document, out _);
+
     public int ObjectCount => checked(_rootPositions.Count + _appendedCount - _removedCount);
 
     public int OverlayObjectCount => _overrides.Count;

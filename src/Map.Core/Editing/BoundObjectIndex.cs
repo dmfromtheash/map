@@ -19,6 +19,8 @@ internal sealed record BoundObjectIndex
     public ImmutableDictionary<Guid, ImmutableHashSet<ObjectId>> RegionTargets { get; private init; } = ImmutableDictionary<Guid, ImmutableHashSet<ObjectId>>.Empty;
     public ImmutableDictionary<Guid, ImmutableHashSet<ObjectId>> RegionEntities { get; private init; } = ImmutableDictionary<Guid, ImmutableHashSet<ObjectId>>.Empty;
 
+    internal static bool IsPrepared(ObjectLayer layer) => Cache.TryGetValue(layer.Objects, out _);
+
     public static BoundObjectIndex For(ObjectLayer layer)
     {
         if (Cache.TryGetValue(layer.Objects, out var cached)) return cached;

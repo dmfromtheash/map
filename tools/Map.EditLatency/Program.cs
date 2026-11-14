@@ -58,6 +58,10 @@ MapDocument Build()
 }
 
 void Check(bool ok, string reason) { if (!ok) throw new InvalidOperationException(reason); }
+// Reflection keeps one harness source for the baseline (no background preparation) and the change.
+void DisablePreparation() => typeof(EditorViewModel).GetProperty("DerivedIndexPreparationMinimumObjects")?.SetValue(null, int.MaxValue);
+void AwaitPreparation(EditorViewModel e) =>
+    (typeof(EditorViewModel).GetProperty("DerivedIndexPreparation")?.GetValue(e) as Task)?.GetAwaiter().GetResult();
 ObjectLayer Layer(MapDocument d) => d.Layers.OfType<ObjectLayer>().Single();
 EditorViewModel Editor(MapDocument d) => new(d, null, false,
     new FakeProjectStore(), new FakeRecentMaps(), new FakeFilePicker(), new FakePrompts(), new FakeLog(),
@@ -111,7 +115,10 @@ if (suite == "ui")
     UiProbe.Initialize();
     // No window or canvas render: production EditorView controls and Dispatcher work only.
     var doc = Build();
+    var uiPrepare = Environment.GetEnvironmentVariable("MAP_EDIT_PREPARE") ?? "await";
+    if (uiPrepare == "off") DisablePreparation();
     var editor = Editor(doc);
+    if (uiPrepare == "await") Measure("background-prepare-wait", 0, () => AwaitPreparation(editor));
     var view = UiProbe.Create(editor);
     UiProbe.Drain();
     var layer = Layer(doc);
@@ -273,7 +280,12 @@ else
     MapDocument doc = null!;
     Measure("build-document", 0, () => doc = Build());
     EditorViewModel editor = null!;
+    // MAP_EDIT_PREPARE=off keeps every lookup cold (lazy build on the first action, as before
+    // background preparation); =await waits for the background preparation started at open.
+    var prepare = Environment.GetEnvironmentVariable("MAP_EDIT_PREPARE") ?? "await";
+    if (prepare == "off") DisablePreparation();
     Measure("construct-editor", 0, () => editor = Editor(doc));
+    if (prepare == "await") Measure("background-prepare-wait", 0, () => AwaitPreparation(editor));
     var router = new CanvasInputRouter(editor);
     editor.Session.Viewport.Set(0, 0, 1);
     if (suite == "opened")
@@ -295,6 +307,17 @@ else
             Check(editor.Session.SelectedObjectId == expected, "selection target mismatch");
             Check(editor.Session.UndoDepth == 0, "selection created undo");
         }
+        for (var i = 0; i <= 5; i++)
+        {
+            Measure("drag", i, () => {
+                router.Press(CanvasPointerButton.Left, 65536, 65536);
+                router.Move(65568, 65560);
+                router.Release(65568, 65560);
+            }, editor);
+            Check(editor.Session.UndoDepth == 1, "drag history");
+            Measure("undo-drag", i, () => editor.Undo(), editor);
+            Check(editor.Session.UndoDepth == 0 && Layer(editor.Session.Document).Objects[^1].X == Layer(doc).Objects[^1].X, "undo drag");
+        }
     }
     editor.SelectAssetSet(catalog.Sets[0].Id);
     editor.StampPlacementMode = StampPlacementMode.One;
@@ -314,6 +337,19 @@ else
         Check(Layer(editor.Session.Document).Objects.Count == count && editor.Session.UndoDepth == 0 && editor.Session.RedoDepth == 1, "undo count/history");
         Measure("spatial-after-undo", i, () => { _ = ObjectSpatialIndex.For(Layer(editor.Session.Document)).QueryPoint(70000, 70000); });
         Measure("tree-assets-after-undo", i, () => { _ = ObjectTreeRows.Build(editor.Session.Document, "", ObjectTypeFilter.Stamps, null, editor.Session.SelectedObjectIds); });
+    }
+    for (var i = 0; i <= 2; i++)
+    {
+        Measure("place-10-clicks", i, () => {
+            for (var k = 0; k < 10; k++)
+            {
+                var result = router.Press(CanvasPointerButton.Left, 70000 + k * 80, 70000);
+                router.Release(70000 + k * 80, 70000);
+                Check(result.StampPlaced, "placement refused: " + editor.StatusDetail);
+            }
+        }, editor);
+        Measure("undo-10", i, () => { for (var k = 0; k < 10; k++) editor.Undo(); }, editor);
+        Check(Layer(editor.Session.Document).Objects.Count == count, "undo-10 count");
     }
     Check(Layer(doc).Objects.Count == count, "source snapshot mutated");
 }

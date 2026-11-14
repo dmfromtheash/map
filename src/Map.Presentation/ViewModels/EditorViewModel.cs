@@ -461,6 +461,9 @@ public sealed partial class EditorViewModel : ViewModelBase
         }
 
         SceneChanged += (_, _) => RefreshOpenExportAfterSceneChange();
+        // Large maps: the lookups of the first click and placement are built off the input thread.
+        SceneChanged += (_, _) => QueueDerivedIndexPreparation();
+        QueueDerivedIndexPreparation();
     }
 
     public EditingSession Session { get; }
