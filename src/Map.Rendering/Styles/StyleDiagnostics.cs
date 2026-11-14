@@ -22,6 +22,19 @@ public static class StyleDiagnostics
     internal static void AddFormMap(long ticks) => Interlocked.Add(ref _formMapTicks, ticks);
     internal static void AddHeightMap(long ticks) => Interlocked.Add(ref _heightMapTicks, ticks);
     internal static void AddCoast(long ticks) => Interlocked.Add(ref _coastTicks, ticks);
+
+    // The CPU stages of a style frame by name (split, parts, form maps, halo, stamps, passes...), in Stopwatch ticks,
+    // added only while MeasureStages is on; the tools read and reset them around a frame.
+    private static readonly ConcurrentDictionary<string, long> StageTicks = new(StringComparer.Ordinal);
+    public static IReadOnlyDictionary<string, double> StageMs =>
+        StageTicks.ToDictionary(p => p.Key, p => p.Value * 1000.0 / System.Diagnostics.Stopwatch.Frequency, StringComparer.Ordinal);
+    public static void ResetStages() => StageTicks.Clear();
+    internal static long StageStart() => MeasureStages ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
+    internal static void StageEnd(string name, long started)
+    {
+        if (started != 0) StageTicks.AddOrUpdate(name, System.Diagnostics.Stopwatch.GetTimestamp() - started,
+            (_, ticks) => ticks + System.Diagnostics.Stopwatch.GetTimestamp() - started);
+    }
 }
 
 /// <summary>Scene is excluded from PassMs. A reused painted frame only pays the composite cost.</summary>

@@ -65,7 +65,9 @@ public static partial class StyleRenderer
         SKMatrix matrix, int w, int h, float scale, WorldBounds? visible,
         Action<SKCanvas, MapDocument, RenderOptions> drawScene)
     {
+        var partsStarted = StyleDiagnostics.StageStart();
         var parts = PrintPartsFor(bare);
+        StyleDiagnostics.StageEnd("parts", partsStarted);
         // These auxiliary draws must not populate the editor's scene/layer caches or consume its
         // stats. Their own immutable layer lists still reuse the renderer's spatial indexes.
         var auxiliary = options.ForStyleNames().ForStyleScene(visible);
@@ -77,10 +79,14 @@ public static partial class StyleRenderer
             drawScene(surface.Canvas, d, auxiliary);
             return surface.Snapshot();
         }
+        var mountainsStarted = StyleDiagnostics.StageStart();
         var mountains = RenderPart(parts.Mountains);
+        StyleDiagnostics.StageEnd("print-mountains", mountainsStarted);
+        var auxStarted = StyleDiagnostics.StageStart();
         using var land = RenderPart(parts.Land);
         using var rivers = RenderPart(parts.Rivers);
         var geo = BuildCoastField(land, rivers, w, h, scale);
+        StyleDiagnostics.StageEnd("land-rivers-coast", auxStarted);
         using var white = NewSurface(gpu, w, h, SKColorType.Rgba8888)!;
         white.Canvas.Clear(SKColors.White); white.Canvas.DrawImage(mountains, 0, 0);
         using var onWhite = white.Snapshot();
@@ -90,7 +96,9 @@ public static partial class StyleRenderer
         using var heightRaw = NewSurface(gpu, w, h, SKColorType.Rgba8888)!;
         heightRaw.Canvas.Clear(SKColors.Black);
         heightRaw.Canvas.SetMatrix(matrix);
+        var heightsStarted = StyleDiagnostics.StageStart();
         DrawPrintHeights(heightRaw.Canvas, parts.Mountains, options, visible);
+        StyleDiagnostics.StageEnd("print-heights", heightsStarted);
         using var raw = heightRaw.Snapshot();
         var height = Blurred(raw, gpu, Math.Min(9 * scale, MaxWideSigma));
         if (tensor is not null && lines is not null && faces is not null && height is not null)

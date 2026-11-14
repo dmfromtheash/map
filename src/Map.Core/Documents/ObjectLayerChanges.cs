@@ -23,6 +23,22 @@ public static class ObjectLayerChanges
         AssetUsageIndex.Register(source, target, removed, added);
     }
 
+    /// <summary>
+    /// Links two records of a layer derived by a renderer (a style's map without its names) the way an edit links its
+    /// source layers, so that their spatial index and scene plans follow the delta instead of being built afresh. Only
+    /// the link is kept: the editing indexes never see derived layers. The indices are those of the derived lists.
+    /// A target that already has a link keeps it.
+    /// </summary>
+    public static void RegisterDerived(ObjectLayer source, ObjectLayer target,
+        IReadOnlyList<int> removed, IReadOnlyList<int> added, bool orderCompacted = false)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(target);
+        var depth = Changes.TryGetValue(source, out var previous) ? previous.Depth + 1 : 1;
+        var retain = depth <= 64;
+        Changes.TryAdd(target, new Link(new(source), retain ? source : null, retain ? depth : 0, removed, added, orderCompacted));
+    }
+
     public static bool TryGet(ObjectLayer layer, out ObjectLayerChange change)
     {
         if (Changes.TryGetValue(layer, out var link) && (link.RetainedSource ??

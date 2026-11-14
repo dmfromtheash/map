@@ -38,8 +38,10 @@ public static partial class StyleRenderer
             return;
         }
 
+        var splitStarted = StyleDiagnostics.StageStart();
         var (bare, names) = Split(document);
         if (WinterShader.Applies(style.Preset)) bare = WinterShader.Frozen(bare);
+        StyleDiagnostics.StageEnd("split", splitStarted);
         var gpu = options.IsExport ? null : options.GpuContext;
         var kind = IsPainter(style.Preset) ? 2 : IsPrint(style.Preset) ? 1 : 0;
         var key = KeyFor(bare, options, gpu, m, device, kind);
@@ -112,7 +114,12 @@ public static partial class StyleRenderer
                     // The kept frame owns the mountain buffers now.
                     Pending = null;
                 }
-                else KeepParts(buffers, candidate, bare, options);
+                else
+                {
+                    var keepStarted = StyleDiagnostics.StageStart();
+                    KeepParts(buffers, candidate, bare, options);
+                    StyleDiagnostics.StageEnd("keep-parts", keepStarted);
+                }
             }
         }
         if (painted is null) { drawScene(canvas, document with { Style = null }, options); return; }
@@ -138,7 +145,10 @@ public static partial class StyleRenderer
         // The print and painter styles paint the land from its outline and the mountains from their pictures: the cliff
         // walls with their scree, and in the painter styles the roads, are drawn over the painted frame, multiplied like
         // ink on its paper (owner, 2026-11-10: «нужно. и с другими стилями также»).
-        if (kind != 0 && !PixelShader.Applies(style.Preset) && StyleOverlayFor(bare, kind) is { } overlay)
+        var overlayStarted = StyleDiagnostics.StageStart();
+        var overlayDocument = kind != 0 && !PixelShader.Applies(style.Preset) ? StyleOverlayFor(bare, kind) : null;
+        StyleDiagnostics.StageEnd("overlay-doc", overlayStarted);
+        if (overlayDocument is { } overlay)
         {
             // «Зима»: the walls and roads take the medium's ink, and only their dark parts (the snow stays white).
             using var ink = WinterShader.Applies(style.Preset) ? WinterShader.OverlayInk(style.Preset) : null;
@@ -243,11 +253,13 @@ public static partial class StyleRenderer
     private static bool StampsReady(MapDocument bare, RenderOptions options)
     {
         if (options.Stamps is not { } stamps) return false;
-        foreach (var layer in PrintPartsFor(bare).Mountains.Layers.OfType<ObjectLayer>())
+        // The mountain part keeps each object layer of the bare map with its objects and visibility: ask once per picture
+        // of the visible stamps (kept per object list through its edits) instead of once per stamp.
+        foreach (var layer in bare.Layers.OfType<ObjectLayer>())
         {
             if (!layer.Visible) continue;
-            foreach (var item in layer.Objects)
-                if (item.Visible && item.Stamp is { } stamp && stamps.TryGetImage(stamp.AssetSha256) is null) return false;
+            foreach (var sha in VisibleStampAssetsOf(layer))
+                if (stamps.TryGetImage(sha) is null) return false;
         }
         return true;
     }
@@ -470,13 +482,14 @@ public static partial class StyleRenderer
                 var names = new List<MapLayer>();
                 foreach (var layer in layers)
                 {
+                    // The texts of a layer are kept per object list and follow its edits (StyleRenderer.Split.cs).
                     if (layer is ObjectLayer objects && !objects.Effects.ClippingEnabled
-                        && objects.Objects.Any(o => o.Kind == SceneObjectKind.Text))
+                        && SplitOf(objects) is { Texts.Length: > 0 } split)
                     {
-                        bare.Add(BareLayers.GetValue(objects, static l => l with { Objects = [.. l.Objects.Where(o => o.Kind != SceneObjectKind.Text)] }));
-                        names.Add(NameLayers.GetValue(objects, static l => l with
+                        bare.Add(BareLayerOf(objects, split));
+                        names.Add(NameLayers.GetValue(objects, l => l with
                         {
-                            Objects = [.. l.Objects.Where(o => o.Kind == SceneObjectKind.Text)],
+                            Objects = split.Names,
                             Rivers = [], Roads = [], PlacementPaths = [], PlacementAreas = [], SurfaceOrder = [],
                         }));
                     }
