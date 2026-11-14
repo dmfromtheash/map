@@ -524,14 +524,18 @@ public sealed class DocumentRevisionIndex
 
     /// <summary>A single structural splice, including new objects or changed reused identities.</summary>
     internal static void RegisterSplice(MapDocument source, MapDocument target, LayerId layerId,
-        IReadOnlyList<DocumentObjectLocation> additions)
+        IReadOnlyList<SceneObject> removed, IReadOnlyList<DocumentObjectLocation> additions)
     {
         if (!Cache.TryGetValue(source.Layers, out var previous)) return;
+        // Splice has the same removal lifetime as delete: release outgoing delta entries before
+        // adding replacements, including reused top-level and nested identities.
+        var stores = previous.Without(removed);
         var structural = previous._structuralLayers.Add(layerId);
-        var candidate = new DocumentRevisionIndex(target.Layers, previous._root, previous._overrides,
-            previous._overrideIdentities, previous._appendTail, previous._appendedCount, previous._appendDepth, previous._groups)
+        var candidate = new DocumentRevisionIndex(target.Layers, previous._root, stores.Overrides,
+            stores.Identities, stores.Appends, previous._appendedCount, previous._appendDepth, stores.Groups)
         { _structuralLayers = structural, _layerPositions = previous._layerPositions, _seenLayers = previous._seenLayers };
-        var overrides = previous._overrides.ToBuilder();
+        var overrides = stores.Overrides.ToBuilder();
+        var groups = stores.Groups.ToBuilder();
         var replaced = new List<DocumentObjectLocation>();
         var entering = new List<DocumentObjectLocation>();
         foreach (var addition in additions)
@@ -542,11 +546,13 @@ public sealed class DocumentRevisionIndex
                 replaced.Add(addition);
                 overrides[addition.Object.Id] = addition;
             }
+            if (addition.Object.GroupId is { } group)
+                groups[group] = groups.GetValueOrDefault(group, ImmutableHashSet<ObjectId>.Empty).Add(addition.Object.Id);
         }
-        var tail = entering.Count == 0 ? previous._appendTail : Append(previous._appendTail, entering);
+        var tail = entering.Count == 0 ? stores.Appends : Append(stores.Appends, entering);
         Publish(target, new DocumentRevisionIndex(target.Layers, previous._root, overrides.ToImmutable(),
-            UpdateIdentities(previous, replaced), tail,
-            previous._appendedCount + entering.Count, previous._appendDepth + (entering.Count > 0 ? 1 : 0), UpdateGroups(previous, additions))
+            UpdateIdentities(candidate, replaced), tail,
+            previous._appendedCount + entering.Count, previous._appendDepth + (entering.Count > 0 ? 1 : 0), groups.ToImmutable())
         { _structuralLayers = structural, _layerPositions = previous._layerPositions, _seenLayers = previous._seenLayers });
     }
 

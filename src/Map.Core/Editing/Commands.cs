@@ -1534,7 +1534,8 @@ public static class DocumentEditor
         var offset = 0;
         foreach (var batch in batches.OrderBy(p => p.Key))
             foreach (var item in batch.Value) locations.Add(new(item, layerId, li, batch.Key + offset++));
-        DocumentRevisionIndex.RegisterSplice(document, result, layerId, locations);
+        DocumentRevisionIndex.RegisterSplice(document, result, layerId,
+            removed.Select(i => source.Objects[i]).ToArray(), locations);
         ObjectNameIndex.Register(document, result, removed.Select(i => source.Objects[i]), additions);
         ObjectLayerChanges.Register(source, revised, removed, locations.Select(l => l.ObjectIndex).ToArray(), orderCompacted: true);
         return result;

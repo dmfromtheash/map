@@ -78,6 +78,40 @@ public sealed class PersistentRevisionIndexTests
         Assert.Same(renamed, DocumentRevisionIndex.For(edited).FindObject(renamed.Id));
     }
 
+    [Fact]
+    public void Repeated_splices_release_outgoing_append_entries_and_keep_reused_identities()
+    {
+        var root = Shape();
+        var layer = new ObjectLayer(LayerId.New(), "objects", true, false, 1, [root]);
+        var original = Map(layer);
+        DocumentDerivedIndexes.Prepare(original);
+        var roots = DocumentRevisionIndex.RootBuilds;
+        var current = Shape() with { GroupId = Guid.NewGuid(), GroupName = "one" };
+        var document = new AddObjectCommand(layer.Id, current).Apply(original);
+        var snapshot = document;
+        var first = current;
+        for (var i = 0; i < 300; i++)
+        {
+            var replacement = Shape() with { GroupId = current.GroupId, GroupName = current.GroupName };
+            document = DocumentEditor.SpliceObjects(document, layer.Id, new HashSet<ObjectId> { current.Id },
+                new Dictionary<int, IReadOnlyList<SceneObject>> { [1] = new[] { replacement } });
+            var index = DocumentRevisionIndex.For(document);
+            Assert.Equal(1, index.AppendedObjectCount);
+            Assert.Null(index.FindObject(current.Id));
+            Assert.Equal(new[] { replacement }, index.GroupMembers(replacement.GroupId!.Value));
+            current = replacement;
+        }
+        var reused = current with { Shape = first.Shape, Name = "reused nested identity" };
+        document = DocumentEditor.SpliceObjects(document, layer.Id, new HashSet<ObjectId> { current.Id },
+            new Dictionary<int, IReadOnlyList<SceneObject>> { [1] = new[] { reused } });
+        Assert.Equal(1, DocumentRevisionIndex.For(document).AppendedObjectCount);
+        Assert.Throws<ArgumentException>(() => new AddObjectCommand(layer.Id, Shape() with { Shape = first.Shape }).Apply(document));
+        Assert.Same(first, DocumentRevisionIndex.For(snapshot).FindObject(first.Id));
+        Check(document, [root, reused]);
+        Check(original, [root]);
+        Assert.Equal(roots, DocumentRevisionIndex.RootBuilds);
+    }
+
     private static void Check(MapDocument document, IReadOnlyList<SceneObject> expected)
     {
         var layer = document.Layers.OfType<ObjectLayer>().Single();
