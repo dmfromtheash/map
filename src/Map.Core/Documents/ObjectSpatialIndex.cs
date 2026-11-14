@@ -28,8 +28,23 @@ public sealed class ObjectSpatialIndex
             {
                 _stableBasis = previous._stableBasis ?? previous;
                 var overrides = previous._structuralOverrides.ToBuilder();
-                foreach (var i in delta.Removed) overrides[delta.Source.Objects[i].Id] = null;
-                foreach (var i in delta.Added) overrides[_objects[i].Id] = _objects[i];
+                // Overrides hold only the difference from the basis: an object the basis does
+                // not know leaves without a tombstone, and the very instance the basis holds
+                // (Undo of a delete or a move) needs no override, so cycles do not accumulate.
+                var basisObjects = _stableBasis._objects as SceneObjectList;
+                foreach (var i in delta.Removed)
+                {
+                    var id = delta.Source.Objects[i].Id;
+                    if (BasisPosition(basisObjects, id) != -1) overrides[id] = null;
+                    else overrides.Remove(id);
+                }
+                foreach (var i in delta.Added)
+                {
+                    var item = _objects[i];
+                    var at = BasisPosition(basisObjects, item.Id);
+                    if (at >= 0 && ReferenceEquals(basisObjects![at], item)) overrides.Remove(item.Id);
+                    else overrides[item.Id] = item;
+                }
                 _structuralOverrides = overrides.ToImmutable();
                 _cells = _stableBasis._cells; _oversized = _stableBasis._oversized;
                 IncrementalOverrideCount = delta.Added.Count + delta.Removed.Count;
@@ -172,6 +187,11 @@ public sealed class ObjectSpatialIndex
         var storage = (SceneObjectList)_objects;
         return result.OrderBy(o => storage.IndexOfId(o.Id)).ToArray();
     }
+
+    // Without identity slots on the basis list (never true after preparation) every id is treated
+    // as unknown to the basis: a tombstone is kept and an override is written, as before.
+    private static int BasisPosition(SceneObjectList? basis, ObjectId id) =>
+        basis is { HasIdentityTable: true } ? basis.IndexOfId(id) : -2;
 
     private static void Change(ImmutableDictionary<(int X, int Y), int[]>.Builder cells,
         ImmutableHashSet<int>.Builder oversized, SceneObject item, int index, bool add)

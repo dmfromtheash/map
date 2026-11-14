@@ -21,18 +21,25 @@ internal sealed class ObjectNameIndex
     // First free number of each numbered family in the root snapshot. Shared, never copied:
     // the cursors above hold only the families this session allocated from or removed from.
     private readonly Dictionary<string, int> _rootHoles;
+    // Numbers below a family's cursor that removals freed (and nothing re-took). The cursor keeps
+    // its place, so Undo of a delete takes the number back without rescanning the family.
+    private readonly ImmutableDictionary<string, ImmutableSortedSet<int>> _removedHoles;
+    private static readonly ImmutableDictionary<string, ImmutableSortedSet<int>> NoHoles =
+        ImmutableDictionary.Create<string, ImmutableSortedSet<int>>(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Number of full name tables built (every object visited). Diagnostics and tests only.</summary>
     internal static long RootBuilds => Interlocked.Read(ref _rootBuilds);
     private static long _rootBuilds;
 
     private ObjectNameIndex(Dictionary<string, int> root, ImmutableDictionary<string, int> overlay,
-        Dictionary<string, int> rootHoles, IEnumerable<KeyValuePair<string, int>>? cursors = null)
+        Dictionary<string, int> rootHoles, IEnumerable<KeyValuePair<string, int>>? cursors = null,
+        ImmutableDictionary<string, ImmutableSortedSet<int>>? removedHoles = null)
     {
         _root = root;
         _overlay = overlay;
         _rootHoles = rootHoles;
         _firstFree = new(cursors ?? [], StringComparer.OrdinalIgnoreCase);
+        _removedHoles = removedHoles ?? NoHoles;
     }
 
     // Every number below the root hole was occupied in the root; a later removal below it
@@ -93,13 +100,29 @@ internal sealed class ObjectNameIndex
     private int CountOf(string name) =>
         _overlay.TryGetValue(name, out var changed) ? changed : _root.GetValueOrDefault(name);
 
-    private bool Occupied(string name) => CountOf(name) > 0;
+    private bool Occupied(string name)
+    {
+        _probes++;
+        return CountOf(name) > 0;
+    }
+
+    /// <summary>Candidate names tried by allocation and cursor advance on this thread. Diagnostics and tests only.</summary>
+    internal static long ProbesOnThisThread => _probes;
+    [ThreadStatic] private static long _probes;
 
     public IReadOnlyList<string> Allocate(string basis, int count, bool suffixFirst)
     {
         var result = new string[count];
         var offset = 0;
         if (count > 0 && !suffixFirst && !Occupied(basis)) result[offset++] = basis;
+        // Freed numbers first: every number below the cursor that is not one of them is taken.
+        if (_removedHoles.TryGetValue(basis, out var holes))
+            foreach (var hole in holes)
+            {
+                if (offset == count) break;
+                var candidate = basis + " " + hole.ToString(CultureInfo.InvariantCulture);
+                if (!Occupied(candidate)) result[offset++] = candidate;
+            }
         var cursor = _firstFree.GetOrAdd(basis, static (b, self) => self.RootHole(b), this);
         while (offset < count)
         {
@@ -127,6 +150,7 @@ internal sealed class ObjectNameIndex
         if (!Cache.TryGetValue(source, out var value)) return;
         var overlay = value._overlay.ToBuilder();
         var cursors = new Dictionary<string, int>(value._firstFree, StringComparer.OrdinalIgnoreCase);
+        var holes = value._removedHoles.ToBuilder();
         int Current(string name) => overlay.TryGetValue(name, out var changed) ? changed : value._root.GetValueOrDefault(name);
         void Set(string name, int count)
         {
@@ -136,26 +160,47 @@ internal sealed class ObjectNameIndex
         foreach (var item in removed)
         {
             Set(item.Name, Math.Max(0, Current(item.Name) - 1));
-            var space = item.Name.LastIndexOf(' ');
-            if (space > 0 && int.TryParse(item.Name.AsSpan(space + 1), NumberStyles.None,
-                    CultureInfo.InvariantCulture, out var suffix) && suffix > 0)
+            if (Current(item.Name) == 0 && Numbered(item.Name, out var basis, out var suffix))
             {
-                var basis = item.Name[..space];
                 // A family this session never touched starts at its root hole, so the hole a
                 // removal opens below it must be recorded here or the search would skip it.
                 var cursor = cursors.TryGetValue(basis, out var known) ? known : value.RootHole(basis);
-                if (suffix < cursor) cursors[basis] = suffix;
+                if (suffix < cursor) holes[basis] = holes.GetValueOrDefault(basis, []).Add(suffix);
             }
         }
-        foreach (var item in added) Set(item.Name, Current(item.Name) + 1);
+        foreach (var item in added)
+        {
+            Set(item.Name, Current(item.Name) + 1);
+            if (Numbered(item.Name, out var basis, out var suffix) && holes.TryGetValue(basis, out var free) && free.Contains(suffix))
+            {
+                free = free.Remove(suffix);
+                if (free.IsEmpty) holes.Remove(basis); else holes[basis] = free;
+            }
+        }
         // The child owns committed occupancy, so advance past the newly filled range once.
         // The source cursor remains at its old first hole for cancellation and undo snapshots.
         foreach (var basis in cursors.Keys.ToArray())
         {
             var cursor = cursors[basis];
-            while (cursor < int.MaxValue && Current(basis + " " + cursor.ToString(CultureInfo.InvariantCulture)) > 0) cursor++;
+            while (cursor < int.MaxValue && Current(basis + " " + cursor.ToString(CultureInfo.InvariantCulture)) > 0) { cursor++; _probes++; }
             cursors[basis] = cursor;
         }
-        Cache.Add(target, new ObjectNameIndex(value._root, overlay.ToImmutable(), value._rootHoles, cursors));
+        Cache.Add(target, new ObjectNameIndex(value._root, overlay.ToImmutable(), value._rootHoles, cursors, holes.ToImmutable()));
+    }
+
+    /// <summary>«basis N» with N a positive number written without leading zeros.</summary>
+    private static bool Numbered(string name, out string basis, out int suffix)
+    {
+        basis = "";
+        var space = name.LastIndexOf(' ');
+        if (space <= 0 || !int.TryParse(name.AsSpan(space + 1), NumberStyles.None, CultureInfo.InvariantCulture, out suffix)
+            || suffix <= 0 || name.Length - space - 1 != CountDigits(suffix)) // «Гора 01» is not number 1
+        {
+            suffix = 0;
+            return false;
+        }
+
+        basis = name[..space];
+        return true;
     }
 }

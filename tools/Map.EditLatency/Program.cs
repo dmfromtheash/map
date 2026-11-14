@@ -33,7 +33,7 @@ Console.WriteLine(JsonSerializer.Serialize(new { type = "environment", count, su
     latencyMode = GCSettings.LatencyMode.ToString(), cpuCount = Environment.ProcessorCount }));
 var measured = count != 16; // 16 is an untabulated JIT exercise in its own process.
 
-MapDocument Build()
+MapDocument Build(bool secondLayer = false)
 {
     // Same constructors, seed, distribution and last-object anchor as NativeMillionAssetsSmoke.cs:27-58.
     var random = new Random(12345);
@@ -54,7 +54,8 @@ MapDocument Build()
     return new MapDocument(DocumentId.New(), "CPU edit probe", DateTimeOffset.UnixEpoch,
         new CanvasDefinition(size, size, "px", "#FFFFFFFF"),
         [new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FFFFFFFF"),
-         new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, objects)]).WithAssets(refs);
+         new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, objects),
+         .. secondLayer ? [new ObjectLayer(LayerId.New(), "Второй", true, false, 1, [])] : Array.Empty<MapLayer>()]).WithAssets(refs);
 }
 
 void Check(bool ok, string reason) { if (!ok) throw new InvalidOperationException(reason); }
@@ -67,10 +68,16 @@ EditorViewModel Editor(MapDocument d) => new(d, null, false,
     new FakeProjectStore(), new FakeRecentMaps(), new FakeFilePicker(), new FakePrompts(), new FakeLog(),
     assetCatalog: catalog, availableFontFamilies: ["Arial"]);
 
+// Objects reached by enumerating any scene list on this thread (internal diagnostic counter, absent in older revisions).
+var enumerated = typeof(SceneObjectList).GetProperty("EnumeratedOnThisThread",
+    System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+long Visited() => enumerated?.GetValue(null) is long value ? value : -1;
+
 void Measure(string name, int iteration, Action action, EditorViewModel? editor = null)
 {
     var details = editor?.LastEditTimings;
     details?.Clear();
+    var visitedBefore = Visited();
     var allocations = GC.GetAllocatedBytesForCurrentThread();
     var collections = new[] { GC.CollectionCount(0), GC.CollectionCount(1), GC.CollectionCount(2) };
     var start = Stopwatch.GetTimestamp();
@@ -78,8 +85,9 @@ void Measure(string name, int iteration, Action action, EditorViewModel? editor 
     action();
     var ms = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
     var bytes = GC.GetAllocatedBytesForCurrentThread() - allocations;
+    var visited = visitedBefore < 0 ? -1 : Visited() - visitedBefore;
     if (measured) Console.WriteLine(JsonSerializer.Serialize(new { type = "sample", count, suite, name, iteration, ms, bytes,
-        resolverReads = resolver.Reads - reads,
+        resolverReads = resolver.Reads - reads, visited,
         gc = new[] { GC.CollectionCount(0) - collections[0], GC.CollectionCount(1) - collections[1], GC.CollectionCount(2) - collections[2] },
         steps = details?.Select(s => new { step = s.Step, ms = s.Ms }).ToArray() }));
 }
@@ -274,6 +282,65 @@ else if (suite == "edges")
         else { revision = command.Apply(revision); _ = DocumentRevisionIndex.For(revision); }
     }
     Check(Layer(revision).Objects.Count == count + 258, "rollover count");
+}
+else if (suite == "delete")
+{
+    // Real editor paths: Delete key (DeleteSelectedObject) and the layer picker (MoveSelectionToLayer).
+    MapDocument doc = null!;
+    Measure("build-document", 0, () => doc = Build(secondLayer: true));
+    var prepare = Environment.GetEnvironmentVariable("MAP_EDIT_PREPARE") ?? "await";
+    if (prepare == "off") DisablePreparation();
+    EditorViewModel editor = null!;
+    Measure("construct-editor", 0, () => editor = Editor(doc));
+    if (prepare == "await")
+    {
+        Measure("background-prepare-wait", 0, () => AwaitPreparation(editor));
+        // The editor skips background preparation under memory pressure; prepare here then, so
+        // "await" always means prepared lookups (reported, not hidden).
+        var prepared = typeof(EditorViewModel).GetProperty("DerivedIndexesPrepared")?.GetValue(editor) as bool?;
+        Console.WriteLine(JsonSerializer.Serialize(new { type = "prepared", count, suite, background = prepared }));
+        if (prepared == false) Measure("foreground-prepare", 0, () => {
+            DocumentDerivedIndexes.Prepare(editor.Session.Document);
+            ObjectTreeRows.PrepareLayerIndexes(editor.Session.Document);
+        });
+    }
+    var layers = doc.Layers.OfType<ObjectLayer>().ToArray();
+    var origin = layers[0];
+    var target = layers[1];
+    var single = new[] { origin.Objects[^1].Id };
+    var spread = Enumerable.Range(0, Math.Min(1000, count)).Select(k => origin.Objects[(int)((long)k * count / Math.Min(1000, count))].Id).ToArray();
+    ObjectLayer Of(LayerId id) => (ObjectLayer)editor.Session.Document.FindLayer(id)!;
+    void Same(string what)
+    {
+        // Exact order and identities against the opened snapshot, after every undo.
+        var now = Of(origin.Id).Objects;
+        Check(now.Count == count && Of(target.Id).Objects.Count == 0, what + " count");
+        foreach (var k in new[] { 0, 1, count / 2, count - 2, count - 1 })
+            Check(ReferenceEquals(now[k], origin.Objects[k]), what + " order");
+        foreach (var id in spread.Take(5).Append(single[0]))
+            Check(DocumentEditor.FindObject(editor.Session.Document, id) is not null, what + " lookup");
+    }
+    void Cycle(string name, ObjectId[] ids, Action edit, int removedFromSource, int onTarget)
+    {
+        for (var i = 0; i <= 5; i++)
+        {
+            editor.Session.SetSelection(ids);
+            Check(editor.Session.SelectedObjectIds.Count == ids.Length, name + " selection");
+            Measure(name, i, edit, editor);
+            Check(Of(origin.Id).Objects.Count == count - removedFromSource && Of(target.Id).Objects.Count == onTarget, name + " result");
+            Measure("undo-" + name, i, () => editor.Undo(), editor);
+            Same("undo-" + name);
+            Measure("redo-" + name, i, () => editor.Redo(), editor);
+            Check(Of(origin.Id).Objects.Count == count - removedFromSource && Of(target.Id).Objects.Count == onTarget, name + " redo");
+            editor.Undo();
+            Same("undo-after-redo-" + name);
+        }
+    }
+    Cycle("delete-1", single, () => editor.DeleteSelectedObject(), 1, 0);
+    Cycle("delete-1000", spread, () => editor.DeleteSelectedObject(), spread.Length, 0);
+    Cycle("move-1", single, () => Check(editor.MoveSelectionToLayer(target.Id), "move refused: " + editor.StatusDetail), 1, 1);
+    Cycle("move-1000", spread, () => Check(editor.MoveSelectionToLayer(target.Id), "move refused: " + editor.StatusDetail), spread.Length, spread.Length);
+    Check(layers[0].Objects.Count == count, "source snapshot mutated");
 }
 else
 {
