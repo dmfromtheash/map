@@ -79,7 +79,7 @@ internal sealed record PerformanceOptions(
         var minimumObjectCount = isLargestMapStress ? 4 : 1;
         var maximumObjectCount = isLargestMapStress
             ? int.MaxValue
-            : normalizedProfile == "native-million-assets" ? 1_000_000 : 100_000;
+            : normalizedProfile == "native-million-assets" ? 2_000_000 : 100_000;
         if (objectCount < minimumObjectCount || objectCount > maximumObjectCount)
         {
             throw new ArgumentOutOfRangeException(nameof(objectCount),

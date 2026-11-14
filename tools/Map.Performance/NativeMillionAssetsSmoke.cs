@@ -18,6 +18,19 @@ public sealed partial class ZoomAssetsApplication
     private async Task ExecuteMillion()
     {
         var matrix = MillionMatrixOptions.Read();
+        var sideText = Environment.GetEnvironmentVariable("MAP_MILLION_SIDE");
+        int? requestedSide = null;
+        if (sideText is not null)
+        {
+            if (!int.TryParse(sideText, System.Globalization.NumberStyles.None,
+                    System.Globalization.CultureInfo.InvariantCulture, out var side) || side is < 1024 or > 262144)
+                throw new ArgumentException("MAP_MILLION_SIDE must be 1024..262144; values above131072 are diagnostic only.");
+            requestedSide = side;
+        }
+        var grid = Environment.GetEnvironmentVariable("MAP_PERF_FPS_GRID") == "1";
+        if (grid && (matrix.Functions.Length != 0 || matrix.Style is not (null or "off")
+            || Environment.GetEnvironmentVariable("MAP_PERF_PORTABLE_FIXTURE") is not null))
+            throw new ArgumentException("FPS grid requires original library, style off, no matrix functions.");
         var root = System.Environment.GetEnvironmentVariable("MAP_DRIVE_LIBRARY_ROOTS")
             ?? throw new InvalidOperationException("Set MAP_DRIVE_LIBRARY_ROOTS to the owner's library.");
         _catalog.SetMounts(Directory.GetDirectories(root).Where(p => File.Exists(Path.Combine(p, "catalog.json"))).Order().ToArray());
@@ -28,15 +41,15 @@ public sealed partial class ZoomAssetsApplication
         var count = Options.ObjectCount;
         var random = new Random(Options.Seed);
         random.Shuffle(records);
-        var w = kind == "standard" ? 1920 : kind == "giant" ? 131072 : 32768;
-        var h = kind == "standard" ? 1080 : w;
+        var w = requestedSide ?? (kind == "standard" ? 1920 : kind == "giant" ? 131072 : 32768);
+        var h = requestedSide ?? (kind == "standard" ? 1080 : w);
         var anchor = (X: w / 2d, Y: h / 2d);
         var objects = new SceneObject[count];
         for (var i = 0; i < count; i++)
         {
             var r = records[i % records.Length];
             var width = 64 * (0.5 + random.NextDouble() * 1.5);
-            // Sparse districts on the giant; the ordinary map deliberately tests very dense overlap.
+            // Uniform across the entire page for every size; density changes only with count/area.
             objects[i] = new SceneObject(ObjectId.New(), SceneObjectKind.Stamp, "Ассет " + i,
                 random.NextDouble() * (w - width), random.NextDouble() * (h - width),
                 width, width * r.Height / r.Width, random.Next(-180, 181), "#FFFFFFFF", "#00000000", 0, true, false)
@@ -64,6 +77,9 @@ public sealed partial class ZoomAssetsApplication
         _report.Environment["objects"] = count.ToString();
         _report.Environment["seed"] = Options.Seed.ToString();
         _report.Environment["case"] = kind;
+        _report.Environment["canvas-side-override"] = requestedSide?.ToString() ?? "none";
+        _report.Environment["above-product-canvas-limit"] = (w > CanvasDimensionPolicy.Maximum || h > CanvasDimensionPolicy.Maximum).ToString();
+        _report.Environment["distribution"] = "uniform across entire canvas; fixed seed; final stamp centered for editing";
         _report.Environment["profile"] = _workspace;
         Console.WriteLine($"million: {kind}, objects={count}, images={records.Length}, workspace={_workspace}");
         var scenario = new ZoomScenarioReport { Name = kind, CanvasWidth = w, CanvasHeight = h, Objects = count };
@@ -112,6 +128,12 @@ public sealed partial class ZoomAssetsApplication
             await Finish(scenario); Checkpoint(); return;
         }
         var fit = _editor.Session.Viewport.Scale;
+        if (grid)
+        {
+            await ExecuteFpsGrid(scenario, anchor, fit);
+            Checkpoint();
+            return;
+        }
         if (Environment.GetEnvironmentVariable("MAP_PERF_PAN100_ONLY") is "1" or "legacy")
         {
             await Pan100Diagnostic(scenario, anchor);

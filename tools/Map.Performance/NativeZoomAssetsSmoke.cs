@@ -63,6 +63,8 @@ internal sealed class ZoomRouteReport
     public double WallMs { get; set; }
     /// <summary>Distinct canvas frames finished per second of wall time over the route.</summary>
     public double? Fps { get; set; }
+    /// <summary>Median FPS of equal-duration ~1s windows, including empty windows and input-to-last-frame time.</summary>
+    public double? MedianWindowFps { get; set; }
     public double SceneP50 { get; set; }
     public double SceneP95 { get; set; }
     public double SceneP99 { get; set; }
@@ -906,6 +908,19 @@ public sealed partial class ZoomAssetsApplication : Application
         target.Steps = steps;
         target.FramesRendered = frames.Count;
         target.WallMs = frames.Count > 0 ? (frames[^1].Stamp - inputStamps[0].Stamp) * 1000.0 / Stopwatch.Frequency : watch.Elapsed.TotalMilliseconds;
+        if (frames.Count > 0 && target.WallMs > 0)
+        {
+            var windows = new int[Math.Max(1, (int)Math.Ceiling(target.WallMs / 1000))];
+            var duration = target.WallMs / windows.Length;
+            foreach (var frame in frames)
+            {
+                var elapsed = (frame.Stamp - inputStamps[0].Stamp) * 1000d / Stopwatch.Frequency;
+                windows[Math.Clamp((int)(elapsed / duration), 0, windows.Length - 1)]++;
+            }
+            var rates = windows.Select(count => count * 1000d / duration).Order().ToArray();
+            target.MedianWindowFps = rates.Length % 2 == 0
+                ? (rates[rates.Length / 2 - 1] + rates[rates.Length / 2]) / 2 : rates[rates.Length / 2];
+        }
         target.ScaleEnd = _editor.Session.Viewport.Scale;
         Complete(scenario, target, burst: true);
         diagnostic?.Complete(target, inputStamps);
