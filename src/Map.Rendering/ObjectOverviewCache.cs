@@ -277,6 +277,8 @@ public sealed class ObjectOverviewCache : IDisposable
     }
 
     public int Count => _entries.Count;
+    /// <summary>Frames begun on this cache; background detail rasters nobody asked for in the last frame are cancelled.</summary>
+    internal long FrameNumber => _frame;
     public long Bytes { get; private set; }
     public long Hits { get; private set; }
     public long Misses { get; private set; }

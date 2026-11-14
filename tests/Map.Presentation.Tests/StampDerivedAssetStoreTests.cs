@@ -433,6 +433,94 @@ public sealed class StampDerivedAssetStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task Small_mips_of_a_ladder_asset_do_not_wait_for_the_single_large_slot()
+    {
+        await using var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));
+        var owner = ImportOwner(catalog, 1);
+        // The owner's mountain resized in the disposable fixture; the repository file is untouched.
+        using var original = SKBitmap.Decode(catalog.SourcePath(owner));
+        using var large = original.Resize(new SKImageInfo(3000, 2400), new SKSamplingOptions(SKFilterMode.Linear));
+        var path = Path.Combine(_root, "owner-large.png");
+        using (var png = large.Encode(SKEncodedImageFormat.Png, 100))
+        using (var file = File.Create(path)) png.SaveTo(file);
+        var record = catalog.Import(path, new(), DateTimeOffset.UnixEpoch);
+        var depth = AssetCatalog.DetailLadderDepth(record.Width, record.Height);
+        Assert.True(depth > 0);
+        var store = new StampDerivedAssetStore(catalog, Path.Combine(_root, "derived"));
+        try
+        {
+            var header = (await store.Request(record.Sha256).WaitAsync(TimeSpan.FromSeconds(30)))!;
+            // Three finished small results wait together, none taken yet. Before, the second one
+            // waited for the first to be taken: a dense view adopted one such mip per frame.
+            var mips = await Task.WhenAll(Enumerable.Range(1, 3).Select(level => store.RequestPixels(header, depth, level)))
+                .WaitAsync(TimeSpan.FromSeconds(30));
+            Assert.All(mips, mip => { Assert.NotNull(mip.Image); Assert.True(mip.Reserved); Assert.False(mip.LargeReserved); });
+            for (var level = 1; level <= 3; level++)
+                Assert.True(store.TryTakePixels(new(record.Sha256.ToLowerInvariant(), depth, level), out _));
+            foreach (var mip in mips) mip.Image!.Dispose();
+            Assert.Equal(0, store.PendingMips);
+        }
+        finally { store.Dispose(); await store.Completion; }
+    }
+
+    [Fact]
+    public async Task A_preparation_plan_checks_distinct_keys_and_gives_the_same_pixels()
+    {
+        await using var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));
+        var records = Enumerable.Range(1, 6).Select(n => ImportOwner(catalog, n)).ToArray();
+        var document = new MapDocument(DocumentId.New(), "Plan", DateTimeOffset.UnixEpoch,
+            new CanvasDefinition(512, 512, "px", "#FFFFFFFF"),
+            [new BaseColorLayer(LayerId.New(), "Page", true, false, 1, "#FFFFFFFF")]);
+        await using var source = new CatalogStampImageSource(catalog, () => document, () => null,
+            derivedRoot: Path.Combine(_root, "derived")) { MeasureTimings = true };
+        using var baseline = new CatalogStampImageSource(catalog, () => document, () => null);
+        // Thousands of stamps sampling a dozen distinct mips.
+        var random = new Random(5);
+        var stamps = Enumerable.Range(0, 6000).Select(i => (records[i % 6].Sha256, Size: 20 + random.NextDouble() * 60)).ToArray();
+        var plan = source.CreatePreparationPlan()!;
+        plan.Add(stamps.Take(3000).Select(s => (s.Sha256, s.Size, s.Size)));
+        plan.Add(stamps.Skip(3000).Select(s => (s.Sha256, s.Size, s.Size)));
+        Assert.Equal(source.SourceRevision, plan.SourceRevision);
+        Assert.InRange(plan.Bytes, 1, source.PreparationBytes);
+        var ready = false;
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        while (!ready && DateTime.UtcNow < deadline)
+        {
+            using (source.BeginFrame()) ready = plan.Prepare(() => { });
+            if (!ready) await Task.Delay(10);
+        }
+        Assert.True(ready);
+        using (source.BeginFrame())
+        {
+            // The full walk agrees, and every stamp's exact image is the synchronous one.
+            Assert.True(source.PrepareForPixelSizes(stamps.Select(s => (s.Sha256, s.Size, s.Size)), () => { }));
+            Assert.True(plan.Prepare(() => { }));
+            foreach (var (sha, size) in stamps.DistinctBy(s => (s.Sha256, (int)Math.Log2(s.Size))))
+            {
+                using var actual = SKBitmap.FromImage(source.TryGetImageForPixelSize(sha, size, size)!);
+                using var expected = SKBitmap.FromImage(baseline.TryGetImageForPixelSize(sha, size, size)!);
+                Assert.Equal(expected.Bytes, actual.Bytes);
+            }
+        }
+        // A background tile draws from the pinned plan on another thread: the same pixels, no request.
+        IStampImageLease pinned;
+        using (source.BeginFrame()) pinned = plan.Pin()!;
+        using (pinned)
+            await Task.Run(() =>
+            {
+                foreach (var (sha, size) in stamps.DistinctBy(s => (s.Sha256, (int)Math.Log2(s.Size))))
+                {
+                    using var actual = SKBitmap.FromImage(pinned.TryGetImageForPixelSize(sha, size, size)!);
+                    using var expected = SKBitmap.FromImage(baseline.TryGetImageForPixelSize(sha, size, size)!);
+                    Assert.Equal(expected.Bytes, actual.Bytes);
+                }
+                Assert.Equal(source.TryGetImageSize(records[0].Sha256), pinned.TryGetImageSize(records[0].Sha256));
+                Assert.Equal(0, pinned.UnresolvedRequestVersion);
+            });
+        Assert.Equal(0, source.Timings.LoadCalls);
+    }
+
+    [Fact]
     public async Task Existing_ladder_keeps_its_own_pixels_at_odd_dimensions_and_missing_step_falls_back()
     {
         await using var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));

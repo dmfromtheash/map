@@ -819,6 +819,158 @@ public sealed class CatalogStampImageSource(
         return resident;
     }
 
+    /// <summary>The sampled-image shelf: a frame asks for at most this many bytes of tile images at once.</summary>
+    public long PreparationBytes => Math.Max(1, cacheBytes / 4);
+
+    /// <summary>
+    /// A dense tile's stamps reduced once to their distinct pixel keys. A refining frame then checks a few
+    /// thousand keys instead of walking a quarter of a million objects through <see cref="PrepareLocked"/>,
+    /// and a tile whose keys are all resident answers at once until the shelf evicts something.
+    /// </summary>
+    public IStampPreparationPlan? CreatePreparationPlan()
+    {
+        lock (_gate) return _disposed || _derived is null ? null : new PreparationPlan(this, SourceRevision);
+    }
+
+    private sealed class PreparationPlan(CatalogStampImageSource source, long revision) : IStampPreparationPlan
+    {
+        internal readonly HashSet<StampDerivedAssetStore.PixelKey> Keys = [];
+        internal (StampDerivedAssetStore.PixelKey Key, string Name)[]? Names;
+        internal long ReadyAt = -1, CheckedAt = -1;
+        internal (StampDerivedAssetStore.PixelKey Key, string Name)[]? Missing;
+        public long Bytes { get; internal set; }
+        public long SourceRevision => revision;
+        internal readonly Dictionary<string, AssetRecord> Records = new(StringComparer.OrdinalIgnoreCase);
+        public void Add(IEnumerable<(string Sha256, double Width, double Height)> stamps) => source.AddToPlan(this, stamps);
+        public bool Prepare(Action ready) => source.PreparePlan(this, ready);
+        public IStampImageLease? Pin() => source.PinPlan(this);
+    }
+
+    /// <summary>
+    /// The plan's resident images, pinned for a background tile raster: the shelf may evict them meanwhile, but
+    /// they are freed only when the raster lets go. Null while any of them is not resident.
+    /// </summary>
+    private IStampImageLease? PinPlan(PreparationPlan plan)
+    {
+        lock (_gate)
+        {
+            if (_disposed || plan.SourceRevision != SourceRevision) return null;
+            Enter();
+            var images = new Dictionary<StampDerivedAssetStore.PixelKey, SKImage>();
+            foreach (var (pixel, name) in plan.Names ??= [.. plan.Keys.Select(key => (key, PixelName(key)))])
+            {
+                if (ReadyPixels(name) is { } image) images[pixel] = image;
+                // A failed key stays out: the raster comes back incomplete and the frame draws that tile as before.
+                else if (!_decodeFailed.Contains(name)) return null;
+            }
+            var sizes = new Dictionary<string, (int Width, int Height)>(StringComparer.OrdinalIgnoreCase);
+            var occlusion = new Dictionary<string, SKImage>(StringComparer.OrdinalIgnoreCase);
+            foreach (var record in plan.Records.Values)
+            {
+                if (TryGetImageSize(record.Sha256) is { } size) sizes[record.Sha256] = size;
+                // The same resident shape TryGetImageForOcclusion gives the frame, so culling is unchanged.
+                if ((_cache.Get(record.Sha256 + "@1", null) ?? _cache.Get(record.Sha256, null)) is { } shape) occlusion[record.Sha256] = shape;
+            }
+            var held = images.Values.Concat(occlusion.Values).Distinct().ToArray();
+            foreach (var image in held) { _cache.Pin(image); _samples.Pin(image); }
+            _leases++;
+            return new PinnedPlan(this, plan.Records, images, sizes, occlusion, held);
+        }
+    }
+
+    private void EndPinnedPlan(SKImage[] held)
+    {
+        lock (_gate)
+        {
+            _leases--;
+            if (_disposed) { DisposeIfUnused(); return; }
+            foreach (var image in held) { _cache.Unpin(image); _samples.Unpin(image); }
+            Enter();
+            if (!_cache.DeferDisposal) { _cache.DisposeRetired(); _samples.DisposeRetired(); }
+        }
+    }
+
+    /// <summary>What a background tile draws from: a fixed snapshot of one plan, never a request or a decode.</summary>
+    private sealed class PinnedPlan(CatalogStampImageSource source, IReadOnlyDictionary<string, AssetRecord> records,
+        Dictionary<StampDerivedAssetStore.PixelKey, SKImage> images, Dictionary<string, (int Width, int Height)> sizes,
+        Dictionary<string, SKImage> occlusion, SKImage[] held) : IStampImageLease
+    {
+        private int _disposed;
+        public long SourceRevision => source.SourceRevision;
+        public long UnresolvedRequestVersion { get; private set; }
+        public bool LastImageRequestPending { get; private set; }
+        public (int Width, int Height)? TryGetImageSize(string sha256) => sizes.TryGetValue(sha256, out var size) ? size : null;
+        public SKImage? TryGetImage(string sha256) => Miss();
+        public SKImage? TryGetImageForOcclusion(string sha256) => occlusion.GetValueOrDefault(sha256);
+        public SKImage? TryGetReadyImageForPixelSize(string sha256, double width, double height) => null;
+        public SKImage? TryGetImageForPixelSize(string sha256, double width, double height)
+        {
+            LastImageRequestPending = false;
+            return records.TryGetValue(sha256, out var record) && images.TryGetValue(PixelKey(record, width, height), out var image)
+                ? image : Miss();
+        }
+        private SKImage? Miss() { LastImageRequestPending = true; UnresolvedRequestVersion++; return null; }
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) == 0) source.EndPinnedPlan(held);
+        }
+    }
+
+    private void AddToPlan(PreparationPlan plan, IEnumerable<(string Sha256, double Width, double Height)> stamps)
+    {
+        lock (_gate)
+        {
+            AssetRecord? record = null;
+            foreach (var (sha256, width, height) in stamps)
+            {
+                if (record?.Sha256 != sha256) record = catalog.Find(sha256);
+                // As in PrepareLocked: a stamp without a catalog record has nothing to prepare.
+                if (record is null) continue;
+                var pixel = PixelKey(record, width, height);
+                plan.Records.TryAdd(record.Sha256, record);
+                if (plan.Keys.Add(pixel))
+                    plan.Bytes += (long)Math.Max(1, Math.Max(1, record.Width >> pixel.Step) >> pixel.Level)
+                        * Math.Max(1, Math.Max(1, record.Height >> pixel.Step) >> pixel.Level) * 4;
+            }
+            plan.Names = null; plan.Missing = null; plan.CheckedAt = -1;
+        }
+    }
+
+    /// <summary>The <see cref="PrepareLocked"/> contract over a plan's distinct keys.</summary>
+    private bool PreparePlan(PreparationPlan plan, Action ready)
+    {
+        lock (_gate)
+        {
+            if (_disposed) return true;
+            Enter();
+            _derivedReady = ready;
+            if (_derived is not null) _derived.SourceChanged = ready;
+            AdoptDecoded();
+            // Resident keys stay resident until the shelf evicts something or a source changes.
+            var epoch = _cache.Evictions + _samples.Evictions;
+            if (plan.ReadyAt == epoch && plan.SourceRevision == SourceRevision) return true;
+            // Nothing left the shelf since the last check: only the keys that were missing then can have changed.
+            var keys = plan.CheckedAt == epoch && plan.Missing is { } missing ? missing
+                : plan.Names ??= [.. plan.Keys.Select(key => (key, PixelName(key)))];
+            var stillMissing = new List<(StampDerivedAssetStore.PixelKey Key, string Name)>();
+            // At most 512 new requests per check: a cold tile asks for thousands, spread over a few frames.
+            var asked = 0;
+            foreach (var (pixel, name) in keys)
+            {
+                if (ReadyPixels(name) is not null) continue;
+                // Still wanted, so a request already in flight is not cancelled at the end of the frame.
+                _wantedMips.Add(pixel);
+                if (asked >= 512) { stillMissing.Add((pixel, name)); continue; }
+                asked++;
+                if (!_decodeFailed.Contains(name) && !QueuePixels(pixel, ready)) stillMissing.Add((pixel, name));
+            }
+            plan.Missing = [.. stillMissing];
+            plan.CheckedAt = _cache.Evictions + _samples.Evictions;
+            if (stillMissing.Count == 0) plan.ReadyAt = plan.CheckedAt;
+            return stillMissing.Count == 0;
+        }
+    }
+
     private void NotifyDerived(string key, Task task, Action ready)
     {
         if (!_derivedNotifications.Add(key)) return;
@@ -840,9 +992,10 @@ public sealed class CatalogStampImageSource(
 
     private static string SourceName(StampDerivedAssetStore.PixelKey key) => key.Step == 0 ? key.Sha : key.Sha + "@" + key.Step;
     private static string PixelName(StampDerivedAssetStore.PixelKey key) => SourceName(key) + "#" + key.Level;
-    private SKImage? ReadyPixels(StampDerivedAssetStore.PixelKey key)
+    private SKImage? ReadyPixels(StampDerivedAssetStore.PixelKey key) => ReadyPixels(PixelName(key));
+
+    private SKImage? ReadyPixels(string name)
     {
-        var name = PixelName(key);
         if (_pixelRetryAt.TryGetValue(name, out var retry) && _retryClock.GetUtcNow().ToUnixTimeMilliseconds() >= retry)
         { _pixelRetryAt.Remove(name); _decodeFailed.Remove(name); }
         return _samples.Get(name, null) ?? _cache.Get(name, null);

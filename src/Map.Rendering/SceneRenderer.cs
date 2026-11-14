@@ -43,6 +43,19 @@ public interface IStampImageSource
     bool PrepareForPixelSizes(IEnumerable<(string Sha256, double Width, double Height)> stamps, Action ready) => true;
 
     /// <summary>
+    /// A reusable form of <see cref="PrepareForPixelSizes"/> for one area: its stamps are reduced once to the
+    /// distinct images they sample, and every later check visits only those. Null when the source has none;
+    /// the caller then asks <see cref="PrepareForPixelSizes"/> as before. Render thread only.
+    /// </summary>
+    IStampPreparationPlan? CreatePreparationPlan() => null;
+
+    /// <summary>
+    /// How many bytes of sampled images the frame may ask to hold at once (the resident shelf). Areas beyond it
+    /// wait for the ones before them, so a view larger than the shelf never evicts what it is about to draw.
+    /// </summary>
+    long PreparationBytes => long.MaxValue;
+
+    /// <summary>
     /// A view of this source for work off the render thread (style preparation, previews) or on the UI thread. Every
     /// image it hands out stays valid until the lease is disposed, whatever the render thread evicts meanwhile, and
     /// the lease never frees an image the render thread is drawing. A source without its own cache lifetime returns
@@ -55,6 +68,25 @@ public interface IStampImageSource
     /// only when it ends. Null when the source has nothing to defer.
     /// </summary>
     IDisposable? BeginFrame() => null;
+}
+
+/// <summary>See <see cref="IStampImageSource.CreatePreparationPlan"/>.</summary>
+public interface IStampPreparationPlan
+{
+    /// <summary>Adds stamps; may be called in several slices before the first <see cref="Prepare"/>.</summary>
+    void Add(IEnumerable<(string Sha256, double Width, double Height)> stamps);
+    /// <summary>The <see cref="IStampImageSource.PrepareForPixelSizes"/> contract over everything added.</summary>
+    bool Prepare(Action ready);
+    /// <summary>Bytes of the distinct images this plan samples (resident or not).</summary>
+    long Bytes { get; }
+    /// <summary>The source revision the plan was made for; another one needs a new plan.</summary>
+    long SourceRevision { get; }
+    /// <summary>
+    /// After a true <see cref="Prepare"/>: the plan's images as a source any thread may draw from until it is
+    /// disposed (the images stay pinned meanwhile). Null when the source cannot hand them out; the tile is then
+    /// rastered on the frame thread as before. Render thread only.
+    /// </summary>
+    IStampImageLease? Pin() => null;
 }
 
 /// <summary>See <see cref="IStampImageSource.Lease"/>.</summary>
@@ -153,6 +185,16 @@ public sealed class RenderStats
     public double DetailRasterMilliseconds { get; set; }
     /// <summary>Exact object tiles left for a later frame by the settled-frame budget (R05).</summary>
     public int DetailTilesPending { get; set; }
+    /// <summary>Detail tiles handed to a background raster, taken in from one, still waiting for one, and drawn on the frame thread.</summary>
+    public int DetailRastersStarted { get; set; }
+    public int DetailRastersAdopted { get; set; }
+    public int DetailRastersWaiting { get; set; }
+    public int DetailTilesBuiltOnFrame { get; set; }
+    /// <summary>Frame-thread time of dense detail tiles: readiness checks, the tile loop, the cold overview and the seed.</summary>
+    public double DetailReadyMilliseconds { get; set; }
+    public double DetailLoopMilliseconds { get; set; }
+    public double DetailColdMilliseconds { get; set; }
+    public double DetailSeedMilliseconds { get; set; }
     public int GpuDetailTiles { get; set; }
     public long ObjectCacheHits { get; set; }
     public long ObjectCacheMisses { get; set; }
@@ -305,7 +347,8 @@ public enum RenderLodTier
 public sealed class RenderOptions
 {
     /// <summary>Borrowed only during a native frame. Cached detail images remain raster-owned.</summary>
-    public GRContext? GpuContext { get; init; }
+    public GRContext? GpuContext { get => _gpuContext; init => _gpuContext = value; }
+    private GRContext? _gpuContext;
     /// <summary>Draws the map without its Свет section (DEC-057) even when the document has one.</summary>
     public bool DisableLighting { get; init; }
 
@@ -382,6 +425,25 @@ public sealed class RenderOptions
     {
         var copy = ForStyleNames();
         copy.LandWallsOnly = true;
+        return copy;
+    }
+
+    /// <summary>
+    /// The options of a detail tile rastered off the frame thread: CPU only, its own statistics, the images of
+    /// a pinned snapshot, and none of the render-context caches (they belong to the frame thread).
+    /// </summary>
+    internal RenderOptions ForBackgroundTile(IStampImageSource stamps, RenderStats stats)
+    {
+        var copy = (RenderOptions)MemberwiseClone();
+        copy._stamps = stamps;
+        copy._stats = stats;
+        copy._gpuContext = null;
+        copy._objectCache = null;
+        copy._atlasCache = null;
+        copy._overviewPreparation = null;
+        copy._requestRefinedFrame = null;
+        copy._layerImages = null;
+        copy._terrain = null;
         return copy;
     }
 
@@ -511,7 +573,8 @@ public sealed class RenderOptions
 
     /// <summary>Optional editor worker for refining an unchanged terrain after a camera move.</summary>
     public TerrainRefinement? TerrainRefinement { get; init; }
-    public Action? RequestRefinedFrame { get; init; }
+    public Action? RequestRefinedFrame { get => _requestRefinedFrame; init => _requestRefinedFrame = value; }
+    private Action? _requestRefinedFrame;
 
     /// <summary>
     /// Asks for a frame a little later (about 24 a second): what only the living hex world needs.
@@ -520,24 +583,28 @@ public sealed class RenderOptions
     public Action? RequestAmbientFrame { get; init; }
 
     /// <summary>Render-context-local cache used only by the editor overview tier.</summary>
-    public ObjectOverviewCache? ObjectCache { get; init; }
+    public ObjectOverviewCache? ObjectCache { get => _objectCache; init => _objectCache = value; }
+    private ObjectOverviewCache? _objectCache;
 
     /// <summary>Editor-owned, bounded background preparation. Null keeps the synchronous reference/export path.</summary>
-    public SceneRenderer.OverviewPreparation? OverviewPreparation { get; init; }
+    public SceneRenderer.OverviewPreparation? OverviewPreparation { get => _overviewPreparation; init => _overviewPreparation = value; }
+    private SceneRenderer.OverviewPreparation? _overviewPreparation;
 
     /// <summary>
     /// Where the per-zoom-bucket stamp atlases of dense tiles live: a few large images with a
     /// budget of their own, so one atlas cannot evict a screen of tiles. Falls back to
     /// <see cref="ObjectCache"/> when not set.
     /// </summary>
-    public ObjectOverviewCache? AtlasCache { get; init; }
+    public ObjectOverviewCache? AtlasCache { get => _atlasCache; init => _atlasCache = value; }
+    private ObjectOverviewCache? _atlasCache;
 
     public RenderLodTier LodTier { get; init; } = RenderLodTier.Exact;
 
     /// <summary>Editor preparation budget between indivisible detail tiles, including fallback seeds.</summary>
     public double DetailTileBudgetMilliseconds { get; init; } = 8;
 
-    public IStampImageSource? Stamps { get; init; }
+    public IStampImageSource? Stamps { get => _stamps; init => _stamps = value; }
+    private IStampImageSource? _stamps;
 
     public StrokePreview? Preview { get => _liveSuppressed ? null : _preview; init => _preview = value; }
     private StrokePreview? _preview;
@@ -3555,6 +3622,24 @@ public static partial class SceneRenderer
             basis = default; tail = [];
             return false;
         }
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<(int X, int Y, int Zoom), DetailTilePlan> _plans = new();
+        /// <summary>The tile's plan for this source and its revision; an unchanged tile reuses its previous revision's.</summary>
+        public DetailTilePlan? Plan(int x, int y, int zoom, WorldBounds area, IStampImageSource source)
+        {
+            if (_plans.TryGetValue((x, y, zoom), out var own))
+                return Valid(own) ? own : null;
+            if (_parent is not null && !_changed.Any(b => b.Intersects(area))
+                && _parent.Plan(x, y, zoom, area, source) is { Complete: true } inherited)
+                return _plans[(x, y, zoom)] = inherited;
+            return null;
+            bool Valid(DetailTilePlan plan) => ReferenceEquals(plan.Source, source) && plan.Plan.SourceRevision == source.SourceRevision;
+        }
+        public DetailTilePlan AddPlan(int x, int y, int zoom, DetailTilePlan plan)
+        {
+            // A long zoom visits many buckets; a few hundred tiles of plans are the working set.
+            if (_plans.Count >= 512) _plans.Clear();
+            return _plans[(x, y, zoom)] = plan;
+        }
         public ulong Version(int x, int y, int zoom, WorldBounds bounds, long missingRevision = 0) => _versions.GetOrAdd((x, y, zoom), key =>
         {
             if (_parent is not null && !_changed.Any(b => b.Intersects(bounds))) return _parent.Version(x, y, zoom, bounds);
@@ -3565,7 +3650,7 @@ public static partial class SceneRenderer
     }
 
     private static bool DrawDetailedStampTiles(SKCanvas canvas, MapDocument document, ObjectLayer layer, WorldBounds view,
-        RenderOptions options, int? prepareBucket = null)
+        RenderOptions options, int? prepareBucket = null, DetailPreparation? preparation = null)
     {
         options.ObjectCache!.BindGpuContext(options.GpuContext?.Handle ?? IntPtr.Zero);
         options.AtlasCache?.BindGpuContext(options.GpuContext?.Handle ?? IntPtr.Zero);
@@ -3594,99 +3679,92 @@ public static partial class SceneRenderer
             }
         }
         using var batchScratch = new StampBatchScratch();
-        // Seed a fallback with the same stamp evaluator, without painting under exact tiles.
-        // On a giant map a whole-page seed visits every object before a local view can appear.
-        // Bound that preparation to the view at half its detail scale; later pans seed their own
-        // uncovered area. Small pages retain the cheap whole-page fallback.
         var canRefine = prepareBucket is null && !options.IsExport && options.RequestRefinedFrame is not null;
         var page = new WorldBounds(0, 0, document.Canvas.Width, document.Canvas.Height);
         var missingRevision = options.Stamps?.MissingRevision ?? 0;
         var fallbackBucket = canRefine ? NearestKeptBucket(layer, view, bucket, revisions, cache, missingRevision) : null;
-        if (canRefine && !HasKeptTiles(layer, view, bucket, revisions, cache, missingRevision)
-            && !StampImagesReady(layer, AlignedDetailView(view, worldSize), scale, options))
+        var frame = preparation ?? new DetailPreparation();
+        if (preparation is null) SweepDetailRasters(cache);
+        // Each tile of the view is drawn as soon as its own images are ready (Chromium's tile manager
+        // rasters a tile once the decodes of that tile are locked, not the whole viewport's). The tiles
+        // are asked centre first, so the middle of the screen is queued before its edges, and only as
+        // many as the image shelf holds at once: a view larger than the shelf fills from the middle out
+        // and never evicts the images of the tile it is about to draw.
+        Dictionary<(int X, int Y), bool>? tileReady = null;
+        var phase = System.Diagnostics.Stopwatch.GetTimestamp();
+        if (canRefine)
         {
-            if (fallbackBucket is not { } kept || !TryDrawKeptTiles(canvas, layer, view, kept, revisions, cache, options))
-                DrawOverviewObjects(canvas, document, layer, view, options, fallbackScale: Math.Min(.02, options.ViewScale));
-            if (options.Stats is { } pending) pending.DetailTilesPending++;
-            options.RequestRefinedFrame?.Invoke();
-            return false;
-        }
-        if (canRefine && fallbackBucket is null)
-        {
-            var overviewBucket = (int)Math.Floor(Math.Log2(512d / Math.Max(document.Canvas.Width, document.Canvas.Height)) * 4);
-            var preparationView = page;
-            if (overviewBucket < bucket - 8)
+            tileReady = [];
+            var centreX = (view.Left + view.Right) / (2 * worldSize) - .5;
+            var centreY = (view.Top + view.Bottom) / (2 * worldSize) - .5;
+            foreach (var (x, y) in DetailTiles(view, worldSize).OrderBy(tile =>
+                Math.Pow(tile.X - centreX, 2) + Math.Pow(tile.Y - centreY, 2)))
             {
-                overviewBucket = bucket - 4;
-                preparationView = view;
-            }
-            if (overviewBucket < bucket)
-            {
-                var preparationScale = Math.Pow(2, overviewBucket / 4d);
-                if (!StampImagesReady(layer, AlignedDetailView(preparationView, 512 / preparationScale), preparationScale, options))
-                {
-                    DrawOverviewObjects(canvas, document, layer, view, options, fallbackScale: Math.Min(.02, options.ViewScale));
-                    if (options.Stats is { } pending) pending.DetailTilesPending++;
-                    options.RequestRefinedFrame?.Invoke();
-                    return false;
-                }
-                if (!DrawDetailedStampTiles(canvas, document, layer, preparationView, options, overviewBucket))
-                {
-                    // Preparing a fallback used to bypass the frame budget and build the whole
-                    // view synchronously. Keep the established overview until its seed is ready.
-                    DrawOverviewObjects(canvas, document, layer, view, options, fallbackScale: Math.Min(.02, options.ViewScale));
-                    if (options.Stats is { } pending) pending.DetailTilesPending++;
-                    options.RequestRefinedFrame?.Invoke();
-                    return false;
-                }
-                fallbackBucket = overviewBucket;
+                var bounds = new WorldBounds(x * worldSize, y * worldSize, (x + 1) * worldSize, (y + 1) * worldSize);
+                if (cache.TryGet(layer.Id, x, y, DetailZoomKey(layer, bucket),
+                    revisions.Version(x, y, bucket, Expand(bounds, 1 / scale), missingRevision), out _)) continue;
+                tileReady[(x, y)] = TileImagesReady(layer, revisions, x, y, bucket, bounds, scale, options, frame);
             }
         }
+        if (options.Stats is { } readyStats) readyStats.DetailReadyMilliseconds += Elapsed(ref phase);
         var budgetTiles = (canRefine || prepareBucket is not null && !options.IsExport && options.RequestRefinedFrame is not null)
             && cache.BeginDetailView(layer.Id, DetailZoomKey(layer, bucket), view, worldSize, 514L * 514 * 4);
-        var budgetStarted = System.Diagnostics.Stopwatch.GetTimestamp();
-        var builtThisFrame = 0;
         var deferredTiles = 0;
+        List<WorldBounds>? coldTiles = null;
         for (var y = (int)Math.Floor(view.Top / worldSize); y <= (int)Math.Floor(view.Bottom / worldSize); y++)
         for (var x = (int)Math.Floor(view.Left / worldSize); x <= (int)Math.Floor(view.Right / worldSize); x++)
         {
             var bounds = new WorldBounds(x * worldSize, y * worldSize, (x + 1) * worldSize, (y + 1) * worldSize);
             var revision = revisions.Version(x, y, bucket, Expand(bounds, 1 / scale), missingRevision);
             var exactKept = cache.TryGet(layer.Id, x, y, DetailZoomKey(layer, bucket), revision, out _);
-            var budgetSpent = budgetTiles && builtThisFrame > 0
-                && System.Diagnostics.Stopwatch.GetElapsedTime(budgetStarted).TotalMilliseconds >= options.DetailTileBudgetMilliseconds;
+            var budgetSpent = budgetTiles && frame.Built > 0
+                && System.Diagnostics.Stopwatch.GetElapsedTime(frame.Started).TotalMilliseconds >= options.DetailTileBudgetMilliseconds;
             if (!exactKept && prepareBucket is not null && budgetSpent)
             {
                 deferredTiles++;
                 continue;
             }
-            // A tile also waits while the images it samples at this zoom are still being decoded
-            // off the render thread; the neighbouring level stands in for it meanwhile.
-            if (!exactKept && fallbackBucket is { } fallback
-                && (budgetSpent
-                    || !StampImagesReady(layer, bounds, scale, options)))
+            // A tile waits while the images it samples at this zoom are still being prepared off
+            // the render thread, or while this frame's budget is spent: the neighbouring level stands
+            // in for it, and where none is kept, the overview of its objects.
+            // A tile whose images are ready is rastered by a background worker from a pinned snapshot of them;
+            // the frame only adopts finished tiles, a couple per frame (Chromium rasters off the compositor too).
+            var background = BackgroundTile.FrameThread;
+            ObjectOverviewCacheResult adopted = default;
+            if (!exactKept && !options.IsExport && options.RequestRefinedFrame is not null
+                && (prepareBucket is not null || tileReady!.GetValueOrDefault((x, y), true)))
+                background = TryBackgroundTile(document, layer, revisions, x, y, bucket, bounds, scale, revision, cache, options,
+                    frame, prepareBucket is not null, out adopted);
+            if (background == BackgroundTile.Waiting && prepareBucket is not null)
             {
-                canvas.Save();
-                canvas.ClipRect(ToRect(bounds));
-                // A tile may straddle the document boundary; only its part inside the page needs
-                // coverage. If anything was evicted, build exactly rather than leave a hole.
-                var covered = TryIntersect(bounds, page, out var inside)
-                    && TryDrawKeptTiles(canvas, layer, inside, fallback, revisions, cache, options);
-                canvas.Restore();
-                if (covered)
-                {
-                    deferredTiles++;
-                    if (options.Stats is { } pending) pending.DetailTilesPending++;
-                    options.RequestRefinedFrame?.Invoke();
-                    continue;
-                }
+                deferredTiles++;
+                continue;
             }
-            if (!exactKept) builtThisFrame++;
+            if (!exactKept && canRefine && (background == BackgroundTile.Waiting || background == BackgroundTile.FrameThread
+                && (budgetSpent || tileReady!.GetValueOrDefault((x, y), true) == false)))
+            {
+                var covered = false;
+                if (fallbackBucket is { } fallback)
+                {
+                    canvas.Save();
+                    canvas.ClipRect(ToRect(bounds));
+                    // A tile may straddle the document boundary; only its part inside the page needs coverage.
+                    covered = TryIntersect(bounds, page, out var inside)
+                        && TryDrawKeptTiles(canvas, layer, inside, fallback, revisions, cache, options);
+                    canvas.Restore();
+                }
+                if (!covered) (coldTiles ??= []).Add(bounds);
+                deferredTiles++;
+                if (options.Stats is { } pending) pending.DetailTilesPending++;
+                options.RequestRefinedFrame?.Invoke();
+                continue;
+            }
+            if (!exactKept && background != BackgroundTile.Adopted) { frame.Built++; if (options.Stats is { } onFrame) onFrame.DetailTilesBuiltOnFrame++; }
             var objectCount = 0; var culledCount = 0;
             var drawnBefore = options.Stats?.ObjectsDrawn ?? 0;
             var unresolvedBefore = options.Stats?.UnresolvedImages ?? 0;
             var requestsBefore = options.Stamps?.UnresolvedRequestVersion ?? 0;
-            var cached = cache.GetOrCreate(layer.Id, x, y, DetailZoomKey(layer, bucket), revision, () =>
+            var cached = background == BackgroundTile.Adopted ? adopted : cache.GetOrCreate(layer.Id, x, y, DetailZoomKey(layer, bucket), revision, () =>
             {
                 // Preserve the established platform pixel layout on both paths: changing it
                 // alters Skia's premultiplied rounding when translucent tiles are appended.
@@ -3704,28 +3782,8 @@ public static partial class SceneRenderer
                     using var copy = new SKPaint { BlendMode = SKBlendMode.Src };
                     target.DrawImage(basis.Image, 0, 0, copy);
                 }
-                target.Translate(1, 1);
-                target.Scale((float)scale);
-                target.Translate((float)-bounds.Left, (float)-bounds.Top);
-                var prepareStarted = System.Diagnostics.Stopwatch.GetTimestamp();
-                var candidates = incremental ? appended : ObjectSpatialIndex.For(layer).Query(Expand(bounds, 1 / scale));
-                if (layer.SublayerStates.Any(s => !s.Visible)) candidates = candidates.Where(o => layer.StateFor(o.Sublayer).Visible).ToArray();
-                var drawOrder = SceneGeometry.InDrawOrder(layer, candidates);
-                var ordered = StampOcclusion.Cull(drawOrder, Expand(bounds, 1 / scale), scale, options.Stamps);
-                objectCount = (incremental ? basis.ObjectCount : 0) + ordered.Count(o => o.Visible);
-                culledCount = (incremental ? basis.CulledCount : 0) + candidates.Count - ordered.Count;
-                if (options.Stats is { } preparation)
-                    preparation.DetailPrepareMilliseconds += System.Diagnostics.Stopwatch.GetElapsedTime(prepareStarted).TotalMilliseconds;
-                var rasterStarted = System.Diagnostics.Stopwatch.GetTimestamp();
-                AreaBeautyRenderer.DrawMasses(target, drawOrder, options);
-                if (!TryDrawDenseAtlas(target, ordered, layer.Id, bucket, cache, options, batchScratch))
-                for (var i = 0; i < ordered.Count; i++)
-                {
-                    if (!ordered[i].Visible) continue;
-                    var batch = TryDrawStampBatch(target, ordered, i, options, batchScratch);
-                    if (batch > 0) i += batch - 1;
-                    else DrawObject(target, ordered[i], document.StampForeground, options);
-                }
+                (objectCount, culledCount) = DrawDetailTileObjects(target, document, layer, bounds, scale, bucket,
+                    incremental ? appended : null, basis, cache, options, batchScratch);
                 var snapshot = surface.Snapshot();
                 // Keep the finished texture on the context that built it. Reading every new
                 // tile back to the CPU and uploading it again stalled each cold zoom level.
@@ -3734,8 +3792,6 @@ public static partial class SceneRenderer
                 {
                     if (options.Stats is { } gpuStats) gpuStats.GpuDetailTiles++;
                 }
-                if (options.Stats is { } raster)
-                    raster.DetailRasterMilliseconds += System.Diagnostics.Stopwatch.GetElapsedTime(rasterStarted).TotalMilliseconds;
                 return snapshot;
             }, () => (objectCount, culledCount), fallback: prepareBucket is not null,
                 keep: () => (options.Stats?.UnresolvedImages ?? 0) == unresolvedBefore
@@ -3754,18 +3810,159 @@ public static partial class SceneRenderer
                 }
             }
         }
+        if (options.Stats is { } loopStats) loopStats.DetailLoopMilliseconds += Elapsed(ref phase);
+        if (coldTiles is not null)
+        {
+            // Tiles with neither exact nor neighbouring pixels show the overview of their objects.
+            canvas.Save();
+            using var cold = new SKPath();
+            foreach (var bounds in coldTiles) cold.AddRect(ToRect(bounds));
+            canvas.ClipPath(cold, antialias: false);
+            DrawOverviewObjects(canvas, document, layer, view, options, fallbackScale: Math.Min(.02, options.ViewScale));
+            canvas.Restore();
+        }
+        // Seed a coarse fallback with the same stamp evaluator, without painting under exact tiles:
+        // the level a later pan or zoom shows while its own detail arrives. It is asked after the
+        // view (SOON after NOW) and built from what this frame's budget leaves, so it never delays
+        // the exact tiles. On a giant map a whole-page seed visits every object before a local view
+        // can appear: bound it to the view at half its detail scale; small pages seed the whole page.
+        if (options.Stats is { } coldStats) coldStats.DetailColdMilliseconds += Elapsed(ref phase);
+        if (canRefine && fallbackBucket is null)
+        {
+            var overviewBucket = (int)Math.Floor(Math.Log2(512d / Math.Max(document.Canvas.Width, document.Canvas.Height)) * 4);
+            var preparationView = page;
+            if (overviewBucket < bucket - 8)
+            {
+                overviewBucket = bucket - 4;
+                preparationView = view;
+            }
+            if (overviewBucket < bucket)
+            {
+                var preparationScale = Math.Pow(2, overviewBucket / 4d);
+                var preparationSize = 512 / preparationScale;
+                var seedReady = true;
+                foreach (var (x, y) in DetailTiles(preparationView, preparationSize))
+                {
+                    var bounds = new WorldBounds(x * preparationSize, y * preparationSize, (x + 1) * preparationSize, (y + 1) * preparationSize);
+                    if (cache.TryGet(layer.Id, x, y, DetailZoomKey(layer, overviewBucket),
+                        revisions.Version(x, y, overviewBucket, Expand(bounds, 1 / preparationScale), missingRevision), out _)) continue;
+                    seedReady &= TileImagesReady(layer, revisions, x, y, overviewBucket, bounds, preparationScale, options, frame);
+                }
+                // The seed is what a later pan shows while its own detail arrives: the view counts as refining until
+                // it is kept too, although the exact tiles are drawn as soon as they are ready.
+                if (!seedReady || !DrawDetailedStampTiles(canvas, document, layer, preparationView, options, overviewBucket, frame))
+                {
+                    if (options.Stats is { } pending) pending.DetailTilesPending++;
+                    options.RequestRefinedFrame?.Invoke();
+                }
+                // The seed borrowed the refinement lease; an unfinished view takes it back.
+                if (budgetTiles && deferredTiles > 0)
+                    cache.BeginDetailView(layer.Id, DetailZoomKey(layer, bucket), view, worldSize, 514L * 514 * 4);
+            }
+        }
+        if (canRefine && options.Stats is { } seedStats) seedStats.DetailSeedMilliseconds += Elapsed(ref phase);
         if (canRefine && deferredTiles == 0) cache.CompleteDetailView(layer.Id);
         if (options.Stats is { } finalStats)
         { finalStats.ObjectCacheHits += cache.Hits - hits; finalStats.ObjectCacheMisses += cache.Misses - misses; }
         return deferredTiles == 0;
     }
 
+    private static double Elapsed(ref long since)
+    {
+        var now = System.Diagnostics.Stopwatch.GetTimestamp();
+        var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(since, now).TotalMilliseconds;
+        since = now;
+        return elapsed;
+    }
+
+    private static IEnumerable<(int X, int Y)> DetailTiles(WorldBounds view, double worldSize)
+    {
+        for (var y = (int)Math.Floor(view.Top / worldSize); y <= (int)Math.Floor(view.Bottom / worldSize); y++)
+        for (var x = (int)Math.Floor(view.Left / worldSize); x <= (int)Math.Floor(view.Right / worldSize); x++)
+            yield return (x, y);
+    }
+
+    /// <summary>
+    /// One frame's preparation of detail tiles, shared by the view and its seed: one tile build budget
+    /// (the seed gets what the view leaves), the tiles adopted from background rasters, and the bytes of images asked so far.
+    /// </summary>
+    private sealed class DetailPreparation
+    {
+        public readonly long Started = System.Diagnostics.Stopwatch.GetTimestamp();
+        public int Built;
+        /// <summary>Background tiles taken into the cache this frame: each is a texture upload on its first draw.</summary>
+        public int Adopted;
+        public long Bytes;
+        public int Prepared;
+        public double PrepareMilliseconds;
+        public const double PrepareBudgetMilliseconds = 3;
+    }
+
+    /// <summary>A tile's reduced image requests, kept per layer revision and tile (see <see cref="IStampPreparationPlan"/>).</summary>
+    private sealed class DetailTilePlan(IStampImageSource source, IStampPreparationPlan plan)
+    {
+        public IStampImageSource Source { get; } = source;
+        public IStampPreparationPlan Plan { get; } = plan;
+        /// <summary>Set by the background worker once every stamp of the tile is in the plan.</summary>
+        public volatile bool Complete;
+        public int Building;
+    }
+
+    /// <summary>
+    /// Whether one tile's stamps can be drawn without decoding on this thread. Its stamps are reduced once to
+    /// the distinct images they sample, by a background worker; later frames check only those images, so a
+    /// refining frame no longer walks every object of the view several times.
+    /// </summary>
+    private static bool TileImagesReady(ObjectLayer layer, DetailTileRevisions revisions, int x, int y, int bucket,
+        WorldBounds bounds, double scale, RenderOptions options, DetailPreparation frame)
+    {
+        if (options.Stamps is not { } stamps || options.RequestRefinedFrame is not { } ready) return true;
+        var area = Expand(bounds, 1 / scale);
+        var tile = revisions.Plan(x, y, bucket, area, stamps);
+        if (tile is null)
+        {
+            if (stamps.CreatePreparationPlan() is not { } created) return StampImagesReady(layer, bounds, scale, options);
+            tile = revisions.AddPlan(x, y, bucket, new DetailTilePlan(stamps, created));
+        }
+        if (!tile.Complete)
+        {
+            // The query and the reduction walk every object of the tile (a whole page for the seed): a background
+            // worker does it, in slices so the source's lock is never held for long against the frame.
+            if (Interlocked.Exchange(ref tile.Building, 1) == 0)
+            {
+                var headroom = options.IsExport ? double.PositiveInfinity : StampDetailHeadroom;
+                var pixelScale = Math.Min(scale, headroom);
+                QueueDetailWork(() =>
+                {
+                    try
+                    {
+                        var stamped = ObjectSpatialIndex.For(layer).Query(area).Where(o => o.Visible && o.Stamp is not null).ToArray();
+                        for (var start = 0; start < stamped.Length; start += 4096)
+                            tile.Plan.Add(new ArraySegment<SceneObject>(stamped, start, Math.Min(4096, stamped.Length - start))
+                                .Select(o => (o.Stamp!.AssetSha256, o.Width * pixelScale, o.Height * pixelScale)));
+                        tile.Complete = true;
+                    }
+                    finally { if (!tile.Complete) Volatile.Write(ref tile.Building, 0); }
+                    ready();
+                });
+            }
+            return false;
+        }
+        // Areas past the shelf wait for the ones before them (the first one always goes).
+        if (frame.Bytes > 0 && frame.Bytes + tile.Plan.Bytes > stamps.PreparationBytes) return false;
+        // Checking a plan that is not ready visits its missing keys: a few thousand per tile. After the first
+        // tile, only while this frame's 3 ms of checks last; the rest are asked again next frame.
+        if (frame.Prepared > 0 && frame.PrepareMilliseconds >= DetailPreparation.PrepareBudgetMilliseconds) return false;
+        frame.Bytes += tile.Plan.Bytes;
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        var resident = tile.Plan.Prepare(ready);
+        frame.Prepared++;
+        frame.PrepareMilliseconds += System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+        return resident;
+    }
+
     /// <summary>The cache slot of exact object tiles: a depth-sorted layer (R10) keeps its own tiles.</summary>
     private static int DetailZoomKey(ObjectLayer layer, int bucket) => (layer.Effects.DepthSort ? 40000 : 10000) + bucket;
-
-    private static WorldBounds AlignedDetailView(WorldBounds view, double tileSize) => new(
-        Math.Floor(view.Left / tileSize) * tileSize, Math.Floor(view.Top / tileSize) * tileSize,
-        (Math.Floor(view.Right / tileSize) + 1) * tileSize, (Math.Floor(view.Bottom / tileSize) + 1) * tileSize);
 
     /// <summary>Whether a tile's stamps can be drawn without decoding on this thread (see <see cref="IStampImageSource.PrepareForPixelSizes"/>).</summary>
     private static bool StampImagesReady(ObjectLayer layer, WorldBounds bounds, double scale, RenderOptions options) =>
@@ -3835,10 +4032,47 @@ public static partial class SceneRenderer
     private static int TryDrawStampBatch(SKCanvas canvas, IReadOnlyList<SceneObject> objects, int start,
         RenderOptions options, StampBatchScratch? scratch = null)
     {
+        var count = StampBatchLength(canvas.TotalMatrix, objects, start, options, out var image);
+        if (count == 0) return 0;
+        var (transforms, sources, colors) = scratch?.Get(count)
+            ?? (new SKRotationScaleMatrix[count], new SKRect[count], new SKColor[count]);
+        for (var i = 0; i < count; i++)
+        {
+            var item = objects[start + i];
+            var angle = item.RotationDegrees * Math.PI / 180;
+            var scale = item.Width / image!.Width;
+            var cos = scale * Math.Cos(angle); var sin = scale * Math.Sin(angle);
+            transforms[i] = new((float)cos, (float)sin,
+                (float)(item.X + item.Width / 2 - cos * image.Width / 2 + sin * image.Height / 2),
+                (float)(item.Y + item.Height / 2 - sin * image.Width / 2 - cos * image.Height / 2));
+            sources[i] = new(0, 0, image.Width, image.Height);
+            colors[i] = SKColors.White.WithAlpha(Alpha(item.ObjectOpacity));
+        }
+        using var ownedPaint = scratch is null
+            ? new SKPaint { IsAntialias = true, BlendMode = SKBlendMode.SrcOver } : null;
+        var paint = scratch?.Paint ?? ownedPaint!;
+        canvas.DrawAtlas(image!, sources, transforms, colors, SKBlendMode.Modulate,
+            new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear), paint);
+        if (options.Stats is { } stats)
+        {
+            stats.DrawCalls++; stats.StampAtlasBatches++; stats.ObjectsDrawn += count; stats.ExactObjects += count;
+            for (var i = 0; i < count; i++) stats.RecordExactObject(objects[start + i]);
+        }
+        return count;
+    }
+
+    /// <summary>
+    /// How many stamps from <paramref name="start"/> <see cref="TryDrawStampBatch"/> draws as one batch (0: the
+    /// first one alone, through <see cref="DrawObject"/>). A background tile piece uses it to skip whole runs
+    /// outside its part without changing which stamps go together.
+    /// </summary>
+    private static int StampBatchLength(SKMatrix canvasMatrix, IReadOnlyList<SceneObject> objects, int start,
+        RenderOptions options, out SKImage? image)
+    {
+        image = null;
         var first = objects[start];
         if (!Compatible(first) || options.Stamps is not { } stamps
             || stamps.TryGetImageSize(first.Stamp!.AssetSha256) is not { } size) return 0;
-        var canvasMatrix = canvas.TotalMatrix;
         var pixelScale = Math.Sqrt(canvasMatrix.ScaleX * canvasMatrix.ScaleX + canvasMatrix.SkewY * canvasMatrix.SkewY);
         // Skia's raster atlas shader omits mipmap sampling. Keep the independent DrawImage
         // evaluator for minified CPU stamps; the native GPU atlas honours the sampling contract.
@@ -3859,40 +4093,17 @@ public static partial class SceneRenderer
         // consecutive run. Otherwise an appended cache tile changes its pixels when the same
         // stamps are later rebuilt as an atlas batch (notably at fractional detail scales).
         if (count == 0 || (count == 1 && options.GpuContext is null)) return 0;
-        var image = stamps.TryGetImageForPixelSize(first.Stamp!.AssetSha256,
+        var found = stamps.TryGetImageForPixelSize(first.Stamp!.AssetSha256,
             DetailPixels(first.Width, pixelScale, options), DetailPixels(first.Height, pixelScale, options));
-        if (image is null) RecordUnresolvedImage(options, stamps.LastImageRequestPending);
-        var fallback = image is null ? stamps.TryGetReadyImageForPixelSize(first.Stamp!.AssetSha256,
+        if (found is null) RecordUnresolvedImage(options, stamps.LastImageRequestPending);
+        var fallback = found is null ? stamps.TryGetReadyImageForPixelSize(first.Stamp!.AssetSha256,
             DetailPixels(first.Width, pixelScale, options), DetailPixels(first.Height, pixelScale, options)) : null;
-        image ??= fallback;
-        if (image is null) return 0;
+        found ??= fallback;
+        if (found is null) return 0;
         // Odd-sized source images round their mip width and height independently. DrawAtlas
         // has only a uniform scale; DrawImage preserves the exact rectangle in this case.
-        if (Math.Abs(first.Width / image.Width - first.Height / image.Height) > 0.000001) return 0;
-        var (transforms, sources, colors) = scratch?.Get(count)
-            ?? (new SKRotationScaleMatrix[count], new SKRect[count], new SKColor[count]);
-        for (var i = 0; i < count; i++)
-        {
-            var item = objects[start + i];
-            var angle = item.RotationDegrees * Math.PI / 180;
-            var scale = item.Width / image.Width;
-            var cos = scale * Math.Cos(angle); var sin = scale * Math.Sin(angle);
-            transforms[i] = new((float)cos, (float)sin,
-                (float)(item.X + item.Width / 2 - cos * image.Width / 2 + sin * image.Height / 2),
-                (float)(item.Y + item.Height / 2 - sin * image.Width / 2 - cos * image.Height / 2));
-            sources[i] = new(0, 0, image.Width, image.Height);
-            colors[i] = SKColors.White.WithAlpha(Alpha(item.ObjectOpacity));
-        }
-        using var ownedPaint = scratch is null
-            ? new SKPaint { IsAntialias = true, BlendMode = SKBlendMode.SrcOver } : null;
-        var paint = scratch?.Paint ?? ownedPaint!;
-        canvas.DrawAtlas(image, sources, transforms, colors, SKBlendMode.Modulate,
-            new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear), paint);
-        if (options.Stats is { } stats)
-        {
-            stats.DrawCalls++; stats.StampAtlasBatches++; stats.ObjectsDrawn += count; stats.ExactObjects += count;
-            for (var i = 0; i < count; i++) stats.RecordExactObject(objects[start + i]);
-        }
+        if (Math.Abs(first.Width / found.Width - first.Height / found.Height) > 0.000001) return 0;
+        image = found;
         return count;
 
         static bool Compatible(SceneObject item) => item.Visible && item.Kind == SceneObjectKind.Stamp
@@ -5967,6 +6178,26 @@ public static partial class SceneRenderer
     /// <summary>The unchanged overview tint evaluator, also used by content-keyed image sources.</summary>
     public static SKColor StampOverviewColor(SKImage image) => StampOcclusion.Color(image);
 
+    private sealed record LocalAssetSet(WorldBounds Area, HashSet<string> Shas);
+    private static readonly ConditionalWeakTable<ObjectLayer, LocalAssetSet> LocalAssetSets = [];
+
+    /// <summary>
+    /// The assets of the objects in an area, widened to whole spatial cells and kept for the layer revision:
+    /// a refining or slowly panning view asks the same cells every frame, and walking a quarter of a million
+    /// objects for them each time was most of a cold dense frame. A superset only adds nearby colours.
+    /// </summary>
+    private static HashSet<string> LocalAssets(ObjectLayer layer, WorldBounds area)
+    {
+        const double cell = ObjectSpatialIndex.CellSize;
+        var aligned = new WorldBounds(Math.Floor(area.Left / cell) * cell, Math.Floor(area.Top / cell) * cell,
+            (Math.Floor(area.Right / cell) + 1) * cell, (Math.Floor(area.Bottom / cell) + 1) * cell);
+        if (LocalAssetSets.TryGetValue(layer, out var kept) && kept.Area == aligned) return kept.Shas;
+        var shas = ObjectSpatialIndex.For(layer).Query(aligned)
+            .Where(item => item.Stamp is not null).Select(item => item.Stamp!.AssetSha256).ToHashSet(StringComparer.Ordinal);
+        LocalAssetSets.AddOrUpdate(layer, new LocalAssetSet(aligned, shas));
+        return shas;
+    }
+
     private static void DrawOverviewObjects(
         SKCanvas canvas,
         MapDocument document,
@@ -5996,8 +6227,7 @@ public static partial class SceneRenderer
         if (preparation is not null) palette = prepared!.Palette;
         else if (fallbackScale is { } localScale)
         {
-            var localAssets = ObjectSpatialIndex.For(layer).Query(Expand(view, 1 / Math.Max(.001, localScale)))
-                .Where(item => item.Stamp is not null).Select(item => item.Stamp!.AssetSha256).ToHashSet(StringComparer.Ordinal);
+            var localAssets = LocalAssets(layer, Expand(view, 1 / Math.Max(.001, localScale)));
             var shas = document.Assets.Where(asset => plan.UsesAsset(asset.Sha256) && localAssets.Contains(asset.Sha256))
                 .Select(asset => asset.Sha256).ToArray();
             if (options.RequestRefinedFrame is { } ready && options.Stamps is { } source

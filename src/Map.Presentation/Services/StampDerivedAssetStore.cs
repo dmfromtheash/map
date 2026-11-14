@@ -97,10 +97,13 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
         public bool Started { get; set; }
         public Task<Mip> Task { get; set; } = null!;
     }
-    private readonly SemaphoreSlim _mipSlots = new(8);
+    // Finished small results waiting for the canvas: at most 64 × 256² × 4 B = 16 MiB. The canvas adopts them
+    // under its 2 ms budget, about a hundred per frame; eight slots let a dense view take only eight per frame.
+    private const int CompactMipSide = 256;
+    private readonly SemaphoreSlim _mipSlots = new(64);
     private readonly SemaphoreSlim _mipReader = new(1);
     // At most one completed large raster can wait for the canvas. Small results retain
-    // their eight slots, so a large upload never fills memory with eight 128 MiB masters.
+    // their own slots, so a large upload never fills memory with many 128 MiB masters.
     private readonly SemaphoreSlim _largeSlot = new(1);
     private SKImage? _preparedSource;
     private readonly long _preparedSourceByteCapacity;
@@ -307,7 +310,12 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
             var record = _catalog.Find(header.Sha);
             var small = record is not null && AssetCatalog.DetailLadderDepth(record.Width, record.Height) == 0
                 && key.Step == 0 && key.Level >= header.FirstMip && key.Level < header.FirstMip + header.MipCount;
-            if (small) { await _mipSlots.WaitAsync(request.Stop.Token).ConfigureAwait(false); reserved = true; }
+            // The single large slot bounds the memory of finished rasters waiting for the canvas. A small mip of a
+            // ladder asset is prepared from its source like a master, but it is as small as any thumbnail: it waits
+            // in a small slot. Holding every 8 px mip of a big asset to one per frame starved a dense view.
+            var compact = small || record is not null
+                && Math.Max(Math.Max(1, record.Width >> key.Step) >> key.Level, Math.Max(1, record.Height >> key.Step) >> key.Level) <= CompactMipSide;
+            if (compact) { await _mipSlots.WaitAsync(request.Stop.Token).ConfigureAwait(false); reserved = true; }
             else { await _largeSlot.WaitAsync(request.Stop.Token).ConfigureAwait(false); largeReserved = true; }
             await _mipReader.WaitAsync(request.Stop.Token).ConfigureAwait(false);
             try
