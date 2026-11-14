@@ -16,6 +16,7 @@ public static class DocumentDerivedIndexes
     {
         ArgumentNullException.ThrowIfNull(document);
         if (!DocumentRevisionIndex.IsPrepared(document) || !ObjectNameIndex.IsPrepared(document)) return false;
+        if (!Editing.LabelPriority.IsPrepared(document)) return false;
         foreach (var layer in document.Layers)
             if (layer is ObjectLayer objects && objects.Objects.Count > 0
                 && (!objects.ObjectStorage.HasIdentityTable || !ObjectSpatialIndex.IsPrepared(objects)
@@ -28,6 +29,8 @@ public static class DocumentDerivedIndexes
     public static void Prepare(MapDocument document, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(document);
+        // First-frame labels are small and needed before the heavier editing lookups.
+        Editing.LabelPriority.Prepare(document, cancellationToken);
         // The revision index also builds the identity slots of every object layer.
         _ = DocumentRevisionIndex.For(document);
         // Between lookups a background caller steps aside while a gesture runs (no-op on other threads).

@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Runtime.CompilerServices;
 
 namespace Map.Core.Documents;
 
@@ -10,7 +11,15 @@ namespace Map.Core.Documents;
 public sealed class SceneObjectList : IReadOnlyList<SceneObject>
 {
     private IdentityTable? _identitySlots;
-    private readonly Dictionary<SceneObject[], int> _chunkStarts = new(ReferenceEqualityComparer.Instance);
+    private IdentityTable? _textIdentitySlots;
+    // Created with each new immutable chunk, while loading/editing, never by rendering.
+    // Empty stamp chunks share one value; there is no entry/object per stamp.
+    private sealed record TextChunk(int[] Offsets, int[] Counts);
+    private static readonly TextChunk NoText = new([], new int[LabelSettings.MaxImportance + 1]);
+    private static readonly ConditionalWeakTable<SceneObject[], TextChunk> TextChunks = new();
+    private readonly (SceneObject[] Objects, TextChunk Text)[] _textChunks;
+    private readonly int[] _labelCounts = new int[LabelSettings.MaxImportance + 1];
+    private readonly Dictionary<SceneObject[], int> _chunkStarts;
 
     /// <summary>Number of full identity tables built (every object visited). Diagnostics and tests only.</summary>
     internal static long IdentityRootBuilds => System.Threading.Interlocked.Read(ref _identityRootBuilds);
@@ -74,12 +83,53 @@ public sealed class SceneObjectList : IReadOnlyList<SceneObject>
         _chunks = chunks;
         Count = count;
         _starts = new int[chunks.Length];
+        _chunkStarts = new(chunks.Length, ReferenceEqualityComparer.Instance);
         var start = 0;
+        var textChunks = new List<(SceneObject[] Objects, TextChunk Text)>(source?._textChunks.Length ?? 0);
         for (var index = 0; index < chunks.Length; index++)
         {
             _starts[index] = start;
             _chunkStarts[chunks[index]] = start;
             start += chunks[index].Length;
+        }
+        if (source is null)
+        {
+            foreach (var chunk in chunks) AddTextChunk(chunk);
+        }
+        else
+        {
+            foreach (var entry in source._textChunks)
+                if (_chunkStarts.ContainsKey(entry.Objects)) textChunks.Add(entry);
+            if (rewrite is not null)
+                foreach (var (chunk, _) in rewrite.Created) AddTextChunk(chunk);
+            textChunks.Sort((a, b) => _chunkStarts[a.Objects].CompareTo(_chunkStarts[b.Objects]));
+        }
+        foreach (var (_, text) in textChunks)
+            for (var i = LabelSettings.MinImportance; i <= LabelSettings.MaxImportance; i++)
+                _labelCounts[i] += text.Counts[i];
+        _textChunks = [.. textChunks];
+
+        void AddTextChunk(SceneObject[] objects)
+        {
+            var text = TextChunks.GetValue(objects, static chunk =>
+            {
+                var textCount = 0;
+                foreach (var item in chunk)
+                    if (item.Kind == SceneObjectKind.Text) textCount++;
+                if (textCount == 0) return NoText;
+                var offsets = new int[textCount];
+                var next = 0;
+                var counts = new int[LabelSettings.MaxImportance + 1];
+                for (var i = 0; i < chunk.Length; i++)
+                    if (chunk[i].Kind == SceneObjectKind.Text)
+                    {
+                        offsets[next++] = i;
+                        if (chunk[i].Visible && chunk[i].Text is { } style)
+                            counts[Math.Clamp(style.Importance, LabelSettings.MinImportance, LabelSettings.MaxImportance)]++;
+                    }
+                return new TextChunk(offsets, counts);
+            });
+            if (text.Offsets.Length != 0) textChunks.Add((objects, text));
         }
 
         if (start != count)
@@ -90,6 +140,8 @@ public sealed class SceneObjectList : IReadOnlyList<SceneObject>
         {
             _identitySlots = Derive(slots, rewrite);
         }
+        if (_identitySlots is null && source?._textIdentitySlots is { } textSlots && rewrite is not null)
+            _textIdentitySlots = Derive(textSlots, rewrite, textOnly: true);
     }
 
     /// <summary>True when id lookups of this list no longer visit every object.</summary>
@@ -144,6 +196,55 @@ public sealed class SceneObjectList : IReadOnlyList<SceneObject>
             table = _identitySlots;
         }
 
+        return Position(table, id);
+    }
+
+    internal int LabelCount(int shown)
+    {
+        var count = 0;
+        for (var i = LabelSettings.MinImportance; i <= LabelSettings.MaxImportance; i++)
+            if ((shown & (1 << i)) != 0) count += _labelCounts[i];
+        return count;
+    }
+
+    internal IEnumerable<SceneObject> TextObjects(int shown = -1)
+    {
+        foreach (var (chunk, text) in _textChunks)
+        {
+            var relevant = false;
+            for (var i = LabelSettings.MinImportance; i <= LabelSettings.MaxImportance; i++)
+                if ((shown & (1 << i)) != 0 && text.Counts[i] > 0) { relevant = true; break; }
+            if (!relevant) continue;
+            foreach (var offset in text.Offsets)
+            {
+                var item = chunk[offset];
+                if (item.Visible && item.Text is { } style
+                    && (shown & (1 << Math.Clamp(style.Importance, LabelSettings.MinImportance, LabelSettings.MaxImportance))) != 0)
+                    yield return item;
+            }
+        }
+    }
+
+    // The label tie order needs slots for texts only. The editor's general identity table
+    // remains a separate derived lookup prepared on its existing background path.
+    internal int IndexOfTextId(ObjectId id)
+    {
+        if (_identitySlots is { } general) return Position(general, id);
+        var table = _textIdentitySlots;
+        if (table is null)
+        {
+            var root = new Dictionary<ObjectId, Slot>(_textChunks.Sum(c => c.Text.Offsets.Length));
+            foreach (var (chunk, text) in _textChunks)
+                foreach (var offset in text.Offsets) root.Add(chunk[offset].Id, new Slot(chunk, offset));
+            Interlocked.CompareExchange(ref _textIdentitySlots,
+                new IdentityTable(root, NoOverlay, NoForward, NoHoldings), null);
+            table = _textIdentitySlots;
+        }
+        return Position(table, id);
+    }
+
+    private int Position(IdentityTable table, ObjectId id)
+    {
         // An overlay slot is newer than any root slot of the same id.
         if (!table.Overlay.TryGetValue(id, out var slot) && !table.Root.TryGetValue(id, out slot)) return -1;
         if (_chunkStarts.TryGetValue(slot.Chunk, out var start)) return start + slot.Offset;
@@ -174,7 +275,7 @@ public sealed class SceneObjectList : IReadOnlyList<SceneObject>
     /// (run by run, not object by object) and to the objects that enter or leave the list, never
     /// to the objects of the whole list.
     /// </summary>
-    private static IdentityTable Derive(IdentityTable slots, Rewrite rewrite)
+    private static IdentityTable Derive(IdentityTable slots, Rewrite rewrite, bool textOnly = false)
     {
         var overlay = slots.Overlay.ToBuilder();
         var forward = slots.Forward.ToBuilder();
@@ -199,7 +300,9 @@ public sealed class SceneObjectList : IReadOnlyList<SceneObject>
                 {
                     // New to the list: the created chunk is its own origin, with overlay slots.
                     Add(chunk, segment.Offset, segment.Length, segment.Offset);
-                    for (var i = 0; i < segment.Length; i++) inserted.Add(new Slot(chunk, segment.Offset + i));
+                    for (var i = 0; i < segment.Length; i++)
+                        if (!textOnly || chunk[segment.Offset + i].Kind == SceneObjectKind.Text)
+                            inserted.Add(new Slot(chunk, segment.Offset + i));
                 }
                 else if (!holdings.TryGetValue(from, out var held))
                 {
@@ -371,8 +474,9 @@ public sealed class SceneObjectList : IReadOnlyList<SceneObject>
                 rewrite.Dropped.Add(original);
             }
 
-            // A different identity at this place is a removal plus an insertion.
-            if (original[offset].Id != replacement.Id)
+            // A kind change also enters/leaves the text-only identity root. Give it its
+            // own origin slot so later chunk rewrites forward it just like a new identity.
+            if (original[offset].Id != replacement.Id || original[offset].Kind != replacement.Kind)
             {
                 if (!reidentified.TryGetValue(chunkIndex, out var offsets)) reidentified.Add(chunkIndex, offsets = []);
                 offsets.Add(offset);

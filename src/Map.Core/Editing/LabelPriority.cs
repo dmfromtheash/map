@@ -8,15 +8,33 @@ namespace Map.Core.Editing;
 /// <see cref="LabelSettings.MinScale"/>; by overlap - of two crossing labels the less important
 /// (then the smaller, then the later) one hides. Labels are sized in map units, so overlaps do not
 /// depend on the zoom: the result changes only when a threshold is crossed and is cached per map
-/// snapshot and set of shown importances.
+/// snapshot and set of shown importances. Membership resolves queried labels and their overlap
+/// dependencies lazily; enumerating/counting the set resolves all labels.
 /// </summary>
-public static class LabelPriority
+public static partial class LabelPriority
 {
-    /// <summary>More labels than this skip the overlap pass (it is quadratic in the worst case).</summary>
+    /// <summary>Compatibility limit: larger candidate sets keep the original scale-only behavior.</summary>
     public const int MaxOverlapLabels = 4000;
 
     private static readonly IReadOnlySet<ObjectId> None = new HashSet<ObjectId>();
     private static readonly ConditionalWeakTable<MapDocument, Dictionary<int, IReadOnlySet<ObjectId>>> Cache = new();
+
+    /// <summary>Prepares label-only lookups off the frame; independent of visibility/settings.</summary>
+    public static void Prepare(MapDocument document, CancellationToken cancellationToken = default)
+    {
+        foreach (var layer in document.Layers)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (layer is ObjectLayer objects) _ = LabelIndex.For(objects);
+        }
+    }
+
+    public static bool IsPrepared(MapDocument document)
+    {
+        foreach (var layer in document.Layers)
+            if (layer is ObjectLayer objects && !LabelIndex.TryFor(objects)) return false;
+        return true;
+    }
 
     /// <summary>The labels hidden at this scale (screen pixels per map pixel); empty when the map does not ask for it.</summary>
     public static IReadOnlySet<ObjectId> Hidden(MapDocument document, double scale)
@@ -31,41 +49,13 @@ public static class LabelPriority
         lock (perMap)
         {
             if (perMap.TryGetValue(shown, out var cached)) return cached;
-            var result = Compute(document, settings, shown);
+            var layers = document.Layers.OfType<ObjectLayer>().Where(l => l.Visible)
+                .Select(l => new LabelLayer(l, LabelIndex.For(l))).ToArray();
+            IReadOnlySet<ObjectId> result = layers.All(l => l.Index.Labels.IsEmpty)
+                ? None : new HiddenSet(layers, settings.ResolveOverlaps, shown);
             perMap[shown] = result;
             return result;
         }
-    }
-
-    private static IReadOnlySet<ObjectId> Compute(MapDocument document, LabelSettings settings, int shown)
-    {
-        var hidden = new HashSet<ObjectId>();
-        var candidates = new List<(SceneObject Label, int Importance, int Order)>();
-        var order = 0;
-        foreach (var layer in document.Layers.OfType<ObjectLayer>())
-        {
-            if (!layer.Visible) continue;
-            foreach (var item in layer.Objects)
-            {
-                if (item.Kind != SceneObjectKind.Text || item.Text is not { } text || !item.Visible) continue;
-                var importance = Math.Clamp(text.Importance, LabelSettings.MinImportance, LabelSettings.MaxImportance);
-                if ((shown & (1 << importance)) == 0) { hidden.Add(item.Id); continue; }
-                candidates.Add((item, importance, order++));
-            }
-        }
-
-        if (settings.ResolveOverlaps && candidates.Count <= MaxOverlapLabels)
-        {
-            var kept = new List<WorldBounds>();
-            foreach (var (label, _, _) in candidates.OrderByDescending(c => c.Importance).ThenByDescending(c => c.Label.Text!.FontSize).ThenBy(c => c.Order))
-            {
-                var bounds = Inset(SceneGeometry.BoundsOf(label));
-                if (kept.Any(other => other.Intersects(bounds))) { hidden.Add(label.Id); continue; }
-                kept.Add(bounds);
-            }
-        }
-
-        return hidden.Count == 0 ? None : hidden;
     }
 
     /// <summary>A label's box less a tenth on each side: letters seldom fill their box to the edge.</summary>

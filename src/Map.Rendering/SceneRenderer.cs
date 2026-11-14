@@ -3535,7 +3535,8 @@ public static partial class SceneRenderer
             AreaBeautyRenderer.DrawMasses(canvas, ordered, options);
         }
 
-        var hiddenLabels = LabelPriority.Hidden(document, options.ViewScale);
+        var hiddenLabels = LabelPriority.ForFrame(document, options.ViewScale, options.IsExport ? null : options.RequestRefinedFrame);
+        if (hiddenLabels.IsPending && options.Stats is { } labelStats) labelStats.DetailTilesPending++;
         for (var objectIndex = 0; objectIndex < ordered.Count; objectIndex++)
         {
             var sceneObject = ordered[objectIndex];
@@ -6426,7 +6427,8 @@ public static partial class SceneRenderer
                 refine();
             }
         }
-        var hiddenLabels = LabelPriority.Hidden(document, options.ViewScale);
+        var hiddenLabels = LabelPriority.ForFrame(document, options.ViewScale, options.IsExport ? null : options.RequestRefinedFrame);
+        if (hiddenLabels.IsPending && options.Stats is { } labelStats) labelStats.DetailTilesPending++;
         foreach (var sceneObject in exact.Values.OrderBy(item => item.Sublayer))
         {
             if (GivesWay(sceneObject, hiddenLabels, options)) continue;
@@ -6481,8 +6483,8 @@ public static partial class SceneRenderer
     /// R07b: a label hidden at this scale or under a more important one (<see cref="LabelPriority"/>);
     /// the selected label always shows, so the user can still see what they edit.
     /// </summary>
-    private static bool GivesWay(SceneObject sceneObject, IReadOnlySet<ObjectId> hiddenLabels, RenderOptions options) =>
-        hiddenLabels.Count > 0 && sceneObject.Kind == SceneObjectKind.Text && hiddenLabels.Contains(sceneObject.Id)
+    private static bool GivesWay(SceneObject sceneObject, LabelPriority.FrameVisibility hiddenLabels, RenderOptions options) =>
+        sceneObject.Kind == SceneObjectKind.Text && hiddenLabels.Contains(sceneObject)
         && sceneObject.Id != options.SelectedObjectId && options.CoSelectedObjectIds?.Contains(sceneObject.Id) != true;
 
     private static int OverviewZoomBucket(double scale) =>

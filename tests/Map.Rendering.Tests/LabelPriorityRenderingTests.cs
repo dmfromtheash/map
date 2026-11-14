@@ -10,6 +10,54 @@ public sealed class LabelPriorityRenderingTests
     private const string Ink = "#FFC00000";
 
     [Fact]
+    public async Task Cold_interactive_frame_is_pending_and_refines_to_the_exact_pixels()
+    {
+        var first = Label("Первый", -280, 80, 3);
+        var second = Label("Второй", -100, 80, 3);
+        var third = Label("Третий", 80, 80, 3);
+        var distant = Enumerable.Range(0, 997).Select(i => Label("Вдали", 10000 + i * 512, 10000, 3)).ToArray();
+        var document = Document([first, second, third, .. distant]) with
+        { Labels = new LabelSettings { ResolveOverlaps = true } };
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stats = new RenderStats();
+        using (var pending = Render(document, 1, null, () => ready.TrySetResult(), stats))
+            Assert.True(stats.DetailTilesPending > 0);
+        await ready.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.True(LabelPriority.IsPrepared(document));
+        using var settled = Render(document, 1, null, () => { });
+        using var expected = Render(Document([first, third, .. distant]), 1, null);
+        Assert.Equal(expected.Bytes, settled.Bytes);
+    }
+
+    [Fact]
+    public void Overlap_chain_and_label_delta_match_explicit_visibility_pixel_for_pixel()
+    {
+        var first = Label("Первый", -280, 80, 3);
+        var second = Label("Второй", -100, 80, 3);
+        var third = Label("Третий", 80, 80, 3);
+        var document = Document(first, second, third) with { Labels = new LabelSettings { ResolveOverlaps = true } };
+        using (var actual = Render(document, 1, null))
+        using (var expected = Render(Document(first, third), 1, null))
+            Assert.Equal(expected.Bytes, actual.Bytes);
+
+        // The offscreen first label still hides the second. Moving it away changes that
+        // dependency: now the second stays and the third hides, with the same font sizes.
+        var layer = (ObjectLayer)document.Layers[1];
+        var moved = SceneObjectClone.At(first, -1000, first.Y);
+        var revised = layer with { Objects = layer.ObjectStorage.ReplaceAt(0, moved) };
+        ObjectLayerChanges.RegisterDerived(layer, revised, [0], [0]);
+        var snapshot = document with { Layers = [document.Layers[0], revised] };
+        using (var actual = Render(snapshot, 1, null))
+        using (var expected = Render(Document(moved, second), 1, null))
+            Assert.Equal(expected.Bytes, actual.Bytes);
+
+        // Selection still exposes a hidden label.
+        using var selected = Render(snapshot, 1, third.Id);
+        using var all = Render(Document(moved, second, third), 1, third.Id);
+        Assert.Equal(all.Bytes, selected.Bytes);
+    }
+
+    [Fact]
     public void Far_away_importance_one_hides_before_importance_five()
     {
         var minor = Label("Хутор", 100, 200, 1);
@@ -43,13 +91,18 @@ public sealed class LabelPriorityRenderingTests
         new(DocumentId.New(), "Labels", DateTimeOffset.UnixEpoch, new CanvasDefinition(1600, 1600, "px", "#FFFFFFFF"),
             [new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FFFFFFFF"), new ObjectLayer(LayerId.New(), "Подписи", true, false, 1, labels)]);
 
-    private static SKBitmap Render(MapDocument document, double scale, ObjectId? selected)
+    private static SKBitmap Render(MapDocument document, double scale, ObjectId? selected,
+        Action? ready = null, RenderStats? stats = null)
     {
         var info = new SKImageInfo(400, 400);
         using var surface = SKSurface.Create(info)!;
         surface.Canvas.Clear(SKColors.White);
         surface.Canvas.Scale((float)scale);
-        SceneRenderer.Render(surface.Canvas, document, new RenderOptions { ViewScale = scale, SelectedObjectId = selected });
+        SceneRenderer.Render(surface.Canvas, document, new RenderOptions
+        {
+            ViewScale = scale, SelectedObjectId = selected, VisibleWorld = new(0, 0, 400 / scale, 400 / scale),
+            RequestRefinedFrame = ready, Stats = stats,
+        });
         var bitmap = new SKBitmap(info);
         surface.ReadPixels(info, bitmap.GetPixels(), bitmap.RowBytes, 0, 0);
         return bitmap;

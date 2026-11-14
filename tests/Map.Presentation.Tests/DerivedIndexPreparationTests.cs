@@ -37,6 +37,27 @@ public sealed class DerivedIndexPreparationTests
         new FakeRecentMaps(), new FakeFilePicker(), new FakePrompts(), new FakeLog(), availableFontFamilies: ["Arial"]);
 
     [Fact]
+    public async Task Opening_a_large_map_prepares_label_priority_before_the_first_settled_frame()
+    {
+        var document = Map(EditorViewModel.DerivedIndexPreparationMinimumObjects + 1);
+        var layer = document.Layers.OfType<ObjectLayer>().Single();
+        var label = layer.Objects[0] with
+        {
+            Kind = SceneObjectKind.Text, Stamp = null,
+            Text = new TextStyle { Content = "label", Importance = 1 },
+        };
+        layer = layer with { Objects = layer.ObjectStorage.ReplaceAt(0, label) };
+        document = document with { Layers = [document.Layers[0], layer], Labels = new LabelSettings { ByScale = true } };
+        var editor = Editor(document);
+        await editor.DerivedIndexPreparation;
+        Assert.True(editor.DerivedIndexesPrepared);
+        Assert.True(LabelPriority.IsPrepared(document));
+        var enumerated = SceneObjectList.EnumeratedOnThisThread;
+        Assert.True(LabelPriority.ForFrame(document, .1, () => throw new InvalidOperationException()).Contains(label));
+        Assert.Equal(enumerated, SceneObjectList.EnumeratedOnThisThread);
+    }
+
+    [Fact]
     public async Task A_large_map_is_prepared_at_open_and_a_click_drag_and_undo_rebuild_nothing()
     {
         var document = Map(EditorViewModel.DerivedIndexPreparationMinimumObjects + 5_000);
