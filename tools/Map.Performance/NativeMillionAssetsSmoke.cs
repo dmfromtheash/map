@@ -17,6 +17,7 @@ public sealed partial class ZoomAssetsApplication
     // One case per process keeps the large document and GPU lifetime out of the next measurement.
     private async Task ExecuteMillion()
     {
+        var matrix = MillionMatrixOptions.Read();
         var root = System.Environment.GetEnvironmentVariable("MAP_DRIVE_LIBRARY_ROOTS")
             ?? throw new InvalidOperationException("Set MAP_DRIVE_LIBRARY_ROOTS to the owner's library.");
         _catalog.SetMounts(Directory.GetDirectories(root).Where(p => File.Exists(Path.Combine(p, "catalog.json"))).Order().ToArray());
@@ -55,6 +56,7 @@ public sealed partial class ZoomAssetsApplication
             new CanvasDefinition(w, h, "px", CurrentLook.PageColor), layers).WithAssets(refs);
         if (kind == "light") document = document with { Lighting = new MapLighting { TimeOfDay = .7,
             Sources = [new MapLightSource(Guid.NewGuid(), anchor.X, anchor.Y, "#FFFFBB66", 500, 1, false)] } };
+        document = PrepareMillionMatrix(document, matrix, kind, anchor);
         _report.Observation = "Visible native editor on the selected test display; production canvas; frame = render-thread scene completion, not monitor scan-out. GPU flush is separately measured when MAP_MEASURE_GPU_FLUSH=1.";
         _report.Environment["mode"] = "ЖИВОЙ: visible native editor; real canvas GPU completion; not monitor scan-out";
         _report.Environment["library"] = root;
@@ -70,6 +72,12 @@ public sealed partial class ZoomAssetsApplication
         Checkpoint();
         var open = Stopwatch.StartNew();
         OpenEditor(document);
+        if (matrix.Functions.Length > 0)
+        {
+            await ExecuteMillionMatrix(scenario, matrix, anchor);
+            Checkpoint();
+            return;
+        }
         await Route(scenario, "open-first-frame", 1, _ => _view.Canvas.FitToCanvas());
         if (System.Environment.GetEnvironmentVariable("MAP_PERF_CAPTURE_PROGRESSIVE") == "1")
             await MillionCapture(kind + "-first-progressive");
@@ -83,7 +91,7 @@ public sealed partial class ZoomAssetsApplication
             }
         }
         scenario.OpenToExactTerrainMs = open.Elapsed.TotalMilliseconds;
-        if (kind == "style") { _editor.ApplyStylePreset(MapStylePreset.WatercolorBigShapes); await Step(() => { }); }
+        if (kind == "style" && matrix.Style is null) { _editor.ApplyStylePreset(MapStylePreset.WatercolorBigShapes); await Step(() => { }); }
         await MillionCapture(kind + "-fit"); Checkpoint();
         if (System.Environment.GetEnvironmentVariable("MAP_PERF_CAPTURE_REBUILT") == "1")
         {

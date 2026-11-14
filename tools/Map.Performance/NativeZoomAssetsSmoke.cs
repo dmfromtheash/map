@@ -101,8 +101,15 @@ internal sealed class ZoomRouteReport
     public double? FrameIntervalMax { get; set; }
     /// <summary>1000 / mean of the slowest ceil(1%) completed-frame intervals; small samples are explicit.</summary>
     public double? OnePercentLowFps { get; set; }
+    public double FrameWorkP50 { get; set; }
+    public double FrameWorkP95 { get; set; }
     public double FrameWorkP99 { get; set; }
     public double FrameWorkMax { get; set; }
+    public int FrameWorkOver50 { get; set; }
+    public int FrameWorkOver100 { get; set; }
+    public int? FrameIntervalsOver50 { get; set; }
+    public int? FrameIntervalsOver100 { get; set; }
+    public int CameraCaptureBudgetRejections { get; set; }
     public double RefinementWorkMax { get; set; }
     public List<double> FrameWorkMs { get; } = [];
     public List<double> GpuFlushMs { get; } = [];
@@ -829,6 +836,7 @@ public sealed partial class ZoomAssetsApplication : Application
                 lastRevision = revision;
                 sceneTimes.Add(canvas.LastSceneRenderMilliseconds);
                 target.FrameWorkMs.Add(Map.App.Controls.MapCanvasControl.LastFrameWorkMilliseconds);
+                target.CameraCaptureBudgetRejections += canvas.LastRenderStats.CameraCapturesRejectedByBudget;
                 frameStamps.Add((Stopwatch.GetTimestamp(), revision));
             }
         }
@@ -889,6 +897,8 @@ public sealed partial class ZoomAssetsApplication : Application
         {
             target.FrameIntervalP95 = Percentile(intervals, .95); target.FrameIntervalP99 = Percentile(intervals, .99);
             target.FrameIntervalMax = intervals[^1];
+            target.FrameIntervalsOver50 = intervals.Count(value => value > 50);
+            target.FrameIntervalsOver100 = intervals.Count(value => value > 100);
             target.OnePercentLowFps = 1000 / intervals.TakeLast(Math.Max(1, (int)Math.Ceiling(intervals.Length * .01))).Average();
         }
         target.Steps = steps;
@@ -918,8 +928,12 @@ public sealed partial class ZoomAssetsApplication : Application
         target.SceneP50 = Percentile(scene, .5); target.SceneP95 = Percentile(scene, .95); target.SceneP99 = Percentile(scene, .99);
         target.SceneMax = scene.Length == 0 ? double.NaN : scene[^1];
         var work = target.FrameWorkMs.Order().ToArray();
+        target.FrameWorkP50 = Percentile(work, .5);
+        target.FrameWorkP95 = Percentile(work, .95);
         target.FrameWorkP99 = Percentile(work, .99);
         target.FrameWorkMax = work.Length == 0 ? 0 : work[^1];
+        target.FrameWorkOver50 = work.Count(value => value > 50);
+        target.FrameWorkOver100 = work.Count(value => value > 100);
         target.LatencyP50 = Percentile(latency, .5); target.LatencyP95 = Percentile(latency, .95); target.LatencyP99 = Percentile(latency, .99);
         target.LatencyMax = latency.Length == 0 ? double.NaN : latency[^1];
         target.LongPauses = target.LatencyMs.Count(l => l > 50);
