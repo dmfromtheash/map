@@ -135,6 +135,14 @@ internal sealed class ZoomRouteReport
     public Dictionary<string, double> RuntimeDuringRoute { get; set; } = [];
     private readonly int[] _collectionsAtStart = [GC.CollectionCount(0), GC.CollectionCount(1), GC.CollectionCount(2)];
     private readonly TimeSpan _pauseAtStart = GC.GetTotalPauseDuration();
+    private readonly double _processCpuAtStart = ProcessCpuMilliseconds();
+    private readonly long _allocatedAtStart = GC.GetTotalAllocatedBytes(precise: false);
+
+    private static double ProcessCpuMilliseconds()
+    {
+        using var process = Process.GetCurrentProcess();
+        return process.TotalProcessorTime.TotalMilliseconds;
+    }
     internal void CompleteRuntimeCounters()
     {
         RuntimeDuringRoute = new()
@@ -143,6 +151,10 @@ internal sealed class ZoomRouteReport
             ["gen1"] = GC.CollectionCount(1) - _collectionsAtStart[1],
             ["gen2"] = GC.CollectionCount(2) - _collectionsAtStart[2],
             ["gcPauseMs"] = (GC.GetTotalPauseDuration() - _pauseAtStart).TotalMilliseconds,
+            // Includes all process threads, including preparation workers; this is CPU time,
+            // not frame work and not the process's share of one logical processor.
+            ["processCpuMs"] = ProcessCpuMilliseconds() - _processCpuAtStart,
+            ["allocatedBytes"] = GC.GetTotalAllocatedBytes(precise: false) - _allocatedAtStart,
         };
     }
     public List<double> SceneMs { get; } = [];
@@ -507,6 +519,7 @@ public sealed partial class ZoomAssetsApplication : Application
         _report.Environment["gc-latency"] = System.Runtime.GCSettings.LatencyMode.ToString();
         _report.Environment["camera-frames"] = (System.Environment.GetEnvironmentVariable("MAP_PERF_CAMERA_FRAMES") != "0").ToString();
         _report.Environment["composition-requested"] = System.Environment.GetEnvironmentVariable("MAP_WIN32_COMPOSITION") ?? "platform-default";
+        _report.Environment["measure-gpu-flush"] = (System.Environment.GetEnvironmentVariable("MAP_MEASURE_GPU_FLUSH") == "1").ToString();
         if (Options.Profile == "native-million-assets") { await ExecuteMillion(); return; }
         _report.Environment["os"] = System.Environment.OSVersion.VersionString;
         _report.Environment["cpu-threads"] = System.Environment.ProcessorCount.ToString();

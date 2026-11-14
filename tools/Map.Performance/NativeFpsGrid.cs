@@ -21,6 +21,7 @@ public sealed partial class ZoomAssetsApplication
         _report.Environment["grid-cache"] = "shared warm derived cache; process/render caches start empty";
         _report.Environment["grid-side-product-limit"] = CanvasDimensionPolicy.Maximum.ToString(CultureInfo.InvariantCulture);
         _report.Environment["grid-selection"] = "public select-object/drag commands on original centered stamp; not alpha hit-testing";
+        await ObserveBackgroundBeforeNavigation();
         await Pan("fit");
         foreach (var scale in new[] { 1d, 4d, 16d })
         {
@@ -86,6 +87,60 @@ public sealed partial class ZoomAssetsApplication
         _report.Checks["grid/fps-60"] = scenario.Routes.Where(route => route.MedianWindowFps is not null)
             .All(route => route.MedianWindowFps >= 60 && route.OnePercentLowFps >= 60 && route.FrameWorkMax <= 16.7);
         await Finish(scenario);
+
+        async Task ObserveBackgroundBeforeNavigation()
+        {
+            var wait = System.Environment.GetEnvironmentVariable("MAP_PERF_WAIT_BACKGROUND") == "1";
+            _report.Environment["grid-wait-background"] = wait.ToString();
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            _report.Environment["grid-background-before"] = JsonSerializer.Serialize(Snapshot());
+            if (wait)
+            {
+                // Overview neighbour prefetch is armed by a 150 ms timer. Require a quiet
+                // 500 ms interval so a momentarily idle worker does not bypass that timer.
+                var quietSince = double.NaN;
+                var quietCompleted = false;
+                while (watch.Elapsed.TotalSeconds < 180)
+                {
+                    var overview = canvas.BackgroundOverviewStatistics;
+                    if (overview.Idle && overview.Queued == 0 && overview.ReadyImages == 0
+                        && _editor.DerivedIndexesPrepared && _editor.DerivedIndexPreparation.IsCompleted)
+                    {
+                        if (double.IsNaN(quietSince)) quietSince = watch.Elapsed.TotalMilliseconds;
+                        if (watch.Elapsed.TotalMilliseconds - quietSince >= 500)
+                        { quietCompleted = true; break; }
+                    }
+                    else quietSince = double.NaN;
+                    await Task.Delay(25);
+                }
+                var final = canvas.BackgroundOverviewStatistics;
+                var ready = quietCompleted && final.Idle && final.Queued == 0 && final.ReadyImages == 0
+                    && _editor.DerivedIndexesPrepared && _editor.DerivedIndexPreparation.IsCompleted;
+                _report.Checks["grid/background-ready-before-navigation"] = ready;
+                if (!ready)
+                {
+                    _report.Environment["grid-background-after"] = JsonSerializer.Serialize(Snapshot());
+                    _report.Environment["grid-background-wait-ms"] = watch.Elapsed.TotalMilliseconds.ToString(CultureInfo.InvariantCulture);
+                    throw new TimeoutException("Background preparation did not become idle before navigation.");
+                }
+            }
+            _report.Environment["grid-background-wait-ms"] = watch.Elapsed.TotalMilliseconds.ToString(CultureInfo.InvariantCulture);
+            _report.Environment["grid-background-after"] = JsonSerializer.Serialize(Snapshot());
+            Console.WriteLine($"grid/background: wait={wait}, elapsed={watch.Elapsed.TotalMilliseconds:0.0} ms, {_report.Environment["grid-background-after"]}");
+
+            Dictionary<string, object> Snapshot()
+            {
+                var overview = canvas.BackgroundOverviewStatistics;
+                return new()
+                {
+                    ["overviewIdle"] = overview.Idle, ["overviewQueued"] = overview.Queued,
+                    ["overviewReadyImages"] = overview.ReadyImages, ["overviewPlans"] = overview.Plans,
+                    ["overviewPrefetched"] = overview.Prefetched,
+                    ["derivedIndexesPrepared"] = _editor.DerivedIndexesPrepared,
+                    ["derivedIndexTaskCompleted"] = _editor.DerivedIndexPreparation.IsCompleted,
+                };
+            }
+        }
 
         async Task Pan(string name)
         {

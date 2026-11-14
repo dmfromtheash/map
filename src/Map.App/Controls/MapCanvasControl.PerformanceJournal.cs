@@ -9,6 +9,16 @@ public sealed partial class MapCanvasControl
     /// <summary>Optional host-owned journal. Desktop windows use the application journal by default.</summary>
     public PerformanceJournal? PerformanceJournal { get; set; }
 
+    /// <summary>Diagnostic snapshot for native probes, read between gestures rather than on every frame.</summary>
+    public (bool Idle, int Queued, int ReadyImages, long Plans, long Prefetched) BackgroundOverviewStatistics
+    {
+        get
+        {
+            var state = _overviewPreparation.Statistics;
+            return (state.Idle, state.Queued, state.ReadyImages, state.Plans, state.Prefetched);
+        }
+    }
+
     private long _journalPreviousFrame;
     private PerformanceQueues _journalQueues;
     private PerformanceGesture _journalCameraGesture;
