@@ -725,6 +725,8 @@ public static partial class SceneRenderer
 
         options.Stats?.Reset();
         options.PreviewCache?.Sync(options.Preview);
+        if (UseCoarseCoverage(options))
+            CoarseCoverage.Prepare(document, options.VisibleWorld ?? new WorldBounds(0, 0, document.Canvas.Width, document.Canvas.Height));
 
         // The style (R09) repaints the map without its names, lit or not, and the names go on top
         // sharp; the Свет section (DEC-057) lights the finished map; the editing chrome stays on top.
@@ -2965,20 +2967,20 @@ public static partial class SceneRenderer
             // effect come from the union, cut back by the lower land's own coast zone.
             var alpha = RasterizeCoverage(padded, width, height, surf: false, CoverageSet.ThisPiece);
             if (alpha is null) return false;
-            coastAlpha = alpha;
+            coastAlpha = alpha.Alpha;
             var union = blends ? RasterizeCoverage(padded, width, height, surf: false, CoverageSet.WithLowers) : alpha;
             if (union is null) return false;
-            coastField = CoastDistanceField.SignedDistance(union, width, height);
+            coastField = union.Distance;
             if (blends)
             {
                 var lowersAlpha = RasterizeCoverage(padded, width, height, surf: false, CoverageSet.LowersOnly);
                 if (lowersAlpha is null) return false;
-                lowersField = CoastDistanceField.SignedDistance(lowersAlpha, width, height);
+                lowersField = lowersAlpha.Distance;
             }
             if (cutters.Count > 0 && style.RippleCount > 0 && style.RippleWidth > 0)
             {
                 var surfAlpha = RasterizeCoverage(padded, width, height, surf: true, blends ? CoverageSet.WithLowers : CoverageSet.ThisPiece);
-                surfField = surfAlpha is null ? null : CoastDistanceField.SignedDistance(surfAlpha, width, height);
+                surfField = surfAlpha?.Distance;
             }
             fieldWidth = width; fieldHeight = height;
             fieldRect = new SKRect((float)padded.Left, (float)padded.Top,
@@ -3008,23 +3010,23 @@ public static partial class SceneRenderer
                     if (alpha is null) { Release(tiles); return false; }
                     var union = blends ? RasterizeCoverage(padded, width, height, surf: false, CoverageSet.WithLowers) : alpha;
                     if (union is null) { Release(tiles); return false; }
-                    var field = CoastDistanceField.SignedDistance(union, width, height);
+                    var field = union.Distance;
                     float[]? lowers = null, surf = null;
                     if (blends)
                     {
                         var lowersAlpha = RasterizeCoverage(padded, width, height, surf: false, CoverageSet.LowersOnly);
                         if (lowersAlpha is null) { Release(tiles); return false; }
-                        lowers = CoastDistanceField.SignedDistance(lowersAlpha, width, height);
+                        lowers = lowersAlpha.Distance;
                     }
                     if (cutters.Count > 0 && style.RippleCount > 0 && style.RippleWidth > 0)
                     {
                         var surfAlpha = RasterizeCoverage(padded, width, height, surf: true, blends ? CoverageSet.WithLowers : CoverageSet.ThisPiece);
-                        surf = surfAlpha is null ? null : CoastDistanceField.SignedDistance(surfAlpha, width, height);
+                        surf = surfAlpha?.Distance;
                     }
                     var rect = new SKRect((float)padded.Left, (float)padded.Top,
                         (float)(padded.Left + (width / deviceScale)), (float)(padded.Top + (height / deviceScale)));
                     tiles.Add((CoastDistanceField.OuterEffects(field, surf, width, height, style, deviceScale, lowers),
-                        CoastDistanceField.InnerShadow(field, alpha, width, height, style, deviceScale),
+                        CoastDistanceField.InnerShadow(field, alpha.Alpha, width, height, style, deviceScale),
                         rect, ToRect(square)));
                 }
             fieldTiles = tiles;
@@ -3038,41 +3040,59 @@ public static partial class SceneRenderer
 
         // The coverage drawn by the ordinary coverage pass into a CPU raster of the padded view;
         // only its alpha is kept. The surf raster follows the uncarved coast, as the ring pass did.
-        byte[]? RasterizeCoverage(WorldBounds padded, int width, int height, bool surf, CoverageSet set)
+        TerrainFieldCache.CoastField? RasterizeCoverage(WorldBounds padded, int width, int height, bool surf, CoverageSet set)
         {
-            var info = new SKImageInfo(width, height, SKColorType.Rgba8888, SKAlphaType.Premul);
-            using var surface = SKSurface.Create(info);
-            if (surface is null) return null;
-            var target = surface.Canvas;
-            target.Clear(SKColors.Transparent);
-            target.Scale((float)deviceScale);
-            target.Translate((float)-padded.Left, (float)-padded.Top);
-            var previousCanvas = canvas; var previousBounds = coverageBounds; var previousKeys = drawKeys;
-            var previousLowers = withLowers;
-            canvas = target; coverageBounds = ToRect(padded);
-            drawKeys = layer.GeometryTiles.KeysIntersecting(padded.Left, padded.Top, padded.Right, padded.Bottom).ToList();
-            uncarved = surf;
-            withLowers = set == CoverageSet.WithLowers;
-            try
+            var inputs = new WorldBounds(Math.Min(padded.Left, view.Left) - TileMap.TileSize,
+                Math.Min(padded.Top, view.Top) - TileMap.TileSize, Math.Max(padded.Right, view.Right) + TileMap.TileSize,
+                Math.Max(padded.Bottom, view.Bottom) + TileMap.TileSize);
+            var revisions = new List<long>(TerrainFieldCache.CoverageRevisions(new[] { layer }.Concat(lowers), inputs));
+            revisions.Add(options.GpuContext is { } context ? TerrainFieldCache.Revision(context) : 0);
+            foreach (var (owner, river) in cutters)
             {
-                if (set == CoverageSet.LowersOnly)
+                revisions.Add(TerrainFieldCache.Revision(owner)); revisions.Add(TerrainFieldCache.Revision(river));
+                if (owner.Effects.ClippingEnabled && LowerLayer(document, owner) is { } lower)
+                    revisions.Add(TerrainFieldCache.Revision(lower));
+            }
+            var key = new TerrainFieldCache.Key("coast", layer.Id, padded, deviceScale,
+                (width, height, surf, set, view, options.ViewScale, options.IsExport, smoothEdges), revisions.ToArray());
+            return TerrainFieldCache.Shared.Get(key, (long)width * height * 5, BuildRaster);
+
+            TerrainFieldCache.CoastField? BuildRaster()
+            {
+                var info = new SKImageInfo(width, height, SKColorType.Rgba8888, SKAlphaType.Premul);
+                using var surface = SKSurface.Create(info);
+                if (surface is null) return null;
+                var target = surface.Canvas;
+                target.Clear(SKColors.Transparent);
+                target.Scale((float)deviceScale);
+                target.Translate((float)-padded.Left, (float)-padded.Top);
+                var previousCanvas = canvas; var previousBounds = coverageBounds; var previousKeys = drawKeys;
+                var previousLowers = withLowers;
+                canvas = target; coverageBounds = ToRect(padded);
+                drawKeys = layer.GeometryTiles.KeysIntersecting(padded.Left, padded.Top, padded.Right, padded.Bottom).ToList();
+                uncarved = surf;
+                withLowers = set == CoverageSet.WithLowers;
+                try
                 {
-                    using var plain = new SKPaint();
-                    DrawLandCoverage(canvas, lowers, padded, options, plain);
+                    if (set == CoverageSet.LowersOnly)
+                    {
+                        using var plain = new SKPaint();
+                        DrawLandCoverage(canvas, lowers, padded, options, plain);
+                    }
+                    else DrawCoverageImages(null);
                 }
-                else DrawCoverageImages(null);
+                finally
+                {
+                    canvas = previousCanvas; coverageBounds = previousBounds; drawKeys = previousKeys;
+                    uncarved = false; withLowers = previousLowers;
+                }
+                using var bitmap = new SKBitmap(info);
+                if (!surface.ReadPixels(info, bitmap.GetPixels(), bitmap.RowBytes, 0, 0)) return null;
+                var pixels = bitmap.GetPixelSpan();
+                var alpha = new byte[width * height];
+                for (var i = 0; i < alpha.Length; i++) alpha[i] = pixels[(i * 4) + 3];
+                return new TerrainFieldCache.CoastField(alpha, width, height);
             }
-            finally
-            {
-                canvas = previousCanvas; coverageBounds = previousBounds; drawKeys = previousKeys;
-                uncarved = false; withLowers = previousLowers;
-            }
-            using var bitmap = new SKBitmap(info);
-            if (!surface.ReadPixels(info, bitmap.GetPixels(), bitmap.RowBytes, 0, 0)) return null;
-            var pixels = bitmap.GetPixelSpan();
-            var alpha = new byte[width * height];
-            for (var i = 0; i < alpha.Length; i++) alpha[i] = pixels[(i * 4) + 3];
-            return alpha;
         }
 
         void DrawFilteredCoverage(SKImageFilter filter, SKColor? color, SKBlendMode blend)

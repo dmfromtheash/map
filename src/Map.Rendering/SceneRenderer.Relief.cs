@@ -26,33 +26,13 @@ public static partial class SceneRenderer
         texel = Math.Min(texel, Math.Sqrt(ReliefBudget / Math.Max(1, worldWidth * worldHeight)));
         var width = Math.Max(1, (int)Math.Ceiling(worldWidth * texel));
         var height = Math.Max(1, (int)Math.Ceiling(worldHeight * texel));
-        var keys = land.ReliefTiles.KeysIntersecting(padded.Left, padded.Top, padded.Right, padded.Bottom).ToList();
-        if (keys.Count == 0) return;
-
         var info = new SKImageInfo(width, height, SKColorType.Alpha8, SKAlphaType.Premul);
-        using var surface = SKSurface.Create(info);
-        if (surface is null) return;
-        surface.Canvas.Clear(SKColors.Transparent);
-        surface.Canvas.Scale((float)texel);
-        surface.Canvas.Translate((float)-padded.Left, (float)-padded.Top);
-        var tileInfo = new SKImageInfo(TileMap.TileSize, TileMap.TileSize, SKColorType.Alpha8, SKAlphaType.Premul);
-        using (var copy = new SKPaint { BlendMode = SKBlendMode.Src })
-            foreach (var key in keys)
-            {
-                if (land.ReliefTiles.TryGet(key) is not { } bytes) continue;
-                using var tile = SKImage.FromPixelCopy(tileInfo, bytes, TileMap.TileSize);
-                if (tile is null) continue;
-                surface.Canvas.DrawImage(tile, TileRect(key), new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None), copy);
-            }
-        using var stepped = surface.Snapshot();
-        // Heights are whole steps: blurred over about two texels the slope is smooth instead of terraced.
-        using var smooth = SKSurface.Create(info);
-        if (smooth is null) return;
-        smooth.Canvas.Clear(SKColors.Transparent);
-        using (var blur = SKImageFilter.CreateBlur(1.6f, 1.6f, SKShaderTileMode.Clamp))
-        using (var soften = new SKPaint { ImageFilter = blur })
-            smooth.Canvas.DrawImage(stepped, 0, 0, soften);
-        using var heights = smooth.Snapshot();
+        var key = new TerrainFieldCache.Key("relief", land.Id, padded, texel, (width, height),
+            TerrainFieldCache.TileRevisions(land.ReliefTiles, padded));
+        var pixels = TerrainFieldCache.Shared.Get(key, (long)width * height, Build);
+        if (pixels is null) return;
+        using var heights = SKImage.FromPixelCopy(info, pixels, info.RowBytes);
+        if (heights is null) return;
         var toWorld = SKMatrix.CreateScaleTranslation((float)(1 / texel), (float)(1 / texel), (float)padded.Left, (float)padded.Top);
         using var field = heights.ToShader(SKShaderTileMode.Clamp, SKShaderTileMode.Clamp,
             new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None), toWorld);
@@ -60,6 +40,37 @@ public static partial class SceneRenderer
         if (shader is null) return;
         using var paint = new SKPaint { Shader = shader };
         canvas.DrawRect(ToRect(view), paint);
+
+        byte[]? Build()
+        {
+            var keys = land.ReliefTiles.KeysIntersecting(padded.Left, padded.Top, padded.Right, padded.Bottom).ToList();
+            if (keys.Count == 0) return null;
+            using var surface = SKSurface.Create(info);
+            if (surface is null) return null;
+            surface.Canvas.Clear(SKColors.Transparent);
+            surface.Canvas.Scale((float)texel);
+            surface.Canvas.Translate((float)-padded.Left, (float)-padded.Top);
+            var tileInfo = new SKImageInfo(TileMap.TileSize, TileMap.TileSize, SKColorType.Alpha8, SKAlphaType.Premul);
+            using (var copy = new SKPaint { BlendMode = SKBlendMode.Src })
+                foreach (var key in keys)
+                {
+                    if (land.ReliefTiles.TryGet(key) is not { } bytes) continue;
+                    using var tile = SKImage.FromPixelCopy(tileInfo, bytes, TileMap.TileSize);
+                    if (tile is null) continue;
+                    surface.Canvas.DrawImage(tile, TileRect(key), new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None), copy);
+                }
+            using var stepped = surface.Snapshot();
+            // Heights are whole steps: blurred over about two texels the slope is smooth instead of terraced.
+            using var smooth = SKSurface.Create(info);
+            if (smooth is null) return null;
+            smooth.Canvas.Clear(SKColors.Transparent);
+            using (var blur = SKImageFilter.CreateBlur(1.6f, 1.6f, SKShaderTileMode.Clamp))
+            using (var soften = new SKPaint { ImageFilter = blur })
+                smooth.Canvas.DrawImage(stepped, 0, 0, soften);
+            using var bitmap = new SKBitmap(info);
+            if (!smooth.ReadPixels(info, bitmap.GetPixels(), info.RowBytes, 0, 0)) return null;
+            return bitmap.GetPixelSpan().ToArray();
+        }
     }
 }
 

@@ -30,12 +30,21 @@ public sealed class TileMap
     /// <summary>Fixed tile edge in canvas units/pixels, proven by the Stage 1 spike.</summary>
     public const int TileSize = 256;
 
+    /// <summary>Tile groups with an immutable change token, for derived coverage blocks.</summary>
+    public const int RevisionBlockSize = 16;
+
+    private sealed class BlockState(int count)
+    {
+        public int Count { get; } = count;
+    }
+    private readonly ImmutableDictionary<TileKey, BlockState> _blocks;
+
     private readonly ImmutableDictionary<TileKey, byte[]> _tiles;
 
     public static TileMap Empty(int bytesPerPixel) => new(
-        [], bytesPerPixel);
+        [], [], bytesPerPixel);
 
-    private TileMap(ImmutableDictionary<TileKey, byte[]> tiles, int bytesPerPixel)
+    private TileMap(ImmutableDictionary<TileKey, byte[]> tiles, ImmutableDictionary<TileKey, BlockState> blocks, int bytesPerPixel)
     {
         if (bytesPerPixel is not (1 or 4))
         {
@@ -43,6 +52,7 @@ public sealed class TileMap
         }
 
         _tiles = tiles;
+        _blocks = blocks;
         BytesPerPixel = bytesPerPixel;
     }
 
@@ -61,12 +71,27 @@ public sealed class TileMap
 
     public bool Contains(TileKey key) => _tiles.ContainsKey(key);
 
+    /// <summary>
+    /// Identity changes only when a tile in this group changes. Null proves the group empty.
+    /// Untouched groups share their token through edits and undo, with no scan of source tiles.
+    /// Tokens contain no pixel arrays or references to older snapshots.
+    /// </summary>
+    public object? BlockRevision(int blockX, int blockY) =>
+        _blocks.TryGetValue(new TileKey(blockX, blockY), out var block) ? block : null;
+
+    private static TileKey BlockKey(TileKey key) => new(
+        (int)Math.Floor((double)key.X / RevisionBlockSize), (int)Math.Floor((double)key.Y / RevisionBlockSize));
+
     /// <summary>New snapshot with the tile set or removed (null). Untouched tiles are shared.</summary>
     public TileMap With(TileKey key, byte[]? pixels)
     {
         if (pixels is null)
         {
-            return _tiles.ContainsKey(key) ? new TileMap(_tiles.Remove(key), BytesPerPixel) : this;
+            if (!_tiles.ContainsKey(key)) return this;
+            var blockKey = BlockKey(key);
+            var count = _blocks[blockKey].Count - 1;
+            var blocks = count == 0 ? _blocks.Remove(blockKey) : _blocks.SetItem(blockKey, new BlockState(count));
+            return new TileMap(_tiles.Remove(key), blocks, BytesPerPixel);
         }
 
         if (pixels.Length != TileByteLength)
@@ -74,18 +99,28 @@ public sealed class TileMap
             throw new ArgumentException($"Tile buffer must be {TileByteLength} bytes.", nameof(pixels));
         }
 
-        return new TileMap(_tiles.SetItem(key, pixels), BytesPerPixel);
+        if (_tiles.TryGetValue(key, out var current) && ReferenceEquals(current, pixels)) return this;
+        var groupKey = BlockKey(key);
+        var groupCount = (_blocks.TryGetValue(groupKey, out var group) ? group.Count : 0) + (current is null ? 1 : 0);
+        return new TileMap(_tiles.SetItem(key, pixels), _blocks.SetItem(groupKey, new BlockState(groupCount)), BytesPerPixel);
     }
 
     /// <summary>Applies many tile changes at once - one snapshot for a whole gesture.</summary>
     public TileMap WithMany(IEnumerable<KeyValuePair<TileKey, byte[]?>> changes)
     {
         var builder = _tiles.ToBuilder();
+        var blocks = _blocks.ToBuilder();
         foreach (var (key, pixels) in changes)
         {
+            builder.TryGetValue(key, out var current);
+            if (ReferenceEquals(current, pixels)) continue;
+            var blockKey = BlockKey(key);
             if (pixels is null)
             {
                 builder.Remove(key);
+                var count = blocks[blockKey].Count - 1;
+                if (count == 0) blocks.Remove(blockKey);
+                else blocks[blockKey] = new BlockState(count);
             }
             else
             {
@@ -95,10 +130,12 @@ public sealed class TileMap
                 }
 
                 builder[key] = pixels;
+                var count = (blocks.TryGetValue(blockKey, out var block) ? block.Count : 0) + (current is null ? 1 : 0);
+                blocks[blockKey] = new BlockState(count);
             }
         }
 
-        return new TileMap(builder.ToImmutable(), BytesPerPixel);
+        return new TileMap(builder.ToImmutable(), blocks.ToImmutable(), BytesPerPixel);
     }
 
     public static TileKey KeyAt(double worldX, double worldY) => new(
