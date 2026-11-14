@@ -122,8 +122,15 @@ internal sealed class ZoomRouteReport
     public long WorkingSetMiB { get; set; }
     public bool MemoryPressureLast { get; set; }
     public long SystemAvailableMiBLast { get; set; }
-    /// <summary>Cumulative production image-cache counters at the end of this route.</summary>
+    /// <summary>Cumulative production image-cache counters after the gesture, BEFORE waiting for refinement.</summary>
     public Dictionary<string, long> ImageCacheLast { get; set; } = [];
+    public Dictionary<string, long> ImageCacheAfterRefinement { get; set; } = [];
+    public Dictionary<string, long> RefinementState { get; set; } = [];
+    /// <summary>Raw Stopwatch/QPC ticks, for aligning routes with PresentMon --qpc_time.</summary>
+    public long StartQpc { get; } = Stopwatch.GetTimestamp();
+    public long EndQpc { get; set; }
+    public long RefinementStartQpc { get; set; }
+    public long RefinementEndQpc { get; set; }
     public Dictionary<string, double> ImageTimingLast { get; set; } = [];
     public Dictionary<string, double> RuntimeDuringRoute { get; set; } = [];
     private readonly int[] _collectionsAtStart = [GC.CollectionCount(0), GC.CollectionCount(1), GC.CollectionCount(2)];
@@ -181,6 +188,7 @@ public sealed partial class ZoomAssetsApplication : Application
     private EditorView _view = null!;
     private EditorViewModel _editor = null!;
     private AssetCatalog _catalog = null!;
+    private PerformanceJournal? _performanceJournal;
     private readonly List<(AssetRecord Record, AssetSet Set, byte[] Bytes)> _library = [];
     private readonly Stopwatch _runClock = Stopwatch.StartNew();
 
@@ -200,6 +208,12 @@ public sealed partial class ZoomAssetsApplication : Application
         var desktop = (IClassicDesktopStyleApplicationLifetime)ApplicationLifetime!;
         _workspace = Path.Combine(System.Environment.GetEnvironmentVariable("MAP_PERF_PROFILE_ROOT") ?? Path.GetDirectoryName(Options.OutputPath)!, "zoom-assets-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(_workspace);
+        // This host does not call Map.App.Main. Keep the same production frame journal,
+        // but retain its evidence with the run rather than in the disposable profile.
+        var journalRoot = Path.GetDirectoryName(Path.GetFullPath(Options.OutputPath))!;
+        _performanceJournal = new PerformanceJournal(journalRoot);
+        _report.Environment["performance-journal"] = Path.Combine(journalRoot, "diagnostics");
+        _report.Environment["qpc-frequency"] = Stopwatch.Frequency.ToString(System.Globalization.CultureInfo.InvariantCulture);
         if (Options.Profile == "native-million-assets" && System.Environment.GetEnvironmentVariable("MAP_PERF_DISABLE_DERIVED") != "1"
             && string.IsNullOrWhiteSpace(System.Environment.GetEnvironmentVariable("MAP_PERF_DERIVED_ROOT")))
             System.Environment.SetEnvironmentVariable("MAP_PERF_DERIVED_ROOT", Path.Combine(_workspace, "cache", "derived"));
@@ -232,7 +246,10 @@ public sealed partial class ZoomAssetsApplication : Application
             {
                 try { _view?.CloseAuxiliaryWindowsForSmoke(); _view?.Canvas.DisposeRenderCaches(); } catch { }
                 await _catalog.FlushMetadataAsync();
-                _window.Close(); Completion.TrySetResult(_report); desktop.Shutdown();
+                _window.Close();
+                if (_view is not null) _view.Canvas.PerformanceJournal = null;
+                _performanceJournal?.Dispose(); _performanceJournal = null;
+                Completion.TrySetResult(_report); desktop.Shutdown();
             }
         };
         desktop.MainWindow = _window; base.OnFrameworkInitializationCompleted();
@@ -478,7 +495,9 @@ public sealed partial class ZoomAssetsApplication : Application
             imageExporter: new ImageExportEngine(new ExportEngineSettings { TileEdge = 256 }),
             localPreferences: new EditorLocalPreferences(PrimaryAutosaveEnabled: false), stampImages: measuredSource);
         _editor = opening;
-        _view = new EditorView(_editor, () => Task.CompletedTask, () => { }, () => { }); _window.Content = _view;
+        _view = new EditorView(_editor, () => Task.CompletedTask, () => { }, () => { });
+        _view.Canvas.PerformanceJournal = _performanceJournal;
+        _window.Content = _view;
     }
 
     // ------------------------------------------------------------------ run
@@ -755,8 +774,9 @@ public sealed partial class ZoomAssetsApplication : Application
     private async Task Settled(ZoomRouteReport target)
     {
         var canvas = _view.Canvas;
+        target.RefinementStartQpc = Stopwatch.GetTimestamp();
         if (!canvas.LastFrameFastTerrain && !canvas.LastTerrainRefinementPending && canvas.LastRenderStats.DetailTilesPending == 0)
-        { target.RefinementCompleted = true; return; }
+        { target.RefinementCompleted = true; CaptureRefinementState(target); return; }
         var before = canvas.CompletedSceneRevision;
         var exactFrames = new List<double>();
         var completed = false;
@@ -794,7 +814,32 @@ public sealed partial class ZoomAssetsApplication : Application
             if (exactFrames.Count > 0) { target.SettleFrameMs = exactFrames.Max(); target.SettleDelayMs = watch.Elapsed.TotalMilliseconds; }
         target.RefinementCompleted = completed;
         target.RefinementBuildMs = canvas.LastRenderStats.TerrainRefinementBuildMilliseconds;
+        CaptureRefinementState(target);
         Console.WriteLine($"    settled exact frame: worst scene+GPU={target.SettleFrameMs:0.0} ms, delay={target.SettleDelayMs:0.0} ms, background={target.RefinementBuildMs:0.0} ms, complete={target.RefinementCompleted}");
+    }
+
+    private void CaptureRefinementState(ZoomRouteReport target)
+    {
+        target.RefinementEndQpc = Stopwatch.GetTimestamp();
+        var stats = _view.Canvas.LastRenderStats;
+        target.RefinementState = new()
+        {
+            ["detailTilesPending"] = stats.DetailTilesPending, ["unresolvedImages"] = stats.UnresolvedImages,
+            ["terrainPending"] = stats.TerrainRefinementsPending, ["hexPending"] = stats.HexChunksPending,
+            ["missingAssets"] = stats.MissingAssets,
+        };
+        if (_editor.StampImages is CatalogStampImageSource images)
+        {
+            target.ImageCacheAfterRefinement = ImageCacheSnapshot(images);
+            target.RefinementState["imageRequestsPending"] = images.ImageRequestsPending ? 1 : 0;
+            if (images.TryReadPerformanceQueues(out var queues))
+            {
+                target.RefinementState["metadataQueue"] = queues.Metadata;
+                target.RefinementState["buildQueue"] = queues.Builds;
+                target.RefinementState["pixelQueue"] = queues.Pixels;
+                target.RefinementState["latePixels"] = queues.LatePixels;
+            }
+        }
     }
 
     private async Task Route(ZoomScenarioReport scenario, string name, int steps, Action<int> step)
@@ -940,6 +985,7 @@ public sealed partial class ZoomAssetsApplication : Application
 
     private void Complete(ZoomScenarioReport scenario, ZoomRouteReport target, bool burst = false)
     {
+        target.EndQpc = Stopwatch.GetTimestamp();
         target.CompleteRuntimeCounters();
         var scene = target.SceneMs.Order().ToArray();
         var latency = target.LatencyMs.Order().ToArray();
@@ -975,19 +1021,7 @@ public sealed partial class ZoomAssetsApplication : Application
         target.SystemAvailableMiBLast = Map.Core.Resources.WorkingMemoryBudget.Shared.Snapshot.AvailableBytes / (1024 * 1024);
         if (_editor.StampImages is CatalogStampImageSource images)
         {
-            var imageCache = images.CacheStatistics;
-            target.ImageCacheLast = new()
-            {
-                ["entries"] = imageCache.Entries, ["residentBytes"] = imageCache.ResidentBytes,
-                ["hits"] = imageCache.Hits, ["misses"] = imageCache.Misses, ["evictions"] = imageCache.Evictions,
-                ["derivedDiskHits"] = images.DerivedStatistics.DiskHits, ["derivedBuilds"] = images.DerivedStatistics.Builds,
-                ["derivedDiskBytes"] = images.DerivedStatistics.DiskBytes, ["derivedDiskEvictions"] = images.DerivedStatistics.DiskEvictions,
-                ["derivedMetadataEntries"] = images.DerivedStatistics.MetadataEntries, ["derivedPendingMips"] = images.DerivedStatistics.PendingMips,
-                ["derivedDiscardedMips"] = images.DerivedStatistics.DiscardedMips,
-                ["sampleEntries"] = images.SampleStatistics.Entries,
-                ["sampleBytes"] = images.SampleStatistics.Bytes,
-                ["sampleEvictions"] = images.SampleStatistics.Evictions,
-            };
+            target.ImageCacheLast = ImageCacheSnapshot(images);
             var timing = images.Timings;
             target.ImageTimingLast = new()
             {
@@ -1002,6 +1036,23 @@ public sealed partial class ZoomAssetsApplication : Application
             $"latency P50/P95/max={target.LatencyP50:0.0}/{target.LatencyP95:0.0}/{target.LatencyMax:0.0} pauses={target.LongPauses} " +
             $"scale={target.ScaleStart:0.###}->{target.ScaleEnd:0.###} drawn={target.ObjectsDrawnLast} tier={target.TierLast} gpu={target.Gpu} ws={target.WorkingSetMiB}MiB " +
             $"last: terrain={target.TerrainMsLast:0.0} (land={target.LandMsLast:0.0} water={target.WaterMsLast:0.0} rivers=[{string.Join('/', stats.RiverPassMilliseconds.Select(p => p.ToString("0")))}]) objects={target.ObjectsMsLast:0.0} batch={target.StampBatchMsLast:0.0}/{target.AtlasBatchesLast} single={target.StampSingleMsLast:0.0} mipblend={target.MipBlendMsLast:0.0}/{target.MipBlendsLast} calls={target.DrawCallsLast} gpuflush={target.GpuFlushMsLast:0.0} terrainReused={target.TerrainReusedLast} tilesReused={stats.TilesReused} tilePrep={stats.DetailPrepareMilliseconds:0} tileRaster={stats.DetailRasterMilliseconds:0}");
+    }
+
+    private static Dictionary<string, long> ImageCacheSnapshot(CatalogStampImageSource images)
+    {
+        var cache = images.CacheStatistics;
+        var derived = images.DerivedStatistics;
+        var samples = images.SampleStatistics;
+        return new()
+        {
+            ["entries"] = cache.Entries, ["residentBytes"] = cache.ResidentBytes,
+            ["hits"] = cache.Hits, ["misses"] = cache.Misses, ["evictions"] = cache.Evictions,
+            ["derivedDiskHits"] = derived.DiskHits, ["derivedBuilds"] = derived.Builds,
+            ["derivedDiskBytes"] = derived.DiskBytes, ["derivedDiskEvictions"] = derived.DiskEvictions,
+            ["derivedMetadataEntries"] = derived.MetadataEntries, ["derivedPendingMips"] = derived.PendingMips,
+            ["derivedDiscardedMips"] = derived.DiscardedMips,
+            ["sampleEntries"] = samples.Entries, ["sampleBytes"] = samples.Bytes, ["sampleEvictions"] = samples.Evictions,
+        };
     }
 
     /// <summary>One input, then the first frame finished after it; scene time of that frame and wall time from the input.</summary>

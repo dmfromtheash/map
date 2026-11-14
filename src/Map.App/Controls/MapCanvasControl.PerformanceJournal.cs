@@ -6,13 +6,16 @@ namespace Map.App.Controls;
 
 public sealed partial class MapCanvasControl
 {
+    /// <summary>Optional host-owned journal. Desktop windows use the application journal by default.</summary>
+    public PerformanceJournal? PerformanceJournal { get; set; }
+
     private long _journalPreviousFrame;
     private PerformanceQueues _journalQueues;
     private PerformanceGesture _journalCameraGesture;
 
     private void RecordPerformanceFrame()
     {
-        if (Program.PerformanceJournal is not { } journal) return;
+        if ((PerformanceJournal ?? Program.PerformanceJournal) is not { } journal) return;
         var now = Stopwatch.GetTimestamp();
         var interval = _journalPreviousFrame == 0 ? 0 : Stopwatch.GetElapsedTime(_journalPreviousFrame, now).TotalMilliseconds;
         _journalPreviousFrame = now;
