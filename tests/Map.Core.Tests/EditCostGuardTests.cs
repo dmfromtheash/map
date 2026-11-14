@@ -26,30 +26,18 @@ public sealed class EditCostGuardTests(EditCostGuardTests.Maps maps) : IClassFix
     private static readonly string OtherHash = new('b', 64);
     private sealed record Case(string Key, Type Type, Func<Fixture, IEditCommand> Create, string? Linear = null, string State = "ready");
 
-    private static readonly HashSet<Type> LostRevisionIndex =
-    [
-        typeof(AddNoteCommand), typeof(ReplaceNoteCommand), typeof(DeleteNoteCommand),
-        typeof(AddCheckpointCommand), typeof(DeleteCheckpointCommand), typeof(RenameCheckpointCommand),
-        typeof(UpdateStampForegroundCommand), typeof(StampForegroundStrokeCommand),
-        typeof(SetLabelSettingsCommand), typeof(SetMapStyleCommand), typeof(SetLightingCommand), typeof(SetFogCommand),
-        typeof(SetEntitiesCommand), typeof(SetTransitionsCommand), typeof(SetTimelineCommand), typeof(SetPointcrawlCommand),
-        typeof(SetPlanetCommand), typeof(SetIsometricCommand), typeof(SetMapHandoutCommand), typeof(MapVariantCommand),
-    ];
-
     private static readonly HashSet<string> ChunkDirectory =
     [
         "AddObjectCommand", "TransformObjectCommand", "PasteCompositionCommand", "DeleteObjectsCommand/singleton",
-        "RegionLabelFollowCommand", "DecorationRefreshCommand",
+        "RegionLabelFollowCommand", "DecorationRefreshCommand", "SetMapScaleCommand",
     ];
 
     private static Case C<T>(Func<Fixture, T> create, string? suffix = null, string? linear = null, string state = "ready") where T : IEditCommand
     {
         var key = typeof(T).Name + (suffix is null ? "" : "/" + suffix);
-        linear ??= LostRevisionIndex.Contains(typeof(T))
-            ? "EditingSession.cs:135 -> DocumentRevisionIndex.cs:50: new document has no shared revision index; selection rebuilds it"
-            : ChunkDirectory.Contains(key)
-                ? "SceneObjectList.cs:90-97,466: copies chunk directories (O(N/256)); allocated-byte ratio exceeds 3"
-                : null;
+        linear ??= ChunkDirectory.Contains(key)
+            ? "SceneObjectList.cs:90-97,466: copies chunk directories (O(N/256)); allocated-byte ratio exceeds 3"
+            : null;
         return new(key, typeof(T), f => create(f), linear, state);
     }
 
@@ -82,14 +70,10 @@ public sealed class EditCostGuardTests(EditCostGuardTests.Maps maps) : IClassFix
         C(f => SetGroupCommand.Rename(f.Document, f.Grouped[0].GroupId!.Value, "renamed group"), "rename"),
         C(f => new ReorderObjectsCommand(f.Layer.Id, f.Layer.Objects, SwapTwo(f.Layer.Objects), "swap two"),
             linear: "Commands.cs:553,573 captures and rebuilds the entire layer for a two-object swap"),
-        C(f => new AddLayerCommand(new ObjectLayer(LayerId.New(), "ten", true, false, 1, f.Added)),
-            linear: "Commands.cs:992 -> MapDocument.WithLayers validates all objects"),
-        C(f => new DeleteLayerCommand(f.Document, f.Target.Id),
-            linear: "Commands.cs:1025 -> MapDocument.WithLayers validates all objects"),
-        C(f => new DuplicateLayerCommand(f.Target.Id),
-            linear: "Commands.cs:1270 -> MapDocument.WithLayers even for a tiny layer"),
-        C(f => new ReorderLayerCommand(f.Target.Id, true),
-            linear: "Commands.cs:1078 -> MapDocument.WithLayers validates all objects"),
+        C(f => new AddLayerCommand(new ObjectLayer(LayerId.New(), "ten", true, false, 1, f.Added))),
+        C(f => new DeleteLayerCommand(f.Document, f.Target.Id)),
+        C(f => new DuplicateLayerCommand(f.Target.Id)),
+        C(f => new ReorderLayerCommand(f.Target.Id, true)),
         C(f => UpdateLayerCommand.Rename(f.Layer, "renamed"), "rename"),
         C(f => UpdateLayerCommand.SetVisible(f.Layer, false), "visibility"),
         C(f => UpdateLayerCommand.SetLocked(f.Layer, true), "lock"),
@@ -130,22 +114,17 @@ public sealed class EditCostGuardTests(EditCostGuardTests.Maps maps) : IClassFix
             MapCheckpointSnapshot.Capture(f.Document), [1]))),
         C(f => DeleteCheckpointCommand.Create(f.Document, f.Checkpoint.Id)),
         C(f => RenameCheckpointCommand.Create(f.Document, f.Checkpoint.Id, "renamed")),
-        C(f => RestoreCheckpointCommand.Create(f.Document, f.Checkpoint.Id),
-            linear: "MapCheckpoint.cs:101 Materialize constructs and validates the whole document"),
+        C(f => RestoreCheckpointCommand.Create(f.Document, f.Checkpoint.Id)),
         C(f => new ReplaceGridLayerCommand(f.Grid, f.Grid with { Name = "changed grid" })),
-        C(f => HexPaintCommand.Create("ten hexes", f.Hex, f.HexChanges)!,
-            linear: "HexEditing.cs:296 -> WithLayers validates unrelated stamps"),
-        C(f => new UpdateHexGridCommand(f.Hex.Id, f.Hex.Grid, f.Hex.Grid with { Visible = false }),
-            linear: "HexEditing.cs:322 -> WithLayers validates unrelated stamps"),
+        C(f => HexPaintCommand.Create("ten hexes", f.Hex, f.HexChanges)!),
+        C(f => new UpdateHexGridCommand(f.Hex.Id, f.Hex.Grid, f.Hex.Grid with { Visible = false })),
         C(f => new HexLayerEditCommand("hex metadata", f.Hex, f.Hex with { Name = "hex edit", Grid = f.Hex.Grid with { Visible = false } })),
         C(f => HexBoardShapeCommand.Create("reshape", f.Document, f.Hex,
-            h => h with { Board = h.Board.Translated(10, 0) })!,
-            linear: "HexWorkshopEditing.cs:121 constructs and validates the whole document"),
-        C(f => new HexImportCommand(f.Document, f.Hex with { Board = f.Hex.Board.With(f.HexChanges) }),
-            linear: "HexImportCommand.cs:23 constructs and validates the whole document"),
+            h => h with { Board = h.Board.Translated(10, 0) })!),
+        C(f => new HexImportCommand(f.Document, f.Hex with { Board = f.Hex.Board.With(f.HexChanges) })),
         C(f => new SetHexSystemsCommand(f.Hex.Id, f.Hex.Systems,
             f.Hex.Systems.SetItem(new(0, 0), new StarSystem { Name = "system" }), "system")),
-        C(f => new MakeStarSectorCommand(f.Hex.Id), linear: "SecFormat.cs:140 -> WithLayers validates unrelated stamps"),
+        C(f => new MakeStarSectorCommand(f.Hex.Id)),
         C(f => new PlacementPathCommand(f.Layer.Id, f.Path.Id, f.Path with { Nodes = f.Path.Nodes.SetItem(1,
             f.Path.Nodes[1] with { X = f.Path.Nodes[1].X + 10 }) }, "path node")),
         C(f => new PlacementAreaCommand(f.Layer.Id, f.Area.Id, f.Area with { Seed = f.Area.Seed + 1 }, "area regenerate")),
@@ -174,16 +153,13 @@ public sealed class EditCostGuardTests(EditCostGuardTests.Maps maps) : IClassFix
         C(f => new SetPlanetCommand(f.Document.Planet, f.Document.Planet with { Enabled = true })),
         C(f => new SetIsometricCommand(f.Document.Isometric, f.Document.Isometric with { HeightScale = 2 })),
         C(f => new SetMapHandoutCommand(f.Document.Handout, MapHandout.Found)),
-        C(f => new SetMapScaleCommand(f.Document.Canvas.Scale, new MapScale(1, "km")),
-            linear: "MapDecorations.cs:187 constructs and validates the whole document"),
-        C(f => new ApplyStylePackCommand("pack", f.Document, f.Document with { Style = new MapStyle() }),
-            linear: "ApplyStylePackCommand.cs:13,15 -> WithLayers validates all objects"),
+        C(f => new SetMapScaleCommand(f.Document.Canvas.Scale, new MapScale(1, "km"))),
+        C(f => new ApplyStylePackCommand("pack", f.Document, f.Document with { Style = new MapStyle() })),
         C(f => new ApplyChangePackageCommand(f.Document, f.SmallChange),
-            linear: "ChangePackages.cs:222 -> WithLayers validates all objects"),
+            linear: "ChangePackages.cs:222 -> WithLayers: the big layer arrives as another storage; its 200k objects exceed the layer-delta bound (MapDocument.MaxDeltaObjects) and take the whole-document validation"),
         C(f => new MapVariantCommand("variant", f.Document, f.Document with { Handout = MapHandout.Found, Style = new MapStyle() })),
         C(f => new ResizeCanvasCommand(f.Document, f.SmallChange)),
-        C(f => new ReplaceCityCommand(f.Target, f.Target with { Objects = f.Added }, f.Document.Notes, f.Document.Notes),
-            linear: "CityBuilder.cs:380,389 -> WithLayers validates unrelated stamps"),
+        C(f => new ReplaceCityCommand(f.Target, f.Target with { Objects = f.Added }, f.Document.Notes, f.Document.Notes)),
         C(f => new CompositeCommand("ten moves", [.. f.Selected.Zip(f.Moved, (a, b) => new TransformObjectCommand(a, b))])),
     ];
 
@@ -213,6 +189,7 @@ public sealed class EditCostGuardTests(EditCostGuardTests.Maps maps) : IClassFix
         var session = new EditingSession(f.Document);
         session.SetSelection(f.Ids);
         var roots = Roots();
+        var identities = SceneObjectList.IdentityRootObjects;
         var enumerated = SceneObjectList.EnumeratedOnThisThread;
         session.Execute(Find(key).Create(f));
         PrepareAfter(f.Document, session.Document);
@@ -223,14 +200,18 @@ public sealed class EditCostGuardTests(EditCostGuardTests.Maps maps) : IClassFix
         Assert.True(session.Redo());
         PrepareAfter(undone, session.Document);
         Assert.Equal(roots, Roots());
+        // Identity slots count the objects they visit, not the tables: a genuinely new layer (add,
+        // duplicate, a rebuilt city) needs its own small table, which is work on the changed
+        // payload. A table over the unrelated stamps visits far more than this bound.
+        Assert.True(SceneObjectList.IdentityRootObjects - identities < 10_000, key + ": identity table over the whole map");
         // A separate deterministic guard: even a fast allocation-free foreach over the whole map
         // must fail. Bounded chunks and the fixed area/path payload may still be inspected.
         Assert.True(SceneObjectList.EnumeratedOnThisThread - enumerated < 10_000, key + ": full object enumeration");
         Assert.Null(session.LastResourceError);
     }
 
-    private static (long Revision, long Identity, long Names) Roots() =>
-        (DocumentRevisionIndex.RootBuilds, SceneObjectList.IdentityRootBuilds, ObjectNameIndex.RootBuilds);
+    private static (long Revision, long Names) Roots() =>
+        (DocumentRevisionIndex.RootBuilds, ObjectNameIndex.RootBuilds);
 
     private static void PrepareAfter(MapDocument before, MapDocument after)
     {
@@ -312,26 +293,8 @@ public sealed class EditCostGuardTests(EditCostGuardTests.Maps maps) : IClassFix
     [Fact(Skip = "O(N): Commands.cs:553,573 captures and rebuilds the entire layer for a two-object swap")]
     public void Known_ReorderObjectsCommand() => Compare(Find("ReorderObjectsCommand"), maps.Small, maps.Large, enforce: true);
 
-    [Fact(Skip = "O(N): Commands.cs:992 -> MapDocument.WithLayers validates all objects")]
-    public void Known_AddLayerCommand() => Compare(Find("AddLayerCommand"), maps.Small, maps.Large, enforce: true);
-
-    [Fact(Skip = "O(N): Commands.cs:1025 -> MapDocument.WithLayers validates all objects")]
-    public void Known_DeleteLayerCommand() => Compare(Find("DeleteLayerCommand"), maps.Small, maps.Large, enforce: true);
-
-    [Fact(Skip = "O(N): Commands.cs:1270 -> MapDocument.WithLayers even for a tiny layer")]
-    public void Known_DuplicateLayerCommand() => Compare(Find("DuplicateLayerCommand"), maps.Small, maps.Large, enforce: true);
-
-    [Fact(Skip = "O(N): Commands.cs:1078 -> MapDocument.WithLayers validates all objects")]
-    public void Known_ReorderLayerCommand() => Compare(Find("ReorderLayerCommand"), maps.Small, maps.Large, enforce: true);
-
     [Fact(Skip = "O(N): ControlledAreaGeneration.cs:23 -> UpdateLayerCommand.Replace -> WithLayers: scans/copies all stamps for one area")]
     public void Known_UpdateLayerCommand_controlled_area() => Compare(Find("UpdateLayerCommand/controlled-area"), maps.Small, maps.Large, enforce: true);
-
-    [Fact(Skip = "O(N): EditingSession.cs:135 -> DocumentRevisionIndex.cs:50: new document has no shared revision index; selection rebuilds it")]
-    public void Known_UpdateStampForegroundCommand() => Compare(Find("UpdateStampForegroundCommand"), maps.Small, maps.Large, enforce: true);
-
-    [Fact(Skip = "O(N): EditingSession.cs:135 -> DocumentRevisionIndex.cs:50: new document has no shared revision index; selection rebuilds it")]
-    public void Known_StampForegroundStrokeCommand() => Compare(Find("StampForegroundStrokeCommand"), maps.Small, maps.Large, enforce: true);
 
     [Fact(Skip = "O(N): VectorEditing.cs:22,35 copies and filters the whole layer")]
     public void Known_ReplaceObjectWithManyCommand() => Compare(Find("ReplaceObjectWithManyCommand"), maps.Small, maps.Large, enforce: true);
@@ -345,95 +308,17 @@ public sealed class EditCostGuardTests(EditCostGuardTests.Maps maps) : IClassFix
     [Fact(Skip = "O(N): SceneObjectList.cs:90-97,466: copies chunk directories (O(N/256)); allocated-byte ratio exceeds 3")]
     public void Known_PasteCompositionCommand() => Compare(Find("PasteCompositionCommand"), maps.Small, maps.Large, enforce: true);
 
-    [Fact(Skip = "O(N): EditingSession.cs:135 -> DocumentRevisionIndex.cs:50: new document has no shared revision index; selection rebuilds it")]
-    public void Known_AddNoteCommand() => Compare(Find("AddNoteCommand"), maps.Small, maps.Large, enforce: true);
-
-    [Fact(Skip = "O(N): EditingSession.cs:135 -> DocumentRevisionIndex.cs:50: new document has no shared revision index; selection rebuilds it")]
-    public void Known_ReplaceNoteCommand() => Compare(Find("ReplaceNoteCommand"), maps.Small, maps.Large, enforce: true);
-
-    [Fact(Skip = "O(N): EditingSession.cs:135 -> DocumentRevisionIndex.cs:50: new document has no shared revision index; selection rebuilds it")]
-    public void Known_DeleteNoteCommand() => Compare(Find("DeleteNoteCommand"), maps.Small, maps.Large, enforce: true);
-
-    [Fact(Skip = "O(N): EditingSession.cs:135 -> DocumentRevisionIndex.cs:50: new document has no shared revision index; selection rebuilds it")]
-    public void Known_AddCheckpointCommand() => Compare(Find("AddCheckpointCommand"), maps.Small, maps.Large, enforce: true);
-
-    [Fact(Skip = "O(N): EditingSession.cs:135 -> DocumentRevisionIndex.cs:50: new document has no shared revision index; selection rebuilds it")]
-    public void Known_DeleteCheckpointCommand() => Compare(Find("DeleteCheckpointCommand"), maps.Small, maps.Large, enforce: true);
-
-    [Fact(Skip = "O(N): EditingSession.cs:135 -> DocumentRevisionIndex.cs:50: new document has no shared revision index; selection rebuilds it")]
-    public void Known_RenameCheckpointCommand() => Compare(Find("RenameCheckpointCommand"), maps.Small, maps.Large, enforce: true);
-
-    [Fact(Skip = "O(N): MapCheckpoint.cs:101 Materialize constructs and validates the whole document")]
-    public void Known_RestoreCheckpointCommand() => Compare(Find("RestoreCheckpointCommand"), maps.Small, maps.Large, enforce: true);
-
-    [Fact(Skip = "O(N): HexEditing.cs:296 -> WithLayers validates unrelated stamps")]
-    public void Known_HexPaintCommand() => Compare(Find("HexPaintCommand"), maps.Small, maps.Large, enforce: true);
-
-    [Fact(Skip = "O(N): HexEditing.cs:322 -> WithLayers validates unrelated stamps")]
-    public void Known_UpdateHexGridCommand() => Compare(Find("UpdateHexGridCommand"), maps.Small, maps.Large, enforce: true);
-
-    [Fact(Skip = "O(N): HexWorkshopEditing.cs:121 constructs and validates the whole document")]
-    public void Known_HexBoardShapeCommand() => Compare(Find("HexBoardShapeCommand"), maps.Small, maps.Large, enforce: true);
-
-    [Fact(Skip = "O(N): HexImportCommand.cs:23 constructs and validates the whole document")]
-    public void Known_HexImportCommand() => Compare(Find("HexImportCommand"), maps.Small, maps.Large, enforce: true);
-
-    [Fact(Skip = "O(N): SecFormat.cs:140 -> WithLayers validates unrelated stamps")]
-    public void Known_MakeStarSectorCommand() => Compare(Find("MakeStarSectorCommand"), maps.Small, maps.Large, enforce: true);
-
     [Fact(Skip = "O(N): SceneObjectList.cs:90-97,466: copies chunk directories (O(N/256)); allocated-byte ratio exceeds 3")]
     public void Known_RegionLabelFollowCommand() => Compare(Find("RegionLabelFollowCommand"), maps.Small, maps.Large, enforce: true);
 
     [Fact(Skip = "O(N): SceneObjectList.cs:90-97,466: copies chunk directories (O(N/256)); allocated-byte ratio exceeds 3")]
     public void Known_DecorationRefreshCommand() => Compare(Find("DecorationRefreshCommand"), maps.Small, maps.Large, enforce: true);
 
-    [Fact(Skip = "O(N): EditingSession.cs:135 -> DocumentRevisionIndex.cs:50: new document has no shared revision index; selection rebuilds it")]
-    public void Known_SetLabelSettingsCommand() => Compare(Find("SetLabelSettingsCommand"), maps.Small, maps.Large, enforce: true);
-
-    [Fact(Skip = "O(N): EditingSession.cs:135 -> DocumentRevisionIndex.cs:50: new document has no shared revision index; selection rebuilds it")]
-    public void Known_SetMapStyleCommand() => Compare(Find("SetMapStyleCommand"), maps.Small, maps.Large, enforce: true);
-
-    [Fact(Skip = "O(N): EditingSession.cs:135 -> DocumentRevisionIndex.cs:50: new document has no shared revision index; selection rebuilds it")]
-    public void Known_SetLightingCommand() => Compare(Find("SetLightingCommand"), maps.Small, maps.Large, enforce: true);
-
-    [Fact(Skip = "O(N): EditingSession.cs:135 -> DocumentRevisionIndex.cs:50: new document has no shared revision index; selection rebuilds it")]
-    public void Known_SetFogCommand() => Compare(Find("SetFogCommand"), maps.Small, maps.Large, enforce: true);
-
-    [Fact(Skip = "O(N): EditingSession.cs:135 -> DocumentRevisionIndex.cs:50: new document has no shared revision index; selection rebuilds it")]
-    public void Known_SetEntitiesCommand() => Compare(Find("SetEntitiesCommand"), maps.Small, maps.Large, enforce: true);
-
-    [Fact(Skip = "O(N): EditingSession.cs:135 -> DocumentRevisionIndex.cs:50: new document has no shared revision index; selection rebuilds it")]
-    public void Known_SetTransitionsCommand() => Compare(Find("SetTransitionsCommand"), maps.Small, maps.Large, enforce: true);
-
-    [Fact(Skip = "O(N): EditingSession.cs:135 -> DocumentRevisionIndex.cs:50: new document has no shared revision index; selection rebuilds it")]
-    public void Known_SetTimelineCommand() => Compare(Find("SetTimelineCommand"), maps.Small, maps.Large, enforce: true);
-
-    [Fact(Skip = "O(N): EditingSession.cs:135 -> DocumentRevisionIndex.cs:50: new document has no shared revision index; selection rebuilds it")]
-    public void Known_SetPointcrawlCommand() => Compare(Find("SetPointcrawlCommand"), maps.Small, maps.Large, enforce: true);
-
-    [Fact(Skip = "O(N): EditingSession.cs:135 -> DocumentRevisionIndex.cs:50: new document has no shared revision index; selection rebuilds it")]
-    public void Known_SetPlanetCommand() => Compare(Find("SetPlanetCommand"), maps.Small, maps.Large, enforce: true);
-
-    [Fact(Skip = "O(N): EditingSession.cs:135 -> DocumentRevisionIndex.cs:50: new document has no shared revision index; selection rebuilds it")]
-    public void Known_SetIsometricCommand() => Compare(Find("SetIsometricCommand"), maps.Small, maps.Large, enforce: true);
-
-    [Fact(Skip = "O(N): EditingSession.cs:135 -> DocumentRevisionIndex.cs:50: new document has no shared revision index; selection rebuilds it")]
-    public void Known_SetMapHandoutCommand() => Compare(Find("SetMapHandoutCommand"), maps.Small, maps.Large, enforce: true);
-
-    [Fact(Skip = "O(N): MapDecorations.cs:187 constructs and validates the whole document")]
+    [Fact(Skip = "O(N): SceneObjectList.cs:90-97,466: copies chunk directories (O(N/256)); allocated-byte ratio exceeds 3")]
     public void Known_SetMapScaleCommand() => Compare(Find("SetMapScaleCommand"), maps.Small, maps.Large, enforce: true);
 
-    [Fact(Skip = "O(N): ApplyStylePackCommand.cs:13,15 -> WithLayers validates all objects")]
-    public void Known_ApplyStylePackCommand() => Compare(Find("ApplyStylePackCommand"), maps.Small, maps.Large, enforce: true);
-
-    [Fact(Skip = "O(N): ChangePackages.cs:222 -> WithLayers validates all objects")]
+    [Fact(Skip = "O(N): ChangePackages.cs:222 -> WithLayers: the big layer arrives as another storage; its 200k objects exceed the layer-delta bound (MapDocument.MaxDeltaObjects) and take the whole-document validation")]
     public void Known_ApplyChangePackageCommand() => Compare(Find("ApplyChangePackageCommand"), maps.Small, maps.Large, enforce: true);
-
-    [Fact(Skip = "O(N): EditingSession.cs:135 -> DocumentRevisionIndex.cs:50: new document has no shared revision index; selection rebuilds it")]
-    public void Known_MapVariantCommand() => Compare(Find("MapVariantCommand"), maps.Small, maps.Large, enforce: true);
-
-    [Fact(Skip = "O(N): CityBuilder.cs:380,389 -> WithLayers validates unrelated stamps")]
-    public void Known_ReplaceCityCommand() => Compare(Find("ReplaceCityCommand"), maps.Small, maps.Large, enforce: true);
 
     [Fact(Skip = "O(N): DocumentRevisionIndex.cs:479: after 256 appends the next lookup rebuilds the full root")]
     public void Known_AddObjectsCommand_append_limit() => Compare(Find("AddObjectsCommand/append-limit"), maps.Small, maps.Large, enforce: true);
@@ -705,8 +590,13 @@ public sealed class EditCostGuardTests(EditCostGuardTests.Maps maps) : IClassFix
             doc = TextOnPath.Follow(doc, doc);
             doc = RegionLabels.Follow(doc, doc);
             doc = MapDecorations.Refresh(doc);
+            // A checkpoint is captured from the live, prepared document (AddCheckpointCommand); its
+            // snapshot shares that document's layer-keyed indexes. A never-prepared snapshot (one
+            // read from disk) restores like an opened file: its indexes are built once, off input.
+            var versioned = DocumentEditor.ReplaceObjects(doc, Moved);
+            DocumentDerivedIndexes.Prepare(versioned);
             Checkpoint = new MapCheckpoint(CheckpointId.New(), "checkpoint", DateTimeOffset.UnixEpoch,
-                MapCheckpointSnapshot.Capture(DocumentEditor.ReplaceObjects(doc, Moved)), [1]);
+                MapCheckpointSnapshot.Capture(versioned), [1]);
             Document = doc.WithCheckpoints([Checkpoint]);
             Layer = (ObjectLayer)Document.FindLayer(layer.Id)!;
             PathLabel = DocumentEditor.FindObject(Document, PathLabel.Id)!;
@@ -734,8 +624,11 @@ public sealed class EditCostGuardTests(EditCostGuardTests.Maps maps) : IClassFix
 
         private MapDocument PrepareAppendLimit()
         {
+            // Exactly at the depth bound: the fixture's own setup edits may already have started
+            // the append chain that Document shares (indexes follow the layer list).
             var document = Document;
-            for (var i = 0; i < 256; i++) document = DocumentEditor.AppendObjects(document, Layer.Id, [Stamp(-1000 - i, Hash)]);
+            for (var i = 0; DocumentRevisionIndex.For(document).AppendDepth < 256; i++)
+                document = DocumentEditor.AppendObjects(document, Layer.Id, [Stamp(-1000 - i, Hash)]);
             DocumentDerivedIndexes.Prepare(document);
             return document;
         }
