@@ -68,6 +68,8 @@ public sealed class ObjectOverviewCache : IDisposable
     /// <summary>... nor one drawn within this time, so a fast frame rate does not shorten the protection.</summary>
     public long PressureProtectedMilliseconds { get; init; } = 2000;
     public long PressureTrims { get; private set; }
+    /// <summary>Time one pressure pass may take on the owner thread; the first tile of a pass always goes.</summary>
+    internal double PressureTrimMilliseconds { get; init; } = 2;
 
     private void Touch(Entry entry)
     {
@@ -107,7 +109,10 @@ public sealed class ObjectOverviewCache : IDisposable
         foreach (var pair in candidates)
         {
             if (Bytes <= target) break;
-            if (System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds >= 2) { exhausted = false; break; }
+            // The scan and sort count against the budget too, but a pass always frees one tile: on a slow PC (a CI
+            // runner's cold JIT, 2026-11-14) the scan alone took the 2 ms and the cache never fell to its watermark.
+            if (items > 0 && System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds >= PressureTrimMilliseconds)
+            { exhausted = false; break; }
             if (Remove(pair.Key, eviction: true)) items++;
         }
         if (exhausted && Bytes > target) _pressureRetryFrame = retry == long.MaxValue ? _frame + 15 : retry;

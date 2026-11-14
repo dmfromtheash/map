@@ -11,6 +11,7 @@ namespace Map.Rendering.Tests;
 /// number of finished results may wait for the frame, the frame adopts them under its own budget
 /// and the resident shelf is a byte-bounded LRU. The settled frame must equal the synchronous one.
 /// </summary>
+[Collection(RealTimeSettleCollection.Name)]
 public sealed class DenseDetailTilesTests(ITestOutputHelper output)
 {
     private const int Width = 2048, Height = 1095;
@@ -35,6 +36,18 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
         Assert.True(result.Settled, result.ToString());
         Assert.True(result.PixelsEqual, "The settled frame must equal the synchronous frame.");
         Assert.True(result.RequestedBytes > result.ResidentBudget, "The view must sample more than the shelf holds.");
+    }
+
+    [Fact]
+    public async Task A_read_queued_past_the_end_of_a_run_fails_cleanly_instead_of_crashing_the_host()
+    {
+        // The harness disposes its mip disk in a finally while reads of the last frames are still queued.
+        var disk = new MipDisk();
+        using var gate = new ManualResetEventSlim();
+        var late = Task.Run(() => { gate.Wait(); return disk.Read(0, 97, 61); });
+        disk.Dispose();
+        gate.Set();
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => late);
     }
 
     public static TheoryData<int> DenseSizes => new() { 250_000, 1_000_000 };
@@ -228,12 +241,18 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
 
     internal sealed record AssetShape(string Sha, int Width, int Height, int Fixture);
 
-    /// <summary>The "derived disk": deterministic mip pixels per asset and level, shared by both sources.</summary>
+    /// <summary>
+    /// The "derived disk": deterministic mip pixels per asset and level, shared by both sources. Reads run on pool
+    /// tasks the frame may never collect: a run that ends (or fails) with reads still queued must not free the
+    /// fixtures under them. Before 2026-11-14 it did, and a late <c>SKBitmap.Resize</c> of a disposed fixture
+    /// (null handle into <c>sk_bitmap_peek_pixels</c>) crashed the whole CI test host with 0xC0000005.
+    /// </summary>
     internal sealed class MipDisk : IDisposable
     {
         public const int Fixtures = 6;
         private readonly SKBitmap[] _fixtures;
         private readonly Dictionary<(int Fixture, int Width, int Height), SKImage> _mips = [];
+        private bool _disposed;
         public MipDisk()
         {
             var root = new DirectoryInfo(AppContext.BaseDirectory);
@@ -245,6 +264,7 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
         {
             lock (_mips)
             {
+                ObjectDisposedException.ThrowIf(_disposed, this);
                 if (_mips.TryGetValue((fixture, width, height), out var held)) return held;
                 using var resized = _fixtures[fixture].Resize(new SKImageInfo(width, height, SKColorType.Rgba8888, SKAlphaType.Premul),
                     new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear));
@@ -254,8 +274,15 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
         }
         public void Dispose()
         {
-            foreach (var image in _mips.Values) image.Dispose();
-            foreach (var bitmap in _fixtures) bitmap.Dispose();
+            // Under the read lock: a read in progress finishes first, every later one sees the flag.
+            lock (_mips)
+            {
+                if (_disposed) return;
+                _disposed = true;
+                foreach (var image in _mips.Values) image.Dispose();
+                _mips.Clear();
+                foreach (var bitmap in _fixtures) bitmap.Dispose();
+            }
         }
     }
 

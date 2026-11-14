@@ -15,6 +15,7 @@ namespace Map.Rendering.Tests;
 /// Before the fix (2026-11-14) the zoom-in seeds of every passed level stayed as fallbacks, which the
 /// cache evicted last: at 32 MiB the fit view drew 56 of 256 chunks and evicted 91 412 times in 120 s.
 /// </summary>
+[Collection(RealTimeSettleCollection.Name)]
 public sealed class OverviewZoomOutSettleTests(ITestOutputHelper output)
 {
     private const int Width = 2048, Height = 1095;

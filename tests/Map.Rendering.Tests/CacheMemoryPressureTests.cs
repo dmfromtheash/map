@@ -24,9 +24,12 @@ public sealed class CacheMemoryPressureTests
         return surface.Snapshot();
     }
 
-    private static ObjectOverviewCache Cache(WorkingMemoryBudget budget) =>
+    // The pressure pass has 2 ms per frame. A test whose result depends on how many frames that budget
+    // takes measures the machine (a CI runner's cold JIT spent it on the scan, 2026-11-14), so the
+    // trimming tests give the pass all the time it needs; the budget itself is tested separately below.
+    private static ObjectOverviewCache Cache(WorkingMemoryBudget budget, double trimMilliseconds = 10_000) =>
         new(1024, 16 * TileBytes, budget, memoryAccount: "object-overview")
-        { PressureProtectedFrames = 3, PressureProtectedMilliseconds = 0 };
+        { PressureProtectedFrames = 3, PressureProtectedMilliseconds = 0, PressureTrimMilliseconds = trimMilliseconds };
 
     /// <summary>Frame 1 builds 16 tiles; then the view keeps drawing tiles 0..3 only.</summary>
     private static void Route(ObjectOverviewCache cache, LayerId layer, int frames, ref int builds)
@@ -43,6 +46,24 @@ public sealed class CacheMemoryPressureTests
             cache.EndFrame();
         }
         builds += made;
+    }
+
+    [Fact]
+    public void A_pressure_pass_out_of_time_still_frees_one_tile_per_frame()
+    {
+        // No time at all: before 2026-11-14 such a pass freed nothing and the cache stayed above its watermark.
+        using var cache = Cache(Budget(pressure: true), trimMilliseconds: 0);
+        var layer = LayerId.New();
+        var builds = 0;
+        // Frames 2..10 after the build: frames 4..10 are past the three protected frames, one tile each.
+        Route(cache, layer, frames: 9, ref builds);
+        Assert.Equal(9 * TileBytes, cache.Bytes);
+        cache.BeginFrame();
+        for (var x = 0; x < 4; x++) cache.GetOrCreate(layer, x, 0, 1, 1, Tile);
+        cache.EndFrame();
+        Assert.Equal(8 * TileBytes, cache.Bytes);
+        Assert.Equal(16, builds); // the visible tiles were never rebuilt
+        for (var x = 0; x < 4; x++) Assert.True(cache.TryGet(layer, x, 0, 1, 1, out _), "visible " + x);
     }
 
     [Fact]
