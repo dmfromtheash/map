@@ -296,8 +296,17 @@ public sealed class PerformanceJournalTests(ITestOutputHelper output) : IDisposa
         var frame = new PerformanceFrame(12, 16, PerformanceGesture.Pan, 100, 10, 1, 5, 2, 0, new(2, 3, 4, 5, 6));
         const int batchSize = 8000;
         // Warm the JIT, both producer branches and serializer before measuring only the producer.
-        for (var i = 0; i < batchSize; i++) journal.RecordFrame(frame);
-        journal.Drain(Stopwatch.GetTimestamp(), 0);
+        // Tiered compilation promotes the producer after a delay, and installing the optimised
+        // code can allocate once on the calling thread (USER 14.11: 6728 bytes in one run, 0 on
+        // the repeat). Keep warming until two consecutive batches allocate nothing.
+        for (int warm = 0, clean = 0; clean < 2 && warm < 200; warm++)
+        {
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < batchSize; i++) journal.RecordFrame(frame);
+            clean = GC.GetAllocatedBytesForCurrentThread() == before ? clean + 1 : 0;
+            journal.Drain(Stopwatch.GetTimestamp(), 0);
+            if (clean == 0) Thread.Sleep(20);
+        }
         long allocated = 0, elapsed = 0;
         double maxBatchMsPerFrame = 0;
         const int batches = 100;
