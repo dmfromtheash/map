@@ -19,7 +19,8 @@ public static class DocumentDerivedIndexes
         if (!Editing.LabelPriority.IsPrepared(document)) return false;
         foreach (var layer in document.Layers)
         {
-            if (layer is ObjectLayer features && !Editing.PlacementAreaRuleCheck.IsPrepared(features)) return false;
+            if (layer is ObjectLayer features && (!Editing.PlacementAreaRuleCheck.IsPrepared(features)
+                || !features.RiverIds.IsPrepared || !features.RoadIds.IsPrepared)) return false;
             if (layer is ObjectLayer objects && objects.Objects.Count > 0
                 && (!objects.ObjectStorage.HasIdentityTable || !ObjectSpatialIndex.IsPrepared(objects)
                     || !Editing.BoundObjectIndex.IsPrepared(objects)))
@@ -40,6 +41,13 @@ public static class DocumentDerivedIndexes
         foreach (var layer in document.Layers)
         {
             if (layer is not ObjectLayer objects) continue;
+            cancellationToken.ThrowIfCancellationRequested();
+            Resources.BackgroundWork.YieldToInteraction(cancellationToken);
+            objects.RiverIds.Prepare();
+            cancellationToken.ThrowIfCancellationRequested();
+            Resources.BackgroundWork.YieldToInteraction(cancellationToken);
+            objects.RoadIds.Prepare();
+            if (objects.Objects.Count == 0) continue;
             cancellationToken.ThrowIfCancellationRequested();
             Editing.PlacementAreaRuleCheck.Prepare(objects);
             if (objects.Objects.Count == 0) continue;

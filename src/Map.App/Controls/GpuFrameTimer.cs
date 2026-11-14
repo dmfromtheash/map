@@ -46,6 +46,13 @@ internal sealed class GpuFrameTimer
     private int _next;
     private bool _open;
 
+    /// <summary>
+    /// Diagnostics (MAP_GPU_TIMER_SPAN=1): measure frame start → next frame start on the GPU timeline instead of the
+    /// canvas's own commands — the whole window's GPU work (composition, other controls, present) falls inside.
+    /// Note: GPU idle time between frames is included as well when the GPU waits.
+    /// </summary>
+    public static bool Span { get; } = Environment.GetEnvironmentVariable("MAP_GPU_TIMER_SPAN") == "1";
+
     /// <summary>GPU milliseconds of the most recent frame whose query completed; null until one did.</summary>
     public double? LastMilliseconds { get; private set; }
     public long Completed { get; private set; }
@@ -64,10 +71,12 @@ internal sealed class GpuFrameTimer
             if (_state != State.On) return;
             if (_open)
             {
-                // The previous frame left early without End: close its query and ignore its result.
+                // Span mode: the previous query runs from that frame's start to this one's, so it also covers the
+                // window composition and present work Avalonia submits after the canvas. Otherwise the previous
+                // frame left early without End: close its query and ignore its result.
                 _end!(TimeElapsed);
                 _open = false;
-                _pending[_next] = true; _ignored[_next] = true;
+                _pending[_next] = true; _ignored[_next] = !Span;
                 _next = (_next + 1) % Ring;
             }
             Collect();
@@ -82,7 +91,7 @@ internal sealed class GpuFrameTimer
     /// <summary>Submits the frame's recorded work (asynchronously) and closes its query.</summary>
     public void End(ISkiaSharpApiLease lease, GRContext? gpu)
     {
-        if (!_open) return;
+        if (!_open || Span) return; // span mode closes the query at the next frame's Begin
         _open = false;
         try
         {

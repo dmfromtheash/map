@@ -36,13 +36,8 @@ public static class RiverRenderer
     public static IReadOnlyList<River> Resolve(ObjectLayer layer, RenderOptions options)
     {
         if (options.RiverOverrides is not { Count: > 0 } overrides) return layer.Rivers;
-        var result = new List<River>(layer.Rivers.Length + 1);
-        foreach (var river in layer.Rivers)
-            result.Add(overrides.FirstOrDefault(o => o.Id == river.Id) ?? river);
-        if (options.RiverPreviewLayerId == layer.Id)
-            foreach (var extra in overrides)
-                if (layer.Rivers.All(r => r.Id != extra.Id)) result.Add(extra);
-        return result;
+        return new ResolvedFeatures<River>(layer.Rivers, overrides,
+            options.RiverPreviewLayerId == layer.Id, layer.ContainsRiver, static r => r.Id);
     }
 
     /// <param name="neighbours">

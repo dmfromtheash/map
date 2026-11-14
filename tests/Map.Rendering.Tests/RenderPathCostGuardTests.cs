@@ -23,8 +23,6 @@ public sealed class RenderPathCostGuardTests : IClassFixture<RenderPathCostGuard
     private readonly Maps _maps;
     public RenderPathCostGuardTests(Maps maps) => _maps = maps;
     private const string DenseLinear = "SceneRenderer.cs:6540-6552, overview delta rebuilds every object in the affected 8192-unit chunk, including off-view objects";
-    private const string RiverLinear = "RiverRenderer.cs:39-45, live override Resolve copies/scans every river for one local edit";
-    private const string RoadLinear = "RoadRenderer.cs:39-45, live override Resolve copies/scans every road for one local edit";
     // The internal plan is test-visible, but the shared plan registry is private. Use the same
     // registry as Render so the constructor really takes its incremental branch. Reflection is
     // done once, outside measurements; no product API is added for a benchmark.
@@ -41,10 +39,10 @@ public sealed class RenderPathCostGuardTests : IClassFixture<RenderPathCostGuard
     [Fact(Skip = "O(N): " + DenseLinear)]
     public void Dense_overview_delta() => Compare("overview-delta-dense", 200_000, true);
 
-    [Fact(Skip = "O(N): " + RiverLinear)]
+    [Fact]
     public void River_preview_resolution() => Compare("river-preview", 200_000, true);
 
-    [Fact(Skip = "O(N): " + RoadLinear)]
+    [Fact]
     public void Road_preview_resolution() => Compare("road-preview", 200_000, true);
 
     [EnvironmentFact("MAP_RENDER_GUARDS_AUDIT")]
@@ -107,7 +105,7 @@ public sealed class RenderPathCostGuardTests : IClassFixture<RenderPathCostGuard
                     SceneRenderer.Render(f.Surface.Canvas, f.Document, options);
                 }, () => Assert.Equal(10, stats.ObjectsDrawn), 16);
             case "river-preview":
-                var rivers = f.Features;
+                var rivers = f.Features with { Name = "fresh river layer record" };
                 var lastRiver = rivers.Rivers[^1];
                 var movedRiver = RiverEditor.MoveNode(lastRiver, lastRiver.Channels[0].Id, 1, 410, 500);
                 var riverOptions = new RenderOptions { RiverOverrides = new[] { movedRiver }, RiverPreviewLayerId = rivers.Id };
@@ -115,7 +113,7 @@ public sealed class RenderPathCostGuardTests : IClassFixture<RenderPathCostGuard
                 return new(() => resolvedRivers = RiverRenderer.Resolve(rivers, riverOptions),
                     () => { Assert.Equal(f.N, resolvedRivers.Count); Assert.Same(movedRiver, resolvedRivers[^1]); Assert.Same(rivers.Rivers[0], resolvedRivers[0]); });
             case "road-preview":
-                var roads = f.Features;
+                var roads = f.Features with { Name = "fresh road layer record" };
                 var lastRoad = roads.Roads[^1];
                 var movedRoad = RoadEditor.MoveNode(lastRoad, lastRoad.Nodes[1].Id, 410, 700);
                 var roadOptions = new RenderOptions { RoadOverrides = new[] { movedRoad }, RoadPreviewLayerId = roads.Id };
