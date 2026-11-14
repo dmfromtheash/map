@@ -1,0 +1,961 @@
+From 68bc0cb76ec2dc7a4d41ec91471da7eb442459e8 Mon Sep 17 00:00:00 2001
+From: Sol <sol@localhost>
+Date: Sat, 14 Nov 2026 23:22:09 +0200
+Subject: [PATCH 1/2] feat(render): add deterministic pyramid view policy and
+ continuity contract
+
+---
+ docs/perf/research/pyramid-view-policy.md     | 118 ++++++++
+ .../Pyramid/PyramidContinuity.cs              |  63 +++++
+ .../Pyramid/PyramidViewPolicy.cs              | 204 ++++++++++++++
+ .../PyramidContinuityTests.cs                 | 209 ++++++++++++++
+ .../PyramidViewPolicyTests.cs                 | 266 ++++++++++++++++++
+ 5 files changed, 860 insertions(+)
+ create mode 100644 docs/perf/research/pyramid-view-policy.md
+ create mode 100644 src/Map.Rendering/Pyramid/PyramidContinuity.cs
+ create mode 100644 src/Map.Rendering/Pyramid/PyramidViewPolicy.cs
+ create mode 100644 tests/Map.Rendering.Tests/PyramidContinuityTests.cs
+ create mode 100644 tests/Map.Rendering.Tests/PyramidViewPolicyTests.cs
+
+diff --git a/docs/perf/research/pyramid-view-policy.md b/docs/perf/research/pyramid-view-policy.md
+new file mode 100644
+index 0000000..010bc81
+--- /dev/null
++++ b/docs/perf/research/pyramid-view-policy.md
+@@ -0,0 +1,118 @@
++# DEC-114: чистая политика live overview ↔ pyramid
++
++Статус: **FACT** — отдельные чистые функции и тесты; **PARTIAL** — цветовая
++непрерывность проверена на синтетике; **NOT CHECKED** — Windows, GPU, реальный canvas/FPS.
++Вызовов из действующего рендера нет. `PyramidViewTuning.Enabled` по умолчанию false.
++Документ, Undo, формат сохранения, UI, диск и потоки не меняются.
++
++## Порог и уровень
++
++Вход `PyramidSceneMetrics`: количество видимых объектов и, если доступно, среднее
++`max(width,height)` в мировых единицах. Статистику поддерживает владелец документа
++по дельтам; политика не обходит объекты. Без среднего размера используется прежний
++proxy ядра `e = sqrt(canvasWidth * canvasHeight / objectCount)` — средний шаг,
++а не размер силуэтов. Он неточен для редких крупных объектов и кластеров.
++
++`enterScale = min(MaximumPyramidScale, EnterObjectPixels / e)`;
++`exitScale = min(MaximumPyramidScale, ExitObjectPixels / e)`.
++Из live вход при `scale <= enterScale`, из pyramid выход при `scale > exitScale`.
++Пустая карта и карта из одного тайла остаются live. Scale включает DPI:
++число физических пикселей экрана на мировую единицу.
++
++| Настройка | Default | Основание |
++|---|---:|---|
++| Enabled | false | Отдельный seam до подключения и проверки canvas |
++| EnterObjectPixels / ExitObjectPixels | 1.5 / 2 | DEC-114 и запас 33 % против wheel-noise |
++| MaximumPyramidScale | 1 | В ядре нет разрешения выше native |
++| MaximumUpscale | 1.25 | Ограниченное увеличение, более мелкий уровень при превышении |
++| LevelHysteresisRatio | 1.1 | Разнесение границ соседних уровней |
++| MinimumDwellFrames | 12 | Минимум между началами переходов (200 мс только при 60 FPS) |
++| FadeFrames | 8 | Короткий переход (133 мс только при 60 FPS) |
++| MaximumChannelDifference | 8/255 | Допуск редких CPU-отклонений на стыках, НЕ побитовая идентичность |
++| MeanChannelDifference | 0.05/255 | Строгое ограничение среднего сдвига каждого RGBA-канала |
++
++Последние две настройки находятся в `PyramidColourTuning`, остальные — в
++`PyramidViewTuning`. Числа не являются результатом продуктовой визуальной приёмки.
++Для строгого режима можно задать нулевые допуски цвета.
++
++Без истории выбирается допустимый уровень с минимальным
++`abs(log2(level.Scale) - log2(viewScale))`; при равенстве — более подробный.
++`viewScale / level.Scale <= MaximumUpscale`. Если даже native не подходит,
++`SelectLevel` возвращает null. Индексы растут с приближением.
++Для соседних уровней `c < f` базовая граница
++`b = min(sqrt(c*f), c*MaximumUpscale)`.
++Уход с грубого вверх при `scale >= min(b*H, c*MaximumUpscale)`,
++обратно при `scale <= b/H`. Ограничение upscale не переворачивает полосу гистерезиса.
++Sweep в обоих направлениях и шум у границ проверены тестами.
++
++## Источники кадра и готовность
++
++Последовательность вызовов будущего canvas:
++
++1. Хранить `PyramidViewState` отдельно для одного document/geometry/tuning lifetime.
++   Начальное значение — default (live). При смене документа/геометрии/настроек сбросить.
++2. `desired = policy.Select(scale, metrics, previousState)`.
++3. Проверить **весь видимый прямоугольник** desired: есть готовые пиксели,
++   одинаковые постоянные render settings и согласованная ревизия. Старая готовая
++   ревизия может оставаться при пересборке согласно DEC-114. Нельзя принимать смесь
++   настроек или независимых ревизий соседних тайлов за готовую картинку.
++4. При подготовке проверить цветовую совместимость этой композиции с готовым live
++   в том же viewport/scale. `PyramidContinuity.IsCompatible` принимает четыре
++   максимума и четыре средних абсолютных разницы нормализованных premultiplied
++   RGBA. Все должны укладываться в tuning. Невалидные измерения не проходят.
++   Сравнение пикселей — работа подготовки, НЕ каждого кадра. Эта функция не создаёт
++   и не хранит доказательство совместимости: его lifetime/invalidation ведёт host.
++5. `frame = policy.Advance(previousState, desired, frameNumber, targetUsable)`;
++   `targetUsable = coverageReady && colourCompatible`. Live всегда доступен.
++   Неготовая/несовместимая цель оставляет текущее изображение. При активном fade
++   host обязан удержать оба участвующих источника, включая покрытие нового viewport.
++6. Рисовать From с положительным FromWeight и Target с положительным TargetWeight;
++   веса дают **взвешенную сумму целых premultiplied-картинок**, включая alpha.
++   После суммы наложить результат SrcOver один раз. Два SrcOver с дополнительными
++   opacity неэквивалентны: они меняют alpha и яркость полупрозрачных областей.
++7. Сохранить frame.State; при NeedsAnotherFrame запросить следующий кадр.
++
++Линейный вес `w = start + (1-start)*clamp(elapsed/FadeFrames,0,1)`;
++конец ровно 1, FadeFrames=0 даёт немедленный переход. Номера кадров неубывающие,
++повтор номера допустим, пропуск кадров корректен. При развороте A→B в B→A текущий
++вес заменяется на `1-w`, сохраняя картинку. Третья цель ждёт завершения текущей пары.
++Mode/level hysteresis выбирает цель; dwell ограничивает начала переходов, а fade
++удерживает старые источники до завершения. Ограничение upscale относится к **новой
++выбранной цели**, не к исходящему изображению при резком изменении камеры.
++
++## Реальный live-путь и цветовой контракт
++
++`MapCanvasControl` выбирает Overview при scale < 0.125 (Performance < 0.25).
++`SceneRenderer.DrawObjects` может сначала выбрать dense detail tiles от 0.03,
++иначе `DrawOverviewObjects` рисует чанки 8192 world units с bucket
++`floor(log2(scale)*4)`. Объекты >=4 px при bucketScale остаются точными,
++остальные — цветные точки или painted stamps. Подготовка может держать предыдущий
++готовый bucket; палитра и точные ассеты имеют собственную готовность.
++Включать policy в Exact/Interactive/другой live-путь без повторной проверки нельзя.
++
++`PyramidTileRasterizer` вызывает тот же `SceneRenderer` отдельно для **каждого**
++уровня, CPU RGBA8888/Premul, без color-space conversion, затем готовые изображения
++семплируются линейно без mip. Для перехода нужен тот же цветовой pipeline,
++encoded-space фильтр и premultiplied alpha. Нельзя только пирамиду переводить
++в linear light, менять gamma или строить родителя box-уменьшением другого LOD:
++это меняет плотность/цвет экранных точек. Скрытые sublayers, стили, свет и прочие
++постоянные настройки должны совпадать; editor overlays накладываются после перехода.
++
++Важно: равенство pipeline само по себе **не гарантирует** равенство endpoints
++при произвольном scale. Синтетический отрицательный тест при 0.02 показывает
++max 239/255, максимальное среднее канала 25.2766796875/255 между live и растянутым
++уровнем. Admission отвергает такую цель и оставляет live. Cross-fade не исправляет
++другую конечную картинку. Для широкого включения нужны совместимые по масштабу
++представления либо отдельное решение по LOD/визуальной приёмке. Известная зависимость
++Watercolor от viewport из отчёта rasterizer также остаётся.
++
++Синтетическая композиция четырёх CPU-тайлов на dyadic enter thresholds:
++1/64 max RGBA [0,0,0,0], 1/32 [1,1,1,1], 1/16 [7,7,1,5] (все /255).
++Средние каждого канала <=0.000145/255. Строгий пробный допуск 2/255 на 1/16
++не прошёл; renderer не исправлялся. Тест использует явные допускаемые 8/255 и
++0.05/255, а не заявляет pixel-identical. Off-grid массивы цветовых ramp с alpha
++при 0.025/0.0390625/0.045 проходят с max <=1.12e-16 (нормализованные компоненты).
++
++Никакого обхода всех объектов в Select/Advance нет: работа зависит только от
++числа уровней. Замеры аллокаций и времени кадров здесь не проводились;
++любое утверждение zero-allocation надо перепроверить на Windows.
+diff --git a/src/Map.Rendering/Pyramid/PyramidContinuity.cs b/src/Map.Rendering/Pyramid/PyramidContinuity.cs
+new file mode 100644
+index 0000000..6b291db
+--- /dev/null
++++ b/src/Map.Rendering/Pyramid/PyramidContinuity.cs
+@@ -0,0 +1,63 @@
++namespace Map.Rendering.Pyramid;
++
++/// <summary>Stored, encoded RGBA components with premultiplied RGB; no gamma conversion.</summary>
++public readonly record struct PyramidPremultipliedColor(double R, double G, double B, double A);
++
++/// <summary>Normalized encoded component differences, evaluated during preparation, not per frame.</summary>
++public sealed record PyramidColourTuning
++{
++    public double MaximumChannelDifference { get; init; } = 8d / 255;
++    public double MeanChannelDifference { get; init; } = .05 / 255;
++}
++
++public static class PyramidContinuity
++{
++    /// <summary>
++    /// All four channel maxima AND means must pass. This is an admission contract, not a promise
++    /// that arbitrary style/LOD/viewport combinations are compatible. The host computes the
++    /// differences against the ready live picture in the same viewport and colour pipeline.
++    /// </summary>
++    public static bool IsCompatible(PyramidPremultipliedColor channelMaxima,
++        PyramidPremultipliedColor channelMeans, PyramidColourTuning tuning)
++    {
++        ArgumentNullException.ThrowIfNull(tuning);
++        if (!Valid(tuning.MaximumChannelDifference) || !Valid(tuning.MeanChannelDifference)
++            || tuning.MaximumChannelDifference > 1 || tuning.MeanChannelDifference > tuning.MaximumChannelDifference)
++            throw new ArgumentOutOfRangeException(nameof(tuning));
++        return Within(channelMaxima, tuning.MaximumChannelDifference) && Within(channelMeans, tuning.MeanChannelDifference);
++    }
++
++    /// <summary>Linear fade, including exact endpoints; zero duration is an immediate cut.</summary>
++    public static double Weight(long elapsedFrames, int durationFrames, double startWeight = 0)
++    {
++        ArgumentOutOfRangeException.ThrowIfNegative(elapsedFrames);
++        ArgumentOutOfRangeException.ThrowIfNegative(durationFrames);
++        if (!double.IsFinite(startWeight) || startWeight < 0 || startWeight > 1)
++            throw new ArgumentOutOfRangeException(nameof(startWeight));
++        if (durationFrames == 0 || elapsedFrames >= durationFrames) return 1;
++        return startWeight + (1 - startWeight) * (elapsedFrames / (double)durationFrames);
++    }
++
++    /// <summary>
++    /// Reference arithmetic for the canvas seam, including alpha. Never blend straight RGB or
++    /// apply two SrcOver opacities. Blend in the same encoded component space as live overview;
++    /// changing only the pyramid to linear-light downsampling would change its brightness.
++    /// </summary>
++    public static PyramidPremultipliedColor Blend(PyramidPremultipliedColor from,
++        PyramidPremultipliedColor target, double targetWeight)
++    {
++        if (!double.IsFinite(targetWeight) || targetWeight < 0 || targetWeight > 1)
++            throw new ArgumentOutOfRangeException(nameof(targetWeight));
++        if (targetWeight == 0) return from;
++        if (targetWeight == 1) return target;
++        var a = 1 - targetWeight;
++        return new(a * from.R + targetWeight * target.R, a * from.G + targetWeight * target.G,
++            a * from.B + targetWeight * target.B, a * from.A + targetWeight * target.A);
++    }
++
++    private static bool Within(PyramidPremultipliedColor value, double limit) =>
++        Valid(value.R) && value.R <= limit && Valid(value.G) && value.G <= limit
++        && Valid(value.B) && value.B <= limit && Valid(value.A) && value.A <= limit;
++
++    private static bool Valid(double value) => double.IsFinite(value) && value >= 0;
++}
+diff --git a/src/Map.Rendering/Pyramid/PyramidViewPolicy.cs b/src/Map.Rendering/Pyramid/PyramidViewPolicy.cs
+new file mode 100644
+index 0000000..53260b9
+--- /dev/null
++++ b/src/Map.Rendering/Pyramid/PyramidViewPolicy.cs
+@@ -0,0 +1,204 @@
++namespace Map.Rendering.Pyramid;
++
++/// <summary>
++/// Snapshot statistics supplied by the document owner, never collected by the frame policy.
++/// MeanObjectExtentWorld is the mean max(width,height) of visible objects, when available.
++/// Otherwise canvas-wide mean spacing is used as an explicitly approximate density proxy.
++/// Maintain statistics from edit deltas; do not enumerate the document for each frame.
++/// </summary>
++public readonly record struct PyramidSceneMetrics(long ObjectCount, double? MeanObjectExtentWorld = null);
++
++public sealed record PyramidViewTuning
++{
++    // Opt in only after the host can supply ready, colour-compatible pictures.
++    public bool Enabled { get; init; }
++    public double EnterObjectPixels { get; init; } = 1.5;
++    public double ExitObjectPixels { get; init; } = 2;
++    public double MaximumPyramidScale { get; init; } = 1;
++    public double MaximumUpscale { get; init; } = 1.25;
++    public double LevelHysteresisRatio { get; init; } = 1.1;
++    public int MinimumDwellFrames { get; init; } = 12;
++    public int FadeFrames { get; init; } = 8;
++}
++
++public readonly record struct PyramidSwitchThresholds(double EnterScale, double ExitScale,
++    double ObjectExtentWorld, bool UsesDensityEstimate);
++
++/// <summary>Default is live overview. A pyramid source denotes a complete visible level.</summary>
++public readonly record struct PyramidViewSource
++{
++    private readonly int _levelPlusOne;
++    private PyramidViewSource(int levelPlusOne) => _levelPlusOne = levelPlusOne;
++    public static PyramidViewSource Live => default;
++    public int? Level => _levelPlusOne == 0 ? null : _levelPlusOne - 1;
++    public static PyramidViewSource Pyramid(int level)
++    {
++        if (level < 0 || level == int.MaxValue) throw new ArgumentOutOfRangeException(nameof(level));
++        return new(level + 1);
++    }
++}
++
++/// <summary>Immutable replay state; default starts live. Reset for another document/geometry/tuning.</summary>
++public readonly record struct PyramidViewState
++{
++    public PyramidViewSource From { get; internal init; }
++    public PyramidViewSource Target { get; internal init; }
++    internal long StartFrame { get; init; }
++    internal double StartWeight { get; init; }
++    internal long LastChangeFrame { get; init; }
++    internal long LastFrame { get; init; }
++    internal bool HasChanged { get; init; }
++}
++
++/// <summary>
++/// Minimal canvas seam. Draw only positive-weight sources, in the same current viewport.
++/// Combine their complete premultiplied pictures by weighted addition, then SrcOver once.
++/// Two ordinary SrcOver draws with complementary opacity are NOT this operation.
++/// Retain both sources until the fade ends; NeedsAnotherFrame requests continued animation.
++/// </summary>
++public readonly record struct PyramidViewFrame(PyramidViewState State, double TargetWeight)
++{
++    public PyramidViewSource From => State.From;
++    public PyramidViewSource Target => State.Target;
++    public double FromWeight => 1 - TargetWeight;
++    public bool NeedsAnotherFrame => From != Target && TargetWeight < 1;
++}
++
++/// <summary>
++/// Pure DEC-114 mode/level policy. No document traversal, clocks, threads, rendering or storage.
++/// Level indices increase with resolution. Scale is device pixels per world unit (include DPI).
++/// </summary>
++public sealed class PyramidViewPolicy
++{
++    private readonly PyramidGeometry _geometry;
++    private readonly PyramidViewTuning _tuning;
++
++    public PyramidViewPolicy(PyramidGeometry geometry, PyramidViewTuning? tuning = null)
++    {
++        ArgumentNullException.ThrowIfNull(geometry);
++        _geometry = geometry;
++        _tuning = tuning ?? new();
++        Positive(_tuning.EnterObjectPixels, nameof(tuning));
++        Positive(_tuning.ExitObjectPixels, nameof(tuning));
++        Positive(_tuning.MaximumPyramidScale, nameof(tuning));
++        Positive(_tuning.MaximumUpscale, nameof(tuning));
++        Positive(_tuning.LevelHysteresisRatio, nameof(tuning));
++        if (_tuning.ExitObjectPixels <= _tuning.EnterObjectPixels
++            || _tuning.MaximumUpscale < 1 || _tuning.LevelHysteresisRatio < 1
++            || _tuning.MinimumDwellFrames < 0 || _tuning.FadeFrames < 0)
++            throw new ArgumentOutOfRangeException(nameof(tuning));
++    }
++
++    public PyramidSwitchThresholds Thresholds(PyramidSceneMetrics metrics)
++    {
++        ArgumentOutOfRangeException.ThrowIfNegative(metrics.ObjectCount);
++        if (metrics.MeanObjectExtentWorld is { } mean) Positive(mean, nameof(metrics));
++        if (metrics.ObjectCount == 0 || !_geometry.NeedsPyramid) return default;
++        var extent = metrics.MeanObjectExtentWorld
++            ?? Math.Sqrt((double)_geometry.Width * _geometry.Height / metrics.ObjectCount);
++        return new(Math.Min(_tuning.MaximumPyramidScale, _tuning.EnterObjectPixels / extent),
++            Math.Min(_tuning.MaximumPyramidScale, _tuning.ExitObjectPixels / extent),
++            extent, metrics.MeanObjectExtentWorld is null);
++    }
++
++    /// <summary>
++    /// First select the desired source, then ask the host whether that source is usable for Advance.
++    /// The previous target supplies hysteresis even during a fade. Empty/single-tile maps stay live.
++    /// </summary>
++    public PyramidViewSource Select(double viewScale, PyramidSceneMetrics metrics, PyramidViewState previous)
++    {
++        Positive(viewScale, nameof(viewScale));
++        ValidateSource(previous.Target);
++        var thresholds = Thresholds(metrics);
++        if (!_tuning.Enabled || thresholds.EnterScale == 0) return PyramidViewSource.Live;
++        var threshold = previous.Target.Level is null ? thresholds.EnterScale : thresholds.ExitScale;
++        if (viewScale > threshold) return PyramidViewSource.Live;
++        return SelectLevel(viewScale, previous.Target.Level) is { } level
++            ? PyramidViewSource.Pyramid(level) : PyramidViewSource.Live;
++    }
++
++    /// <summary>
++    /// Closest multiplicative texel/screen-pixel ratio to 1 among levels that obey MaximumUpscale.
++    /// Ties prefer finer resolution. Null means even the finest level would exceed that cap.
++    /// Hysteresis bands are based on the capped boundary, so the cap cannot invert the band.
++    /// </summary>
++    public int? SelectLevel(double viewScale, int? previousLevel = null)
++    {
++        Positive(viewScale, nameof(viewScale));
++        if (previousLevel is { } old) _geometry.GetLevel(old);
++        int? best = null;
++        var bestDistance = double.PositiveInfinity;
++        foreach (var level in _geometry.Levels)
++        {
++            if (viewScale / level.Scale > _tuning.MaximumUpscale) continue;
++            var distance = Math.Abs(Math.Log2(level.Scale) - Math.Log2(viewScale));
++            if (distance <= bestDistance) { best = level.Index; bestDistance = distance; }
++        }
++        if (best is null || previousLevel is not { } previous || best == previous) return best;
++        var current = _geometry.GetLevel(previous);
++        if (viewScale / current.Scale > _tuning.MaximumUpscale) return best;
++        if (best > previous)
++        {
++            var boundary = Boundary(current.Scale, _geometry.GetLevel(previous + 1).Scale);
++            var leave = Math.Min(boundary * _tuning.LevelHysteresisRatio, current.Scale * _tuning.MaximumUpscale);
++            if (viewScale < leave) return previous;
++        }
++        else
++        {
++            var boundary = Boundary(_geometry.GetLevel(previous - 1).Scale, current.Scale);
++            if (viewScale > boundary / _tuning.LevelHysteresisRatio) return previous;
++        }
++        return best;
++    }
++
++    /// <summary>
++    /// Frame numbers must be nonnegative and nondecreasing; no wall clock is read.
++    /// targetUsable certifies full viewport coverage, ready pixels and the continuity contract
++    /// in pyramid-view-policy.md, not just the existence of one tile. Live is always usable.
++    /// A missing target leaves the current picture in place. A third source waits for completion;
++    /// reversal swaps the two endpoints without changing their current weights.
++    /// </summary>
++    public PyramidViewFrame Advance(PyramidViewState previous, PyramidViewSource desired,
++        long frameNumber, bool targetUsable)
++    {
++        if (frameNumber < previous.LastFrame) throw new ArgumentOutOfRangeException(nameof(frameNumber));
++        ValidateSource(previous.From);
++        ValidateSource(previous.Target);
++        ValidateSource(desired);
++        var state = previous with { LastFrame = frameNumber };
++        if (!_tuning.Enabled)
++            return new(new PyramidViewState { LastFrame = frameNumber }, 1);
++        var weight = state.From == state.Target ? 1
++            : PyramidContinuity.Weight(frameNumber - state.StartFrame, _tuning.FadeFrames, state.StartWeight);
++        if (weight == 1) state = state with { From = state.Target };
++        var dwellElapsed = !state.HasChanged || frameNumber - state.LastChangeFrame >= _tuning.MinimumDwellFrames;
++        if (desired != state.Target && (desired.Level is null || targetUsable) && dwellElapsed)
++        {
++            if (state.From == state.Target || desired == state.From)
++            {
++                var start = state.From == state.Target ? 0 : 1 - weight;
++                state = state with
++                {
++                    From = state.Target, Target = desired, StartFrame = frameNumber, StartWeight = start,
++                    LastChangeFrame = frameNumber, HasChanged = true,
++                };
++                weight = PyramidContinuity.Weight(0, _tuning.FadeFrames, start);
++                if (weight == 1) state = state with { From = desired };
++            }
++        }
++        return new(state, weight);
++    }
++
++    private double Boundary(double coarse, double fine) =>
++        Math.Min(Math.Sqrt(coarse * fine), coarse * _tuning.MaximumUpscale);
++
++    private void ValidateSource(PyramidViewSource source)
++    {
++        if (source.Level is { } level) _geometry.GetLevel(level);
++    }
++
++    private static void Positive(double value, string name)
++    {
++        if (!double.IsFinite(value) || value <= 0) throw new ArgumentOutOfRangeException(name);
++    }
++}
+diff --git a/tests/Map.Rendering.Tests/PyramidContinuityTests.cs b/tests/Map.Rendering.Tests/PyramidContinuityTests.cs
+new file mode 100644
+index 0000000..9733a3f
+--- /dev/null
++++ b/tests/Map.Rendering.Tests/PyramidContinuityTests.cs
+@@ -0,0 +1,209 @@
++using Map.Core.Documents;
++using Map.Rendering.Pyramid;
++using SkiaSharp;
++
++namespace Map.Rendering.Tests;
++
++public sealed class PyramidContinuityTests
++{
++    [Theory]
++    [InlineData(1d / 64)]
++    [InlineData(1d / 32)]
++    [InlineData(1d / 16)]
++    public void Synthetic_live_scene_matches_assembled_pyramid_at_enter_threshold(double scale)
++    {
++        var extent = 1.5 / scale;
++        var random = new Random(114);
++        string[] colors = ["#FFFF2010", "#8000FF40", "#B02040FF", "#FF101010", "#60FFFF00"];
++        double[] sizes = [.125, .125, .125, .125, 4.5]; // Mean = extent; includes exact and dot paths.
++        var objects = Enumerable.Range(0, 500).Select(i =>
++            new SceneObject(ObjectId.New(), i % 2 == 0 ? SceneObjectKind.Rectangle : SceneObjectKind.Ellipse,
++                "synthetic", random.Next(16000), random.Next(16000), extent * sizes[i % 5],
++                extent * sizes[i % 5], i % 3 == 0 ? 17 : 0, colors[i % 5], "#00000000", 0, true, false)
++            { ObjectOpacity = .7 }).ToArray();
++        var document = new MapDocument(DocumentId.New(), "synthetic continuity", DateTimeOffset.UnixEpoch,
++            new CanvasDefinition(32768, 32768, "px", "#00000000"),
++            [new BaseColorLayer(LayerId.New(), "paper", true, false, .6, "#80406080"),
++             new ObjectLayer(LayerId.New(), "synthetic", true, false, .8, objects)]);
++        var geometry = new PyramidGeometry(32768, 32768, 256);
++        var policy = new PyramidViewPolicy(geometry, new() { Enabled = true });
++        var metrics = new PyramidSceneMetrics(objects.Length, objects.Average(o => Math.Max(o.Width, o.Height)));
++        Assert.Equal(scale, policy.Thresholds(metrics).EnterScale, 12);
++        var selected = policy.Select(scale, metrics, default);
++        Assert.NotNull(selected.Level);
++        var level = selected.Level.Value;
++        Assert.Equal(scale, geometry.GetLevel(level).Scale);
++        var settings = new PyramidRenderSettings { DisableStyle = true, DisableLighting = true };
++        using var assembled = SKSurface.Create(new SKImageInfo(512, 512, SKColorType.Rgba8888, SKAlphaType.Premul))!;
++        assembled.Canvas.Clear(SKColors.Transparent);
++        var rasterizer = new PyramidTileRasterizer();
++        for (var y = 0; y < 2; y++)
++        for (var x = 0; x < 2; x++)
++        {
++            using var tile = rasterizer.Rasterize(document, geometry, new(level, x, y), settings);
++            Assert.Equal(PyramidRasterStatus.Success, tile.Status);
++            assembled.Canvas.DrawImage(tile.Image!, x * 256, y * 256);
++        }
++        using var actual = assembled.Snapshot();
++        using var live = PyramidFixtures.Live(document, settings, new(0, 0, 512 / scale, 512 / scale), scale, 512, 512);
++        using var a = ReadPremultiplied(actual);
++        using var b = ReadPremultiplied(live);
++        var ap = a.GetPixelSpan();
++        var bp = b.GetPixelSpan();
++        var sums = new long[4];
++        var maxima = new int[4];
++        for (var i = 0; i < ap.Length; i++)
++        {
++            var delta = Math.Abs(ap[i] - bp[i]);
++            sums[i % 4] += delta;
++            maxima[i % 4] = Math.Max(maxima[i % 4], delta);
++        }
++        var means = sums.Select(sum => sum / (512d * 512)).ToArray();
++        Console.WriteLine($"PYRAMID_COLOUR scale={scale:R} level={level} RGBA max=[{string.Join(",", maxima)}]/255 mean=[{string.Join(",", means.Select(m => m.ToString("F8", System.Globalization.CultureInfo.InvariantCulture)))}]/255");
++        var tolerance = new PyramidColourTuning();
++        Assert.True(PyramidContinuity.IsCompatible(
++            new(maxima[0] / 255d, maxima[1] / 255d, maxima[2] / 255d, maxima[3] / 255d),
++            new(means[0] / 255, means[1] / 255, means[2] / 255, means[3] / 255), tolerance));
++    }
++
++    [Theory]
++    [InlineData(.025)]
++    [InlineData(.0390625)]
++    [InlineData(.045)]
++    public void Non_dyadic_threshold_resampling_preserves_synthetic_colour_ramps(double scale)
++    {
++        // Plain premultiplied arrays isolate the colour/filter contract from SceneRenderer LOD.
++        var geometry = new PyramidGeometry(8192, 8192, 256);
++        var policy = new PyramidViewPolicy(geometry, new() { Enabled = true });
++        var metrics = new PyramidSceneMetrics(100, 1.5 / scale);
++        var selected = policy.Select(scale, metrics, default);
++        var levelScale = geometry.GetLevel(selected.Level!.Value).Scale;
++        const int side = 64;
++        var pyramid = new PyramidPremultipliedColor[side * side];
++        for (var y = 0; y < side; y++)
++        for (var x = 0; x < side; x++)
++            pyramid[y * side + x] = Ramp((x + .5) / levelScale, (y + .5) / levelScale);
++        var maximum = 0d;
++        var sum = 0d;
++        var samples = 0;
++        for (var y = 2; y < 30; y++)
++        for (var x = 2; x < 30; x++)
++        {
++            var live = Ramp((x + .5) / scale, (y + .5) / scale);
++            var px = (x + .5) / scale * levelScale - .5;
++            var py = (y + .5) / scale * levelScale - .5;
++            var ix = (int)Math.Floor(px); var iy = (int)Math.Floor(py);
++            var upper = PyramidContinuity.Blend(pyramid[iy * side + ix], pyramid[iy * side + ix + 1], px - ix);
++            var lower = PyramidContinuity.Blend(pyramid[(iy + 1) * side + ix], pyramid[(iy + 1) * side + ix + 1], px - ix);
++            var resampled = PyramidContinuity.Blend(upper, lower, py - iy);
++            for (var elapsed = 0; elapsed <= 8; elapsed++)
++            {
++                var blended = PyramidContinuity.Blend(live, resampled, PyramidContinuity.Weight(elapsed, 8));
++                double[] differences = [Math.Abs(blended.R - live.R), Math.Abs(blended.G - live.G),
++                    Math.Abs(blended.B - live.B), Math.Abs(blended.A - live.A)];
++                maximum = Math.Max(maximum, differences.Max());
++                sum += differences.Sum(); samples += 4;
++            }
++        }
++        Console.WriteLine($"PYRAMID_RAMP scale={scale:R} max={maximum:R} mean={sum / samples:R} (normalized premultiplied RGBA)");
++        Assert.InRange(maximum, 0, 1e-12);
++        Assert.InRange(sum / samples, 0, 1e-13);
++    }
++
++    [Fact]
++    public void Scale_dependent_overview_dots_must_pass_colour_admission_before_takeover()
++    {
++        const double scale = .02;
++        const int side = 160;
++        var objects = Enumerable.Range(0, 1600).Select(i => new SceneObject(ObjectId.New(),
++            SceneObjectKind.Ellipse, "dot", (i % 40) * 180 + 75, (i / 40) * 180 + 75,
++            75, 75, 0, "#FF102030", "#00000000", 0, true, false)).ToArray();
++        var document = new MapDocument(DocumentId.New(), "LOD admission", DateTimeOffset.UnixEpoch,
++            new CanvasDefinition(16384, 16384, "px", "#FFFFFFFF"),
++            [new BaseColorLayer(LayerId.New(), "paper", true, false, 1, "#FFFFFFFF"),
++             new ObjectLayer(LayerId.New(), "dots", true, false, 1, objects)]);
++        var geometry = new PyramidGeometry(16384, 16384, 256);
++        var policy = new PyramidViewPolicy(geometry, new() { Enabled = true });
++        var target = policy.Select(scale, new(objects.Length, 75), default);
++        var level = geometry.GetLevel(target.Level!.Value);
++        var settings = new PyramidRenderSettings { DisableStyle = true, DisableLighting = true };
++        using var tile = new PyramidTileRasterizer().Rasterize(document, geometry, new(level.Index, 0, 0), settings);
++        Assert.Equal(PyramidRasterStatus.Success, tile.Status);
++        using var resampled = SKSurface.Create(new SKImageInfo(side, side, SKColorType.Rgba8888, SKAlphaType.Premul))!;
++        resampled.Canvas.Clear(SKColors.Transparent);
++        resampled.Canvas.DrawImage(tile.Image!, SKRect.Create((float)(256 * scale / level.Scale),
++            (float)(256 * scale / level.Scale)), new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None));
++        using var image = resampled.Snapshot();
++        using var live = PyramidFixtures.Live(document, settings, new(0, 0, side / scale, side / scale), scale, side, side);
++        using var a = ReadPremultiplied(image);
++        using var b = ReadPremultiplied(live);
++        var ap = a.GetPixelSpan(); var bp = b.GetPixelSpan();
++        var sums = new long[4]; var maxima = new double[4];
++        for (var i = 0; i < ap.Length; i++)
++        {
++            var difference = Math.Abs(ap[i] - bp[i]);
++            sums[i % 4] += difference; maxima[i % 4] = Math.Max(maxima[i % 4], difference / 255d);
++        }
++        var means = sums.Select(sum => sum / (255d * side * side)).ToArray();
++        var compatible = PyramidContinuity.IsCompatible(new(maxima[0], maxima[1], maxima[2], maxima[3]),
++            new(means[0], means[1], means[2], means[3]), new());
++        Console.WriteLine($"PYRAMID_LOD_ADMISSION scale={scale:R} max={maxima.Max() * 255:R}/255 meanMax={means.Max() * 255:R}/255 compatible={compatible}");
++        Assert.False(compatible); // Cross-fading alone cannot correct a different endpoint picture.
++        Assert.Equal(PyramidViewSource.Live, policy.Advance(default, target, 0, compatible).Target);
++    }
++
++    [Fact]
++    public void Transparent_edges_and_encoded_midtones_do_not_gain_brightness_or_lose_alpha()
++    {
++        var red = new PyramidPremultipliedColor(.5, 0, 0, .5);
++        var transparent = default(PyramidPremultipliedColor);
++        Assert.Equal(new PyramidPremultipliedColor(.25, 0, 0, .25), PyramidContinuity.Blend(red, transparent, .5));
++        var grey = new PyramidPremultipliedColor(.25, .25, .25, .5);
++        for (var i = 0; i <= 8; i++)
++        {
++            var result = PyramidContinuity.Blend(grey, grey, PyramidContinuity.Weight(i, 8));
++            Assert.Equal(grey, result); // No gamma round-trip and no double SrcOver attenuation.
++        }
++        Assert.Equal(red, PyramidContinuity.Blend(red, transparent, 0));
++        Assert.Equal(transparent, PyramidContinuity.Blend(red, transparent, 1));
++    }
++
++    [Fact]
++    public void Colour_admission_rejects_mean_drift_single_channel_outliers_and_invalid_measurements()
++    {
++        var tuning = new PyramidColourTuning();
++        Assert.True(PyramidContinuity.IsCompatible(new(8d / 255, 0, 0, 0), new(.05 / 255, 0, 0, 0), tuning));
++        Assert.False(PyramidContinuity.IsCompatible(new(9d / 255, 0, 0, 0), default, tuning));
++        Assert.False(PyramidContinuity.IsCompatible(default, new(0, .051 / 255, 0, 0), tuning));
++        Assert.False(PyramidContinuity.IsCompatible(default, new(0, 0, 0, .051 / 255), tuning));
++        Assert.False(PyramidContinuity.IsCompatible(new(double.NaN, 0, 0, 0), default, tuning));
++        Assert.False(PyramidContinuity.IsCompatible(default, new(0, 0, -1, 0), tuning));
++        Assert.Throws<ArgumentOutOfRangeException>(() => PyramidContinuity.IsCompatible(default, default,
++            new() { MeanChannelDifference = 1 }));
++    }
++
++    [Fact]
++    public void Fade_reference_handles_zero_duration_and_rejects_invalid_inputs()
++    {
++        Assert.Equal(1, PyramidContinuity.Weight(0, 0));
++        Assert.Equal(1, PyramidContinuity.Weight(long.MaxValue, 8));
++        Assert.Equal(.25, PyramidContinuity.Weight(0, 8, .25));
++        Assert.Throws<ArgumentOutOfRangeException>(() => PyramidContinuity.Weight(-1, 8));
++        Assert.Throws<ArgumentOutOfRangeException>(() => PyramidContinuity.Weight(1, -1));
++        foreach (var weight in new[] { -.1, 1.1, double.NaN, double.PositiveInfinity })
++        {
++            Assert.Throws<ArgumentOutOfRangeException>(() => PyramidContinuity.Weight(0, 8, weight));
++            Assert.Throws<ArgumentOutOfRangeException>(() => PyramidContinuity.Blend(default, default, weight));
++        }
++    }
++
++    private static PyramidPremultipliedColor Ramp(double x, double y) =>
++        new(.1 + x / 16384, .05 + y / 16384, .1 + (x + y) / 32768, .4 + x / 32768 + y / 65536);
++
++    private static SKBitmap ReadPremultiplied(SKImage image)
++    {
++        var bitmap = new SKBitmap(new SKImageInfo(image.Width, image.Height, SKColorType.Rgba8888, SKAlphaType.Premul));
++        Assert.True(image.ReadPixels(bitmap.Info, bitmap.GetPixels(), bitmap.RowBytes));
++        return bitmap;
++    }
++}
+diff --git a/tests/Map.Rendering.Tests/PyramidViewPolicyTests.cs b/tests/Map.Rendering.Tests/PyramidViewPolicyTests.cs
+new file mode 100644
+index 0000000..e5a052c
+--- /dev/null
++++ b/tests/Map.Rendering.Tests/PyramidViewPolicyTests.cs
+@@ -0,0 +1,266 @@
++using Map.Rendering.Pyramid;
++
++namespace Map.Rendering.Tests;
++
++public sealed class PyramidViewPolicyTests
++{
++    private static readonly PyramidGeometry Geometry = new(131072, 131072);
++    private static readonly PyramidSceneMetrics Metrics = new(2_000_000);
++    private static PyramidViewPolicy Policy(PyramidViewTuning? tuning = null) =>
++        new(Geometry, tuning ?? new() { Enabled = true });
++
++    [Fact]
++    public void Density_threshold_matches_core_and_explicit_size_overrides_spacing()
++    {
++        var policy = Policy();
++        var thresholds = policy.Thresholds(Metrics);
++        Assert.Equal(Geometry.TakeoverScale(Metrics.ObjectCount), thresholds.EnterScale, 12);
++        Assert.Equal(1.5, thresholds.ObjectExtentWorld * thresholds.EnterScale, 12);
++        Assert.Equal(2, thresholds.ObjectExtentWorld * thresholds.ExitScale, 12);
++        Assert.True(thresholds.UsesDensityEstimate);
++        var actualSize = policy.Thresholds(new(1, 100));
++        Assert.Equal(.015, actualSize.EnterScale);
++        Assert.Equal(.02, actualSize.ExitScale);
++        Assert.False(actualSize.UsesDensityEstimate);
++        Console.WriteLine($"PYRAMID_THRESHOLD count={Metrics.ObjectCount} extent={thresholds.ObjectExtentWorld:R} enter={thresholds.EnterScale:R} exit={thresholds.ExitScale:R}");
++    }
++
++    [Fact]
++    public void Default_is_live_and_empty_or_single_tile_maps_stay_live()
++    {
++        Assert.Equal(PyramidViewSource.Live, new PyramidViewPolicy(Geometry).Select(.001, Metrics, default));
++        Assert.Equal(PyramidViewSource.Live, Policy().Select(.001, new(0), default));
++        Assert.Equal(PyramidViewSource.Live, new PyramidViewPolicy(new(512, 512), new() { Enabled = true })
++            .Select(.001, Metrics, default));
++        Assert.Equal(1, Policy().Thresholds(new(long.MaxValue)).ExitScale);
++        var disabled = new PyramidViewPolicy(Geometry).Advance(default, PyramidViewSource.Pyramid(0), 0, true);
++        Assert.Equal(PyramidViewSource.Live, disabled.Target);
++        Assert.Equal(1, disabled.TargetWeight);
++    }
++
++    [Fact]
++    public void Level_sweeps_are_monotonic_in_both_directions_and_obey_upscale_cap()
++    {
++        var policy = Policy();
++        foreach (var increasing in new[] { true, false })
++        {
++            int? previous = null;
++            for (var step = 0; step <= 2048; step++)
++            {
++                var t = (increasing ? step : 2048 - step) / 2048d;
++                var scale = Math.Pow(2, -12 + 12 * t) * 1.25;
++                var level = policy.SelectLevel(scale, previous);
++                Assert.NotNull(level);
++                Assert.True(scale / Geometry.GetLevel(level.Value).Scale <= 1.25);
++                if (previous is { } old) Assert.True(increasing ? level >= old : level <= old);
++                previous = level;
++            }
++        }
++        Assert.Null(policy.SelectLevel(1.250001));
++        Assert.Equal(Geometry.Levels.Count - 1, policy.SelectLevel(1.25));
++        Assert.Equal(0, policy.SelectLevel(double.Epsilon));
++    }
++
++    [Theory]
++    [InlineData(1)]
++    [InlineData(1.25)]
++    [InlineData(2)]
++    public void Stateless_level_is_closest_multiplicatively_among_eligible_levels(double cap)
++    {
++        var policy = Policy(new() { Enabled = true, MaximumUpscale = cap });
++        for (var i = 0; i < 400; i++)
++        {
++            var scale = Math.Pow(2, -11 + i / 40d);
++            var selected = policy.SelectLevel(scale)!.Value;
++            var distance = Math.Abs(Math.Log2(Geometry.GetLevel(selected).Scale / scale));
++            foreach (var candidate in Geometry.Levels.Where(l => scale / l.Scale <= cap))
++                Assert.True(distance <= Math.Abs(Math.Log2(candidate.Scale / scale)) + 1e-12);
++        }
++    }
++
++    [Fact]
++    public void Recorded_wheel_noise_crosses_each_mode_threshold_only_once()
++    {
++        var policy = Policy();
++        var thresholds = policy.Thresholds(Metrics);
++        // Recorded relative wheel positions, including sub-step input noise and direction changes.
++        double[] wheel = [1.06, 1.025, .995, 1.013, .982, 1.021, .998, 1.009, .975, 1.018, .99, 1.003];
++        var scales = new List<double> { thresholds.ExitScale * 1.1 };
++        for (var repeat = 0; repeat < 8; repeat++) scales.AddRange(wheel.Select(x => thresholds.EnterScale * x));
++        scales.Add(thresholds.ExitScale * 1.04);
++        for (var repeat = 0; repeat < 8; repeat++) scales.AddRange(wheel.Select(x => thresholds.ExitScale * x));
++        var replay = Replay(policy, scales);
++        var modes = replay.Select(f => f.Target.Level is not null).ToArray();
++        Assert.Equal(2, modes.Zip(modes.Skip(1)).Count(p => p.First != p.Second));
++        Assert.Equal(replay, Replay(policy, scales));
++        Console.WriteLine($"PYRAMID_REPLAY frames={scales.Count} modeChanges=2 deterministic=true");
++    }
++
++    [Fact]
++    public void Adjacent_level_noise_does_not_oscillate_even_with_capped_boundary()
++    {
++        foreach (var cap in new[] { 1d, 1.25, 2 })
++        {
++            var policy = Policy(new() { Enabled = true, MaximumUpscale = cap });
++            const int coarse = 2;
++            var boundary = Geometry.GetLevel(coarse).Scale * Math.Min(Math.Sqrt(2), cap);
++            int? previous = coarse;
++            var changes = 0;
++            double[] wheel = [.98, 1.02, .995, 1.01, .99, 1.03, 1.001, .97];
++            for (var step = 0; step < 160; step++)
++            {
++                var next = policy.SelectLevel(boundary * wheel[step % wheel.Length], previous);
++                if (next != previous) changes++;
++                previous = next;
++            }
++            Assert.InRange(changes, 0, 1);
++            Assert.Equal(coarse + 1, policy.SelectLevel(boundary * 1.11, coarse));
++            Assert.Equal(coarse, policy.SelectLevel(boundary / 1.11, coarse + 1));
++        }
++    }
++
++    [Fact]
++    public void Dwell_blocks_rapid_mode_reversal_then_permits_it_at_exact_boundary()
++    {
++        var policy = Policy(new() { Enabled = true, FadeFrames = 0 });
++        var start = policy.Advance(default, PyramidViewSource.Pyramid(1), 10, true);
++        var held = policy.Advance(start.State, PyramidViewSource.Live, 21, true);
++        Assert.Equal(start.Target, held.Target);
++        var exit = policy.Advance(held.State, PyramidViewSource.Live, 22, true);
++        Assert.Equal(PyramidViewSource.Live, exit.Target);
++        Assert.Equal(1, exit.TargetWeight);
++    }
++
++    [Fact]
++    public void Incomplete_or_colour_incompatible_target_cannot_start_a_fade()
++    {
++        var policy = Policy();
++        var desired = PyramidViewSource.Pyramid(1);
++        var missing = policy.Advance(default, desired, 100, false);
++        Assert.Equal(PyramidViewSource.Live, missing.Target);
++        Assert.False(missing.NeedsAnotherFrame);
++        var ready = policy.Advance(missing.State, desired, 101, true);
++        Assert.Equal(0, ready.TargetWeight);
++        Assert.Equal(1, ready.FromWeight);
++        Assert.True(ready.NeedsAnotherFrame);
++        // Already participating sources are retained by the host, independently of new readiness.
++        var done = policy.Advance(ready.State, desired, 109, false);
++        Assert.Equal(1, done.TargetWeight);
++        Assert.Equal(desired, done.From);
++        Assert.False(done.NeedsAnotherFrame);
++    }
++
++    [Theory]
++    [InlineData(false)]
++    [InlineData(true)]
++    public void Fade_weights_are_monotonic_and_finish_exactly_at_one(bool levelChange)
++    {
++        var policy = Policy(new() { Enabled = true, MinimumDwellFrames = 0 });
++        var state = levelChange ? policy.Advance(default, PyramidViewSource.Pyramid(0), 0, true).State : default;
++        var desired = PyramidViewSource.Pyramid(1);
++        if (levelChange) state = policy.Advance(state, state.Target, 8, true).State;
++        var previous = 0d;
++        for (var elapsed = 0; elapsed <= 9; elapsed++)
++        {
++            var frame = policy.Advance(state, desired, 20 + elapsed, true);
++            Assert.InRange(frame.TargetWeight, previous, 1);
++            Assert.Equal(1, frame.FromWeight + frame.TargetWeight);
++            if (elapsed == 0) Assert.Equal(0, frame.TargetWeight);
++            if (elapsed >= 8) Assert.Equal(1, frame.TargetWeight);
++            previous = frame.TargetWeight;
++            state = frame.State;
++        }
++    }
++
++    [Fact]
++    public void Reversing_a_partial_fade_preserves_the_exact_premultiplied_picture()
++    {
++        var policy = Policy(new() { Enabled = true, MinimumDwellFrames = 0, FadeFrames = 20 });
++        var target = PyramidViewSource.Pyramid(1);
++        var start = policy.Advance(default, target, 0, true);
++        var forward = policy.Advance(start.State, target, 5, true);
++        var reverse = policy.Advance(forward.State, PyramidViewSource.Live, 5, true);
++        Assert.Equal(.25, forward.TargetWeight);
++        Assert.Equal(.75, reverse.TargetWeight);
++        Assert.Equal(forward.From, reverse.Target);
++        Assert.Equal(forward.Target, reverse.From);
++        var live = new PyramidPremultipliedColor(.1, .2, .3, .5);
++        var pyramid = new PyramidPremultipliedColor(.7, .3, .1, .8);
++        Assert.Equal(PyramidContinuity.Blend(live, pyramid, forward.TargetWeight),
++            PyramidContinuity.Blend(pyramid, live, reverse.TargetWeight));
++        Assert.Equal(1, policy.Advance(reverse.State, reverse.Target, 25, true).TargetWeight);
++    }
++
++    [Fact]
++    public void A_third_source_waits_for_current_fade_without_dropping_an_endpoint()
++    {
++        var policy = Policy(new() { Enabled = true, MinimumDwellFrames = 0 });
++        var first = PyramidViewSource.Pyramid(0);
++        var second = PyramidViewSource.Pyramid(2);
++        var start = policy.Advance(default, first, 0, true);
++        var pending = policy.Advance(start.State, second, 4, true);
++        Assert.Equal(first, pending.Target);
++        Assert.Equal(.5, pending.TargetWeight);
++        var next = policy.Advance(pending.State, second, 8, true);
++        Assert.Equal(first, next.From);
++        Assert.Equal(second, next.Target);
++        Assert.Equal(0, next.TargetWeight);
++    }
++
++    [Fact]
++    public void Extreme_jump_repeated_frame_and_skipped_frames_are_deterministic()
++    {
++        var policy = Policy();
++        double[] scales = [.1, .00001, .00001, .2, .005, .005, .5];
++        Assert.Equal(Replay(policy, scales), Replay(policy, scales));
++        var start = policy.Advance(default, PyramidViewSource.Pyramid(0), long.MaxValue - 20, true);
++        Assert.Equal(start, policy.Advance(start.State, start.Target, long.MaxValue - 20, true));
++        Assert.Equal(1, policy.Advance(start.State, start.Target, long.MaxValue, true).TargetWeight);
++        Assert.Throws<ArgumentOutOfRangeException>(() => policy.Advance(start.State, start.Target, 0, true));
++        Assert.Throws<ArgumentOutOfRangeException>(() => policy.Advance(default, start.Target, -1, true));
++    }
++
++    [Theory]
++    [InlineData(0)]
++    [InlineData(-1)]
++    [InlineData(double.NaN)]
++    [InlineData(double.PositiveInfinity)]
++    public void Invalid_scales_are_rejected(double scale)
++    {
++        Assert.Throws<ArgumentOutOfRangeException>(() => Policy().Select(scale, Metrics, default));
++        Assert.Throws<ArgumentOutOfRangeException>(() => Policy().SelectLevel(scale));
++    }
++
++    [Fact]
++    public void Invalid_statistics_sources_and_tuning_are_rejected()
++    {
++        var policy = Policy();
++        foreach (var metrics in new PyramidSceneMetrics[] { new(-1), new(1, 0), new(1, -1), new(1, double.NaN), new(1, double.PositiveInfinity) })
++            Assert.Throws<ArgumentOutOfRangeException>(() => policy.Thresholds(metrics));
++        PyramidViewTuning[] invalid =
++        [
++            new() { EnterObjectPixels = 0 }, new() { EnterObjectPixels = double.NaN },
++            new() { ExitObjectPixels = 1.5 }, new() { ExitObjectPixels = double.PositiveInfinity },
++            new() { MaximumPyramidScale = -1 }, new() { MaximumUpscale = .9 },
++            new() { LevelHysteresisRatio = .9 }, new() { MinimumDwellFrames = -1 }, new() { FadeFrames = -1 },
++        ];
++        foreach (var tuning in invalid) Assert.Throws<ArgumentOutOfRangeException>(() => Policy(tuning));
++        Assert.Throws<ArgumentOutOfRangeException>(() => policy.SelectLevel(.01, -1));
++        Assert.Throws<ArgumentOutOfRangeException>(() => policy.Advance(default, PyramidViewSource.Pyramid(100), 0, true));
++    }
++
++    private static PyramidViewFrame[] Replay(PyramidViewPolicy policy, IEnumerable<double> scales)
++    {
++        var frames = new List<PyramidViewFrame>();
++        var state = default(PyramidViewState);
++        long frameNumber = 0;
++        foreach (var scale in scales)
++        {
++            var desired = policy.Select(scale, Metrics, state);
++            var next = policy.Advance(state, desired, frameNumber++, true);
++            frames.Add(next);
++            state = next.State;
++        }
++        return frames.ToArray();
++    }
++}
+-- 
+2.50.1 (Apple Git-155)
+
+
+From 25b759920f76d3031d77a1b297dda94f05f82a12 Mon Sep 17 00:00:00 2001
+From: Sol <sol@localhost>
+Date: Sat, 14 Nov 2026 23:35:37 +0200
+Subject: [PATCH 2/2] docs(perf): record pyramid policy validation and colour
+ limits
+
+---
+ docs/journal/2026-11.md                   | 10 ++++++++++
+ docs/perf/research/pyramid-view-policy.md |  2 +-
+ 2 files changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/docs/journal/2026-11.md b/docs/journal/2026-11.md
+index 44816f0..5e305b8 100644
+--- a/docs/journal/2026-11.md
++++ b/docs/journal/2026-11.md
+@@ -2,6 +2,16 @@
+ 
+ Правила — `docs/journal/README.md`. Новые записи сверху.
+ 
++## 2026-11-14 · DEC-114: чистая политика overview/pyramid · Sol, Mac
++
++**Поручение:** «overview/pyramid switch threshold, hysteresis and continuity rule».
++**Сделано — FACT:** `PyramidViewPolicy`, `PyramidContinuity`, seam кадра и 30 тестов; opt-in, без вызовов из canvas. Формулы и ограничения — `docs/perf/research/pyramid-view-policy.md`.
++**Проверено — FACT:** Release Map.slnx 0 errors; Pyramid 75/75 baseline → 105/105; весь Rendering 640 passed / 1 failed / 5 skipped → 670 / 1 / 5, списки падений/пропусков совпадают. Baseline: `9698a07`; общее падение — Stage10EGridRenderingTests golden fixtures.
++**Цвет — PARTIAL:** CPU-синтетика на enter 1/64, 1/32, 1/16: max RGBA 0, 1, 7/255; среднее каждого канала <0.000145/255. Явные допуски 8/255 max и 0.05/255 mean; это не pixel-identical приёмка.
++**Важно дальше:** произвольный scale может менять плотность live dots: отрицательный тест при 0.02 отвергает endpoint (max 239/255), оставляя live. Один fade не исправляет несовместимый цвет. Host обязан проверять готовность/совместимость всего viewport и удерживать оба premultiplied-источника.
++**Не проверено:** Windows/GPU, живая картинка, FPS/worst frames, аллокации; DOTNET_TieredCompilation=0, zero-allocation перепроверять на Windows. Диск/DB и canvas wiring не входят. Push не выполнялся.
++**Коммит реализации:** `68bc0cb`; результаты и точные команды — внешний `SOL_REPORT.md` задачи pyramid.
++
+ ## 2026-11-14 · Закрытие сессии USER по поручению владельца · Astra
+ 
+ **Сделано:** диагностика зафиксирована в 963dc2f, d12bc90 и 765fde3; сравнения пакета и режима GPU flush — c53af40 и 63cb0ce. Последний живой прогон завершён, 47 PNG просмотрены, временный профиль удалён. Новые прогоны остановлены по письму Claude 16:35; push не выполнялся.
+diff --git a/docs/perf/research/pyramid-view-policy.md b/docs/perf/research/pyramid-view-policy.md
+index 010bc81..b3f3b65 100644
+--- a/docs/perf/research/pyramid-view-policy.md
++++ b/docs/perf/research/pyramid-view-policy.md
+@@ -28,7 +28,7 @@ proxy ядра `e = sqrt(canvasWidth * canvasHeight / objectCount)` — сред
+ | LevelHysteresisRatio | 1.1 | Разнесение границ соседних уровней |
+ | MinimumDwellFrames | 12 | Минимум между началами переходов (200 мс только при 60 FPS) |
+ | FadeFrames | 8 | Короткий переход (133 мс только при 60 FPS) |
+-| MaximumChannelDifference | 8/255 | Допуск редких CPU-отклонений на стыках, НЕ побитовая идентичность |
++| MaximumChannelDifference | 8/255 | Допуск редких отклонений CPU-композиции, НЕ побитовая идентичность |
+ | MeanChannelDifference | 0.05/255 | Строгое ограничение среднего сдвига каждого RGBA-канала |
+ 
+ Последние две настройки находятся в `PyramidColourTuning`, остальные — в
+-- 
+2.50.1 (Apple Git-155)
+

@@ -1,0 +1,887 @@
+From 35c0ff15506a851b831d090c6f64571a51742184 Mon Sep 17 00:00:00 2001
+From: User <user@MacBook-Air-User.local>
+Date: Sat, 14 Nov 2026 22:58:50 +0200
+Subject: [PATCH] feat(perf): add pure frame plan arbitration and gesture
+ hysteresis
+
+---
+ docs/journal/2026-11.md                       |   9 +
+ src/Map.Rendering/Reserve/FramePlan.cs        |  42 ++++
+ src/Map.Rendering/Reserve/FramePlanTuning.cs  |  46 +++++
+ src/Map.Rendering/Reserve/FramePlanner.cs     | 187 ++++++++++++++++++
+ .../FramePlanArbiterTests.cs                  | 158 +++++++++++++++
+ .../FramePlanHysteresisTests.cs               | 163 +++++++++++++++
+ .../FramePlanReplayTests.cs                   | 158 +++++++++++++++
+ .../Map.Rendering.Tests/FramePlanTestData.cs  |  44 +++++
+ 8 files changed, 807 insertions(+)
+ create mode 100644 src/Map.Rendering/Reserve/FramePlan.cs
+ create mode 100644 src/Map.Rendering/Reserve/FramePlanTuning.cs
+ create mode 100644 src/Map.Rendering/Reserve/FramePlanner.cs
+ create mode 100644 tests/Map.Rendering.Tests/FramePlanArbiterTests.cs
+ create mode 100644 tests/Map.Rendering.Tests/FramePlanHysteresisTests.cs
+ create mode 100644 tests/Map.Rendering.Tests/FramePlanReplayTests.cs
+ create mode 100644 tests/Map.Rendering.Tests/FramePlanTestData.cs
+
+diff --git a/docs/journal/2026-11.md b/docs/journal/2026-11.md
+index 44816f0..7b62af3 100644
+--- a/docs/journal/2026-11.md
++++ b/docs/journal/2026-11.md
+@@ -2,6 +2,15 @@
+ 
+ Правила — `docs/journal/README.md`. Новые записи сверху.
+ 
++## 2026-11-14 · Чистый FramePlan и гистерезис жеста (DEC-111/115) · Sol, Mac frameplan
++
++**Поручение:** «pure FramePlan arbiter + gesture resolution hysteresis», без подключения к renderer.
++**Сделано (FACT):** FramePlan/FramePlanTuning/FramePlanner в Map.Rendering.Reserve; immutable план, явные владельцы, одна обычная настройка за период, приоритет ухудшения, дискретные ступени и гистерезис worst-frame/T. Stop/ForceExact немедленно возвращает scale=1 и запрет камеры.
++**Проверено (FACT):** offline Release solution до/после — 0 ошибок; тематические 28/28 → 92/92 (64 новых). Полный Rendering — 590 passed / 1 failed → 654 passed / 1 failed; единственное прежнее падение Stage10EGridRenderingTests.Four_proposed_golden_fixtures_match_without_overwriting_expected (actual 7145), новых нет.
++**Ограничения (NOT CHECKED):** Windows/GPU, реальный FPS и пиксельная приёмка не проверялись; исполняемые пути renderer не изменены. Нулевые аллокации нового planner отдельно не измерялись, tiering на Mac выключен.
++**Далее (PARTIAL):** один plan перед StampImages.BeginFrame; подключить admission/scheduler/camera/SceneSurfacePresenter и проверить Windows. Общий deadline/TryTake и реальные потребители не входят в этот патч.
++**Передача:** локальный conventional commit и format-patch от 7b1f32c; push запрещён поручением. Подробные команды и логи — SOL_REPORT.md в папке агента frameplan.
++
+ ## 2026-11-14 · Закрытие сессии USER по поручению владельца · Astra
+ 
+ **Сделано:** диагностика зафиксирована в 963dc2f, d12bc90 и 765fde3; сравнения пакета и режима GPU flush — c53af40 и 63cb0ce. Последний живой прогон завершён, 47 PNG просмотрены, временный профиль удалён. Новые прогоны остановлены по письму Claude 16:35; push не выполнялся.
+diff --git a/src/Map.Rendering/Reserve/FramePlan.cs b/src/Map.Rendering/Reserve/FramePlan.cs
+new file mode 100644
+index 0000000..23f224a
+--- /dev/null
++++ b/src/Map.Rendering/Reserve/FramePlan.cs
+@@ -0,0 +1,42 @@
++namespace Map.Rendering.Reserve;
++
++/// <summary>Joint byte/count ceiling. A zero in either dimension admits no work.</summary>
++public readonly record struct FrameWorkBudget(long Bytes, int Count);
++
++/// <summary>
++/// Immutable decision to obtain BEFORE StampImages.BeginFrame and retain for the entire frame.
++/// Camera reuse means reuse of a valid cached frame, with scene fallback if none is available.
++/// RequireExact describes the requested scene, not completion of asynchronous refinement.
++/// This contract has no renderer consumers yet; constructing it never changes rendering.
++/// </summary>
++public readonly record struct FramePlan(
++    double SceneResolutionScale,
++    FrameWorkBudget UploadBudget,
++    FrameWorkBudget AdoptionBudget,
++    bool UseCameraFrame,
++    int BackgroundConcurrencyHint,
++    bool StopPrefetch)
++{
++    // Exactness is derived, never another independently adjustable quality knob.
++    public bool RequireExact => SceneResolutionScale == 1 && !UseCameraFrame;
++}
++
++public enum FramePlanKnob
++{
++    SceneResolution, UploadBudget, AdoptionBudget, CameraFrame, BackgroundConcurrency, Prefetch,
++    Exactness
++}
++
++public enum FramePlanOwner { GestureResolution, FrameBudget, CameraPolicy, WorkScheduler, ExactnessPolicy }
++
++/// <summary>
++/// Cost of a completed frame (not an idle/present interval), normalized by its own refresh period.
++/// Invalid cost/refresh measurements are unknown, never recovery evidence. Reserve values are
++/// requests, not overrides. ForceExact covers export and other callers requiring an exact scene.
++/// </summary>
++public readonly record struct FramePlanSample(
++    ReserveDecision Reserve,
++    double FrameWorkMs,
++    double RefreshPeriodMs,
++    bool GestureActive,
++    bool ForceExact = false);
+diff --git a/src/Map.Rendering/Reserve/FramePlanTuning.cs b/src/Map.Rendering/Reserve/FramePlanTuning.cs
+new file mode 100644
+index 0000000..80323b8
+--- /dev/null
++++ b/src/Map.Rendering/Reserve/FramePlanTuning.cs
+@@ -0,0 +1,46 @@
++namespace Map.Rendering.Reserve;
++
++/// <summary>
++/// Starting policy from RESERVE_ENGINE §3; these are not measured hardware guarantees.
++/// Frame-work max replaces GPU p95 here: the governor also protects CPU/software frames.
++/// Transfer ceilings start at the existing 8/2 MiB adoption limits; other clients supply theirs.
++/// </summary>
++public sealed record FramePlanTuning
++{
++    public double WindowMs { get; init; } = 1_000;
++    public double EnterRatio { get; init; } = 0.75;
++    public double ExitRatio { get; init; } = 0.55;
++    public int PressureWindows { get; init; } = 2;
++    public double HealthyReleaseMs { get; init; } = 4_000;
++    public double WorseningPeriodMs { get; init; } = 3_000;
++    public double RecoveryPeriodMs { get; init; } = 5_000;
++    public double ReducedResolutionScale { get; init; } = 0.75;
++    public double MinimumResolutionScale { get; init; } = 0.5;
++    public double BusyTransferFactor { get; init; } = 0.5;
++    public FrameWorkBudget UploadBudget { get; init; } = new(8 * 1024 * 1024, 16);
++    public FrameWorkBudget AdoptionBudget { get; init; } = new(8 * 1024 * 1024, 16);
++    public FrameWorkBudget GestureUploadBudget { get; init; } = new(2 * 1024 * 1024, 16);
++    public FrameWorkBudget GestureAdoptionBudget { get; init; } = new(2 * 1024 * 1024, 16);
++    public int BackgroundConcurrency { get; init; } = 1;
++    public int MaxBackgroundConcurrency { get; init; } = 4;
++    public int BusyBackgroundConcurrency { get; init; } = 1;
++
++    internal void Validate()
++    {
++        static bool Positive(double n) => double.IsFinite(n) && n > 0;
++        static bool Fraction(double n) => Positive(n) && n <= 1;
++        static bool Budget(FrameWorkBudget b) => b.Bytes >= 0 && b.Count >= 0;
++        static bool Within(FrameWorkBudget a, FrameWorkBudget b) => a.Bytes <= b.Bytes && a.Count <= b.Count;
++        if (!Positive(WindowMs) || !Fraction(EnterRatio) || !Fraction(ExitRatio) || ExitRatio >= EnterRatio
++            || PressureWindows < 1 || !Positive(HealthyReleaseMs) || !Positive(WorseningPeriodMs)
++            || !Positive(RecoveryPeriodMs) || RecoveryPeriodMs <= WorseningPeriodMs
++            || !Fraction(ReducedResolutionScale) || ReducedResolutionScale >= 1
++            || !Fraction(MinimumResolutionScale) || MinimumResolutionScale >= ReducedResolutionScale
++            || !Fraction(BusyTransferFactor) || !Budget(UploadBudget) || !Budget(AdoptionBudget)
++            || !Budget(GestureUploadBudget) || !Budget(GestureAdoptionBudget)
++            || !Within(GestureUploadBudget, UploadBudget) || !Within(GestureAdoptionBudget, AdoptionBudget)
++            || BackgroundConcurrency < 1 || MaxBackgroundConcurrency < BackgroundConcurrency
++            || BusyBackgroundConcurrency < 1 || BusyBackgroundConcurrency > BackgroundConcurrency)
++            throw new ArgumentException("Invalid frame-plan policy thresholds.");
++    }
++}
+diff --git a/src/Map.Rendering/Reserve/FramePlanner.cs b/src/Map.Rendering/Reserve/FramePlanner.cs
+new file mode 100644
+index 0000000..7a761ea
+--- /dev/null
++++ b/src/Map.Rendering/Reserve/FramePlanner.cs
+@@ -0,0 +1,187 @@
++namespace Map.Rendering.Reserve;
++
++/// <summary>
++/// Pure, single-thread-owned arbiter. Explicit monotonic milliseconds; constant storage/work,
++/// no platform or scene access. Each knob has ONE owner (OwnerOf); all other inputs only request.
++/// Normal changes are serialized globally, worsening first, with longer recovery periods.
++/// DEC-115 exactness restoration is the sole exception: gesture stop/ForceExact restores both
++/// visual knobs immediately and restarts the arbitration period. Resource ceilings recover later.
++/// </summary>
++public sealed class FramePlanner
++{
++    private readonly FramePlanTuning _tuning;
++    private FramePlan _plan;
++    private double _lastNow = double.NaN, _windowStart, _maxRatio, _healthyMs;
++    private double _lastChange = double.NegativeInfinity, _resolutionSince;
++    private int _hotWindows;
++    private bool _hasSample, _unknown, _pressure, _gesture;
++
++    public FramePlanner(FramePlanTuning? tuning = null)
++    {
++        _tuning = tuning ?? new();
++        _tuning.Validate();
++        _plan = new(1, _tuning.UploadBudget, _tuning.AdoptionBudget, false, _tuning.BackgroundConcurrency, false);
++    }
++
++    public FramePlan Current => _plan;
++
++    /// <summary>Null for unchanged frames; Exactness denotes the immediate DEC-115 safety gate.</summary>
++    public FramePlanKnob? LastChangedKnob { get; private set; }
++
++    public static FramePlanOwner OwnerOf(FramePlanKnob knob) => knob switch
++    {
++        FramePlanKnob.SceneResolution => FramePlanOwner.GestureResolution,
++        FramePlanKnob.UploadBudget or FramePlanKnob.AdoptionBudget => FramePlanOwner.FrameBudget,
++        FramePlanKnob.CameraFrame => FramePlanOwner.CameraPolicy,
++        FramePlanKnob.BackgroundConcurrency or FramePlanKnob.Prefetch => FramePlanOwner.WorkScheduler,
++        FramePlanKnob.Exactness => FramePlanOwner.ExactnessPolicy,
++        _ => throw new ArgumentOutOfRangeException(nameof(knob))
++    };
++
++    public FramePlan Plan(FramePlanSample sample, double nowMs)
++    {
++        // Validate before any mutation, including diagnostics and clock state.
++        if (!double.IsFinite(nowMs) || nowMs < 0 || (!double.IsNaN(_lastNow) && nowMs < _lastNow))
++            throw new ArgumentOutOfRangeException(nameof(nowMs), "Time must be finite and monotonic.");
++        if (!double.IsFinite(sample.Reserve.UploadLimitFactor) || sample.Reserve.UploadLimitFactor <= 0
++            || sample.Reserve.UploadLimitFactor > 1 || !double.IsFinite(sample.Reserve.GestureResolutionScale)
++            || sample.Reserve.GestureResolutionScale <= 0 || sample.Reserve.GestureResolutionScale > 1
++            || sample.Reserve.CpuTileConcurrencyHint < 0)
++            throw new ArgumentException("Invalid reserve requests.", nameof(sample));
++
++        LastChangedKnob = null;
++        if (double.IsNaN(_lastNow)) _windowStart = _resolutionSince = nowMs;
++        ObserveCost(sample, nowMs);
++        _lastNow = nowMs;
++
++        bool gesture = sample.GestureActive && !sample.ForceExact;
++        if (gesture != _gesture) _resolutionSince = nowMs;
++        _gesture = gesture;
++        if (!gesture && !_plan.RequireExact)
++        {
++            _plan = _plan with { SceneResolutionScale = 1, UseCameraFrame = false };
++            _lastChange = _resolutionSince = nowMs;
++            LastChangedKnob = FramePlanKnob.Exactness;
++            return _plan;
++        }
++
++        bool pendingWorsening = false;
++        if (!Adjust(sample, nowMs, true, ref pendingWorsening) && !pendingWorsening && CanRecover)
++            Adjust(sample, nowMs, false, ref pendingWorsening);
++        return _plan;
++    }
++
++    private bool CanRecover => !_unknown && _hasSample && _healthyMs >= _tuning.HealthyReleaseMs && !_pressure;
++
++    private void ObserveCost(FramePlanSample sample, double nowMs)
++    {
++        // No unobserved time counts as healthy. Retain pressure until measured recovery.
++        if (!double.IsNaN(_lastNow) && nowMs - _lastNow > _tuning.WindowMs)
++        {
++            _windowStart = nowMs;
++            _maxRatio = _healthyMs = 0;
++            _hotWindows = 0;
++            _hasSample = _unknown = false;
++        }
++        if (nowMs - _windowStart >= _tuning.WindowMs)
++        {
++            bool valid = _hasSample && !_unknown;
++            _hotWindows = valid && _maxRatio > _tuning.EnterRatio
++                ? Math.Min(_hotWindows + 1, _tuning.PressureWindows) : 0;
++            _healthyMs = valid && _maxRatio < _tuning.ExitRatio ? _healthyMs + _tuning.WindowMs : 0;
++            if (_hotWindows >= _tuning.PressureWindows) _pressure = true;
++            if (_healthyMs >= _tuning.HealthyReleaseMs) _pressure = false;
++            _windowStart = nowMs;
++            _maxRatio = 0;
++            _hasSample = _unknown = false;
++        }
++        double ratio = sample.FrameWorkMs / sample.RefreshPeriodMs;
++        bool known = double.IsFinite(sample.FrameWorkMs) && sample.FrameWorkMs >= 0
++            && double.IsFinite(sample.RefreshPeriodMs) && sample.RefreshPeriodMs > 0 && double.IsFinite(ratio);
++        _unknown |= !known;
++        _hasSample = true;
++        if (known) _maxRatio = Math.Max(_maxRatio, ratio);
++        // A new bad/neutral sample must block recovery even at a healthy window boundary.
++        if (!known || ratio >= _tuning.ExitRatio) _healthyMs = 0;
++    }
++
++    private bool Adjust(FramePlanSample sample, double nowMs, bool worsening, ref bool pending)
++    {
++        var reserve = sample.Reserve;
++        // Fixed order is the deterministic tie-breaker. An unavailable dwell does not permit
++        // recovery elsewhere while a worsening request is pending.
++        int step = ResolutionStep(_plan.SceneResolutionScale);
++        int requested = _gesture ? ResolutionStep(reserve.GestureResolutionScale) : 0;
++        int targetStep = step;
++        if (_gesture)
++        {
++            if (_hotWindows >= _tuning.PressureWindows) targetStep = Math.Min(step + 1, 2);
++            else if (CanRecover) targetStep = Math.Max(step - 1, 0);
++            targetStep = Math.Min(Math.Max(targetStep, requested), step + 1);
++        }
++        double scale = Scale(targetStep);
++        if (Candidate(FramePlanKnob.SceneResolution, _plan with { SceneResolutionScale = scale },
++            targetStep > step, nowMs, worsening, ref pending, _resolutionSince)) return true;
++        // Reserve the next slot for a pending visual reduction rather than delaying it by
++        // spending that slot on background work just before the resolution dwell expires.
++        if (pending) return false;
++
++        bool prefetch = reserve.StopPrefetch || _pressure;
++        if (Candidate(FramePlanKnob.Prefetch, _plan with { StopPrefetch = prefetch },
++            prefetch, nowMs, worsening, ref pending)) return true;
++
++        double factor = Math.Min(reserve.UploadLimitFactor, _pressure ? _tuning.BusyTransferFactor : 1);
++        var upload = Limit(_tuning.UploadBudget, _gesture ? _tuning.GestureUploadBudget : _tuning.UploadBudget, factor);
++        var adoption = Limit(_tuning.AdoptionBudget, _gesture ? _tuning.GestureAdoptionBudget : _tuning.AdoptionBudget, factor);
++        if (BudgetCandidate(FramePlanKnob.UploadBudget, upload, nowMs, worsening, ref pending)) return true;
++        if (BudgetCandidate(FramePlanKnob.AdoptionBudget, adoption, nowMs, worsening, ref pending)) return true;
++
++        bool camera = _gesture && (reserve.KeepCameraFrameLonger || _pressure);
++        if (Candidate(FramePlanKnob.CameraFrame, _plan with { UseCameraFrame = camera },
++            camera, nowMs, worsening, ref pending)) return true;
++
++        // Zero is no CPU-assist request. CPU assistance cannot exceed the shared scheduler's cap;
++        // measured frame pressure has precedence over a request to start more workers.
++        int concurrency = Math.Clamp(Math.Max(_tuning.BackgroundConcurrency, reserve.CpuTileConcurrencyHint),
++            1, _tuning.MaxBackgroundConcurrency);
++        if (_pressure) concurrency = Math.Min(concurrency, _tuning.BusyBackgroundConcurrency);
++        return Candidate(FramePlanKnob.BackgroundConcurrency, _plan with { BackgroundConcurrencyHint = concurrency },
++            concurrency < _plan.BackgroundConcurrencyHint, nowMs, worsening, ref pending);
++    }
++
++    private bool BudgetCandidate(FramePlanKnob knob, FrameWorkBudget target, double nowMs, bool worsening, ref bool pending)
++    {
++        var current = knob == FramePlanKnob.UploadBudget ? _plan.UploadBudget : _plan.AdoptionBudget;
++        // If one dimension tightens while another loosens, tighten first. Never smuggle a
++        // recovery into the worsening pass, even with asymmetric client ceilings.
++        bool tighter = target.Bytes < current.Bytes || target.Count < current.Count;
++        if (tighter) target = new(Math.Min(target.Bytes, current.Bytes), Math.Min(target.Count, current.Count));
++        var next = knob == FramePlanKnob.UploadBudget ? _plan with { UploadBudget = target } : _plan with { AdoptionBudget = target };
++        return Candidate(knob, next, tighter, nowMs, worsening, ref pending);
++    }
++
++    private bool Candidate(FramePlanKnob knob, FramePlan next, bool tighter, double nowMs, bool worsening,
++        ref bool pending, double since = double.NegativeInfinity)
++    {
++        if (next == _plan || tighter != worsening) return false;
++        pending |= worsening;
++        double period = worsening ? _tuning.WorseningPeriodMs : _tuning.RecoveryPeriodMs;
++        if (nowMs - _lastChange < period || nowMs - since < period) return false;
++        _plan = next;
++        _lastChange = nowMs;
++        if (knob == FramePlanKnob.SceneResolution) _resolutionSince = nowMs;
++        LastChangedKnob = knob;
++        return true;
++    }
++
++    private int ResolutionStep(double scale) => scale >= 1 ? 0 : scale >= _tuning.ReducedResolutionScale ? 1 : 2;
++
++    private double Scale(int step) => step switch
++    {
++        0 => 1, 1 => _tuning.ReducedResolutionScale, _ => _tuning.MinimumResolutionScale
++    };
++
++    private static FrameWorkBudget Limit(FrameWorkBudget normal, FrameWorkBudget gesture, double factor) => new(
++        Math.Min(normal.Bytes, factor == 1 ? gesture.Bytes : (long)Math.Floor(gesture.Bytes * factor)),
++        Math.Min(normal.Count, (int)Math.Floor(gesture.Count * factor)));
++}
+diff --git a/tests/Map.Rendering.Tests/FramePlanArbiterTests.cs b/tests/Map.Rendering.Tests/FramePlanArbiterTests.cs
+new file mode 100644
+index 0000000..10b8af3
+--- /dev/null
++++ b/tests/Map.Rendering.Tests/FramePlanArbiterTests.cs
+@@ -0,0 +1,158 @@
++using Map.Rendering.Reserve;
++using static Map.Rendering.Tests.FramePlanTestData;
++using Stream = Map.Rendering.Tests.FramePlanTestData.Stream;
++
++namespace Map.Rendering.Tests;
++
++public sealed class FramePlanArbiterTests
++{
++    [Theory]
++    [InlineData(FramePlanKnob.SceneResolution, FramePlanOwner.GestureResolution)]
++    [InlineData(FramePlanKnob.UploadBudget, FramePlanOwner.FrameBudget)]
++    [InlineData(FramePlanKnob.AdoptionBudget, FramePlanOwner.FrameBudget)]
++    [InlineData(FramePlanKnob.CameraFrame, FramePlanOwner.CameraPolicy)]
++    [InlineData(FramePlanKnob.BackgroundConcurrency, FramePlanOwner.WorkScheduler)]
++    [InlineData(FramePlanKnob.Prefetch, FramePlanOwner.WorkScheduler)]
++    [InlineData(FramePlanKnob.Exactness, FramePlanOwner.ExactnessPolicy)]
++    public void Each_knob_has_one_explicit_owner(FramePlanKnob knob, FramePlanOwner owner)
++    {
++        Assert.Equal(owner, FramePlanner.OwnerOf(knob));
++        Assert.Throws<ArgumentOutOfRangeException>(() => FramePlanner.OwnerOf((FramePlanKnob)999));
++    }
++
++    [Fact]
++    public void Defaults_are_exact_and_do_not_request_assistance_at_rest()
++    {
++        var planner = new FramePlanner();
++        var initial = planner.Current;
++        for (int t = 0; t <= 20_000; t += 20)
++            Assert.Equal(initial, planner.Plan(Healthy with { GestureActive = false }, t));
++        Assert.Equal(1, initial.SceneResolutionScale);
++        Assert.True(initial.RequireExact);
++        Assert.False(initial.UseCameraFrame);
++        Assert.Null(planner.LastChangedKnob);
++    }
++
++    [Fact]
++    public void Conflicting_requests_are_combined_by_the_owner_without_ping_pong()
++    {
++        var stream = new Stream();
++        var requests = Normal with { UploadLimitFactor = 0.75, CpuTileConcurrencyHint = 99 };
++        var sample = Hot with { Reserve = requests };
++        var plan = stream.To(4_000, sample);
++        // FrameBudget chooses min(reserve .75, measured-pressure .5); scheduler caps CPU help.
++        Assert.Equal(new FrameWorkBudget(500, 5), plan.UploadBudget);
++        Assert.Equal(new FrameWorkBudget(1_000, 10), plan.AdoptionBudget);
++        Assert.Equal(1, plan.BackgroundConcurrencyHint);
++        Assert.Equal(0.5, plan.SceneResolutionScale); // reserve requested full scale
++        Assert.True(plan.StopPrefetch);
++        Assert.True(plan.UseCameraFrame);
++        for (int t = 4_020; t <= 10_000; t += 20)
++            Assert.Equal(plan, stream.Planner.Plan(sample with
++            {
++                Reserve = requests with { UploadLimitFactor = t % 40 == 0 ? 1 : 0.75 }
++            }, t));
++    }
++
++    [Fact]
++    public void At_most_one_knob_changes_per_period_even_on_repeated_timestamps_or_large_jumps()
++    {
++        var planner = new FramePlanner(Tuning);
++        var sample = Healthy with { Reserve = Normal with
++        {
++            UploadLimitFactor = 0.25, GestureResolutionScale = 0.5,
++            KeepCameraFrameLonger = true, StopPrefetch = true, CpuTileConcurrencyHint = 4
++        } };
++        double lastChange = double.NegativeInfinity;
++        var changed = new HashSet<FramePlanKnob>();
++        for (int t = 0; t <= 4_000; t += 20)
++        {
++            var before = planner.Current;
++            var after = planner.Plan(sample, t);
++            int count = ChangedKnobs(before, after);
++            Assert.InRange(count, 0, 1);
++            if (count == 1)
++            {
++                Assert.True(t - lastChange >= Tuning.WorseningPeriodMs);
++                lastChange = t;
++                changed.Add(planner.LastChangedKnob!.Value);
++            }
++            Assert.Equal(after, planner.Plan(sample, t));
++            Assert.Null(planner.LastChangedKnob);
++        }
++        Assert.Equal(6, changed.Count); // all independently owned normal knobs eventually settle
++        var snapshot = planner.Current;
++        var next = planner.Plan(Hot with { Reserve = sample.Reserve with { UploadLimitFactor = 0.1 } }, 1_000_000);
++        Assert.InRange(ChangedKnobs(snapshot, next), 0, 1);
++        Assert.Equal(next, planner.Plan(Hot with { Reserve = sample.Reserve with { UploadLimitFactor = 0.1 } }, 1_000_000));
++    }
++
++    [Fact]
++    public void Worsening_beats_a_due_recovery_and_recovery_waits_longer()
++    {
++        var stream = new Stream();
++        stream.To(780, Healthy with { Reserve = Normal with { UploadLimitFactor = 0.5 } });
++        var previous = stream.Last;
++        var camera = Healthy with { Reserve = Normal with { KeepCameraFrameLonger = true } };
++        var next = stream.To(800, camera);
++        Assert.True(next.UseCameraFrame);
++        Assert.Equal(FramePlanKnob.CameraFrame, stream.Planner.LastChangedKnob);
++        Assert.Equal(previous.UploadBudget, next.UploadBudget);
++        stream.To(1_280, camera);
++        Assert.Equal(previous.UploadBudget, stream.Last.UploadBudget);
++        Assert.Equal(Tuning.UploadBudget, stream.To(1_300, camera).UploadBudget);
++        Assert.Equal(FramePlanKnob.UploadBudget, stream.Planner.LastChangedKnob);
++    }
++
++    [Fact]
++    public void Budgets_intersect_gesture_ceiling_reserve_and_frame_pressure_in_both_dimensions()
++    {
++        var tuning = Tuning with { GestureUploadBudget = new(400, 8), GestureAdoptionBudget = new(800, 12) };
++        var stream = new Stream(tuning);
++        var sample = Healthy with { Reserve = Normal with { UploadLimitFactor = 0.25 } };
++        var plan = stream.To(2_000, sample);
++        Assert.Equal(new FrameWorkBudget(100, 2), plan.UploadBudget);
++        Assert.Equal(new FrameWorkBudget(200, 3), plan.AdoptionBudget);
++        // Counts round DOWN, and zero really means no work (no implicit minimum of one).
++        plan = stream.To(4_000, sample with { Reserve = sample.Reserve with { UploadLimitFactor = 0.01 } });
++        Assert.Equal(new FrameWorkBudget(4, 0), plan.UploadBudget);
++        Assert.Equal(new FrameWorkBudget(8, 0), plan.AdoptionBudget);
++    }
++
++    [Fact]
++    public void Asymmetric_budget_change_tightens_before_recovering_the_other_dimension()
++    {
++        var tuning = Tuning with
++        {
++            GestureUploadBudget = new(1_000, 1), AdoptionBudget = new(0, 0), GestureAdoptionBudget = new(0, 0)
++        };
++        var stream = new Stream(tuning);
++        stream.To(300, Healthy);
++        Assert.Equal(new FrameWorkBudget(1_000, 1), stream.Last.UploadBudget);
++        var sample = Healthy with { GestureActive = false, Reserve = Normal with { UploadLimitFactor = 0.5 } };
++        Assert.Equal(new FrameWorkBudget(500, 1), stream.To(320, sample).UploadBudget);
++        Assert.Equal(new FrameWorkBudget(500, 1), stream.To(800, sample).UploadBudget);
++        Assert.Equal(new FrameWorkBudget(500, 5), stream.To(820, sample).UploadBudget);
++    }
++
++    [Fact]
++    public void Concurrency_is_only_a_bounded_hint_and_zero_reserve_request_keeps_existing_workers()
++    {
++        var stream = new Stream(Tuning with { BackgroundConcurrency = 2, MaxBackgroundConcurrency = 3 });
++        Assert.Equal(2, stream.To(1_000, Healthy).BackgroundConcurrencyHint);
++        Assert.Equal(3, stream.To(2_000, Healthy with { Reserve = Normal with { CpuTileConcurrencyHint = 100 } }).BackgroundConcurrencyHint);
++        Assert.Equal(2, stream.To(3_000, Healthy).BackgroundConcurrencyHint);
++    }
++
++    [Fact]
++    public void Byte_ceiling_handles_long_max_value_without_overflow()
++    {
++        var ceiling = new FrameWorkBudget(long.MaxValue, int.MaxValue);
++        var tuning = Tuning with { UploadBudget = ceiling, GestureUploadBudget = ceiling };
++        var stream = new Stream(tuning);
++        Assert.Equal(ceiling, stream.To(1_000, Healthy).UploadBudget);
++        var plan = stream.To(2_000, Healthy with { Reserve = Normal with { UploadLimitFactor = 0.5 } });
++        Assert.InRange(plan.UploadBudget.Bytes, 0, long.MaxValue / 2 + 1);
++        Assert.Equal(int.MaxValue / 2, plan.UploadBudget.Count);
++    }
++}
+diff --git a/tests/Map.Rendering.Tests/FramePlanHysteresisTests.cs b/tests/Map.Rendering.Tests/FramePlanHysteresisTests.cs
+new file mode 100644
+index 0000000..67b104f
+--- /dev/null
++++ b/tests/Map.Rendering.Tests/FramePlanHysteresisTests.cs
+@@ -0,0 +1,163 @@
++using Map.Rendering.Reserve;
++using static Map.Rendering.Tests.FramePlanTestData;
++using Stream = Map.Rendering.Tests.FramePlanTestData.Stream;
++
++namespace Map.Rendering.Tests;
++
++public sealed class FramePlanHysteresisTests
++{
++    [Fact]
++    public void Enter_requires_two_hot_windows_and_each_discrete_step_obeys_dwell()
++    {
++        var stream = new Stream();
++        Assert.Equal(1, stream.To(280, Hot).SceneResolutionScale);
++        Assert.Equal(0.75, stream.To(300, Hot).SceneResolutionScale);
++        Assert.Equal(0.75, stream.To(580, Hot).SceneResolutionScale);
++        Assert.Equal(0.5, stream.To(600, Hot).SceneResolutionScale);
++    }
++
++    [Fact]
++    public void Strong_reserve_request_also_uses_discrete_steps_and_minimum_dwell()
++    {
++        var stream = new Stream();
++        var sample = Healthy with { Reserve = Normal with { GestureResolutionScale = 0.1 } };
++        Assert.Equal(1, stream.To(280, sample).SceneResolutionScale);
++        Assert.Equal(0.75, stream.To(300, sample).SceneResolutionScale);
++        Assert.Equal(0.5, stream.To(600, sample).SceneResolutionScale);
++    }
++
++    [Fact]
++    public void Exit_requires_sustained_low_cost_and_recovers_more_slowly_than_entry()
++    {
++        var stream = new Stream();
++        stream.To(600, Hot);
++        Assert.Equal(0.5, stream.To(1_080, Healthy).SceneResolutionScale);
++        Assert.Equal(0.75, stream.To(1_100, Healthy).SceneResolutionScale);
++        Assert.Equal(0.75, stream.To(1_580, Healthy).SceneResolutionScale);
++        Assert.Equal(1, stream.To(1_600, Healthy).SceneResolutionScale);
++        Assert.True(stream.Last.RequireExact);
++    }
++
++    [Fact]
++    public void Threshold_noise_never_alternates_reduction_and_recovery()
++    {
++        var planner = new FramePlanner(Tuning);
++        double previous = 1;
++        int reductions = 0;
++        for (int t = 0; t <= 4_000; t += 20)
++        {
++            var plan = planner.Plan(Hot with { FrameWorkMs = t % 40 == 0 ? 7.4 : 7.6 }, t);
++            Assert.True(plan.SceneResolutionScale <= previous);
++            if (plan.SceneResolutionScale < previous) reductions++;
++            previous = plan.SceneResolutionScale;
++        }
++        Assert.Equal(2, reductions);
++        // Noise around the EXIT threshold contains a non-healthy worst frame in every window.
++        for (int t = 4_020; t <= 10_000; t += 20)
++            Assert.Equal(0.5, planner.Plan(Healthy with { FrameWorkMs = t % 40 == 0 ? 5.4 : 5.6 }, t).SceneResolutionScale);
++    }
++
++    [Theory]
++    [InlineData(false)]
++    [InlineData(true)]
++    public void Gesture_stop_or_force_exact_restores_both_visual_knobs_immediately(bool forceExact)
++    {
++        var stream = new Stream();
++        var sample = Healthy with { Reserve = Normal with { GestureResolutionScale = 0.5, KeepCameraFrameLonger = true } };
++        var reduced = stream.To(900, sample);
++        Assert.Equal(0.5, reduced.SceneResolutionScale);
++        Assert.True(reduced.UseCameraFrame);
++        Assert.False(reduced.RequireExact);
++        var exact = stream.To(920, sample with { GestureActive = forceExact, ForceExact = forceExact });
++        Assert.Equal(1, exact.SceneResolutionScale);
++        Assert.False(exact.UseCameraFrame);
++        Assert.True(exact.RequireExact);
++        Assert.Equal(FramePlanKnob.Exactness, stream.Planner.LastChangedKnob);
++        Assert.Equal(2, ChangedKnobs(reduced, exact)); // documented safety exception
++        Assert.Equal(reduced.UploadBudget, exact.UploadBudget);
++        Assert.Equal(reduced.AdoptionBudget, exact.AdoptionBudget);
++        // A new gesture does not inherit an expired full-resolution dwell deadline.
++        Assert.Equal(1, stream.To(1_220, sample).SceneResolutionScale);
++        Assert.Equal(0.75, stream.To(1_240, sample).SceneResolutionScale);
++    }
++
++    [Fact]
++    public void Idle_and_force_exact_ignore_visual_requests_even_under_sustained_pressure()
++    {
++        var requests = Normal with { GestureResolutionScale = 0.5, KeepCameraFrameLonger = true };
++        foreach (bool force in new[] { false, true })
++        {
++            var stream = new Stream();
++            var plan = stream.To(5_000, Hot with { Reserve = requests, GestureActive = force, ForceExact = force });
++            Assert.True(plan.RequireExact);
++            Assert.False(plan.UseCameraFrame);
++            Assert.Equal(1, plan.SceneResolutionScale);
++            Assert.True(plan.StopPrefetch);
++            Assert.True(plan.AdoptionBudget.Bytes < Tuning.AdoptionBudget.Bytes);
++        }
++    }
++
++    [Fact]
++    public void Worst_frame_not_average_controls_entry_and_refresh_period_is_per_sample()
++    {
++        var planner = new FramePlanner(Tuning);
++        for (int t = 0; t <= 600; t += 20)
++            planner.Plan(Healthy with { FrameWorkMs = t % 100 == 0 ? 9 : 1 }, t);
++        Assert.Equal(0.5, planner.Current.SceneResolutionScale);
++        var stream = new Stream();
++        Assert.Equal(1, stream.To(2_000, Hot with { RefreshPeriodMs = 20 }).SceneResolutionScale);
++        Assert.Equal(0.5, stream.To(3_000, Hot).SceneResolutionScale);
++    }
++
++    [Fact]
++    public void Alternating_hot_and_healthy_windows_do_not_enter()
++    {
++        var planner = new FramePlanner(Tuning);
++        for (int t = 0; t <= 4_000; t += 20)
++        {
++            var plan = planner.Plan(t / 100 % 2 == 0 ? Hot : Healthy, t);
++            Assert.True(plan.RequireExact);
++        }
++    }
++
++    [Theory]
++    [InlineData(double.NaN, 10)]
++    [InlineData(double.PositiveInfinity, 10)]
++    [InlineData(-1, 10)]
++    [InlineData(1, 0)]
++    [InlineData(1, double.NaN)]
++    [InlineData(1, double.PositiveInfinity)]
++    [InlineData(double.MaxValue, double.Epsilon)]
++    public void Unknown_cost_cannot_enter_or_recover(double cost, double refresh)
++    {
++        var unknown = Healthy with { FrameWorkMs = cost, RefreshPeriodMs = refresh };
++        var initial = new Stream();
++        Assert.True(initial.To(5_000, unknown).RequireExact);
++        var reduced = new Stream();
++        reduced.To(600, Hot);
++        Assert.Equal(0.5, reduced.To(5_000, unknown).SceneResolutionScale);
++    }
++
++    [Fact]
++    public void Sampling_gap_does_not_fabricate_healthy_time_or_hot_windows()
++    {
++        var stream = new Stream();
++        stream.To(600, Hot);
++        Assert.Equal(0.5, stream.Planner.Plan(Healthy, 100_000).SceneResolutionScale);
++        Assert.Equal(0.5, stream.Planner.Plan(Healthy, 100_000).SceneResolutionScale);
++        var planner = new FramePlanner(Tuning);
++        planner.Plan(Hot, 0);
++        Assert.True(planner.Plan(Hot, 100_000).RequireExact);
++    }
++
++    [Fact]
++    public void Bad_sample_on_recovery_boundary_blocks_the_due_step()
++    {
++        var stream = new Stream();
++        stream.To(600, Hot);
++        stream.To(1_080, Healthy);
++        Assert.Equal(0.5, stream.To(1_100, Healthy with { FrameWorkMs = double.NaN }).SceneResolutionScale);
++        Assert.Equal(0.5, stream.To(1_280, Healthy).SceneResolutionScale);
++        Assert.Equal(0.75, stream.To(1_400, Healthy).SceneResolutionScale);
++    }
++}
+diff --git a/tests/Map.Rendering.Tests/FramePlanReplayTests.cs b/tests/Map.Rendering.Tests/FramePlanReplayTests.cs
+new file mode 100644
+index 0000000..563d0da
+--- /dev/null
++++ b/tests/Map.Rendering.Tests/FramePlanReplayTests.cs
+@@ -0,0 +1,158 @@
++using Map.Rendering.Reserve;
++using static Map.Rendering.Tests.FramePlanTestData;
++using Stream = Map.Rendering.Tests.FramePlanTestData.Stream;
++
++namespace Map.Rendering.Tests;
++
++public sealed class FramePlanReplayTests
++{
++    // Recorded policy-input fixture: explicit timestamps, refresh changes, missing telemetry,
++    // a reserve request, settle, and export. This is synthetic, not a GPU performance capture.
++    private static readonly (double At, double Cost, double Refresh, bool Gesture, bool Exact, ReserveDecision Reserve)[] Recording =
++    [
++        (0, 8, 10, true, false, Normal),
++        (100, 8, 10, true, false, Normal),
++        (200, 8, 10, true, false, Normal),
++        (300, 8, 10, true, false, Normal),
++        (400, 8, 10, true, false, Normal),
++        (500, 8, 10, true, false, Normal),
++        (600, 8, 10, true, false, Normal),
++        (700, double.NaN, 10, true, false, Normal),
++        (800, 8, 20, true, false, Normal),
++        (900, 8, 20, true, false, Normal with { UploadLimitFactor = 0.25 }),
++        (920, 8, 20, false, false, Normal with { GestureResolutionScale = 0.5, KeepCameraFrameLonger = true }),
++        (1_000, 4, 20, true, false, Normal),
++        (1_100, 4, 20, true, false, Normal),
++        (1_200, 4, 20, true, false, Normal),
++        (1_300, 4, 20, true, false, Normal with { GestureResolutionScale = 0.5 }),
++        (1_400, 4, 20, true, true, Normal with { GestureResolutionScale = 0.5 }),
++        (10_000, 4, 20, false, false, Normal)
++    ];
++
++    [Fact]
++    public void Recorded_sequence_replays_identically_independent_of_clock_origin()
++    {
++        var first = Replay(0);
++        var second = Replay(1_234_567);
++        Assert.Equal(first, second);
++        Assert.Equal(new double[] { 1, 1, 1, 0.75, 0.75, 0.75, 0.5, 0.5, 0.5, 0.5, 1, 1, 1, 1, 0.75, 1, 1 },
++            first.Select(p => p.SceneResolutionScale).ToArray());
++        Assert.True(first[10].RequireExact); // gesture stop
++        Assert.True(first[15].RequireExact); // export during gesture
++        Assert.Equal(first[9].UploadBudget, first[10].UploadBudget); // no budget recovery smuggled into settle
++    }
++
++    private static FramePlan[] Replay(double origin)
++    {
++        var planner = new FramePlanner(Tuning);
++        return Recording.Select(row => planner.Plan(new(row.Reserve, row.Cost, row.Refresh, row.Gesture, row.Exact), row.At + origin)).ToArray();
++    }
++
++    [Fact]
++    public void Reserve_controller_and_governor_replay_together_without_renderer_dependencies()
++    {
++        static FramePlan[] Run()
++        {
++            var reserve = new ReserveController();
++            var planner = new FramePlanner();
++            // Reserve recovery and the governor's serialized resource recovery both have dwell.
++            var plans = new FramePlan[2_501];
++            for (int frame = 0; frame < plans.Length; frame++)
++            {
++                bool gesture = frame < 400 || frame >= 500;
++                bool hot = frame < 400;
++                double refresh = frame < 500 ? 10 : 20;
++                var health = new RenderHealthSample(refresh, 3, hot ? 8 : 2, true, gesture, 0, null, null, false, refresh);
++                double now = frame * 20;
++                plans[frame] = planner.Plan(new(reserve.Observe(health, now), hot ? 8 : 3, refresh, gesture), now);
++            }
++            return plans;
++        }
++        var first = Run();
++        Assert.Equal(first, Run());
++        Assert.Equal(0.5, first[399].SceneResolutionScale);
++        Assert.True(first[400].RequireExact);
++        Assert.True(first[499].RequireExact);
++        Assert.True(first[^1].RequireExact, first[^1].ToString());
++    }
++
++    [Theory]
++    [InlineData(-1)]
++    [InlineData(double.NaN)]
++    [InlineData(double.PositiveInfinity)]
++    [InlineData(99)]
++    public void Invalid_time_leaves_clock_plan_and_diagnostics_unchanged(double invalid)
++    {
++        var planner = new FramePlanner(Tuning);
++        var control = new FramePlanner(Tuning);
++        var sample = Healthy with { Reserve = Normal with { UploadLimitFactor = 0.5 } };
++        var expected = planner.Plan(sample, 100);
++        control.Plan(sample, 100);
++        var knob = planner.LastChangedKnob;
++        Assert.Throws<ArgumentOutOfRangeException>(() => planner.Plan(Hot, invalid));
++        Assert.Equal(expected, planner.Current);
++        Assert.Equal(knob, planner.LastChangedKnob);
++        for (int t = 120; t <= 2_000; t += 20)
++            Assert.Equal(control.Plan(sample, t), planner.Plan(sample, t));
++    }
++
++    [Theory]
++    [InlineData(double.NaN, 1, 0)]
++    [InlineData(0, 1, 0)]
++    [InlineData(2, 1, 0)]
++    [InlineData(1, double.PositiveInfinity, 0)]
++    [InlineData(1, 0, 0)]
++    [InlineData(1, 2, 0)]
++    [InlineData(1, 1, -1)]
++    public void Invalid_requests_are_rejected_before_state_changes(double upload, double scale, int workers)
++    {
++        var planner = new FramePlanner(Tuning);
++        var before = planner.Plan(Healthy, 100);
++        Assert.Throws<ArgumentException>(() => planner.Plan(Healthy with { Reserve = Normal with
++        {
++            UploadLimitFactor = upload, GestureResolutionScale = scale, CpuTileConcurrencyHint = workers
++        } }, 1_000));
++        Assert.Equal(before, planner.Plan(Healthy, 120));
++    }
++
++    public static IEnumerable<object[]> InvalidTunings()
++    {
++        yield return [Tuning with { WindowMs = 0 }];
++        yield return [Tuning with { EnterRatio = double.NaN }];
++        yield return [Tuning with { ExitRatio = 0.8 }];
++        yield return [Tuning with { PressureWindows = 0 }];
++        yield return [Tuning with { HealthyReleaseMs = double.PositiveInfinity }];
++        yield return [Tuning with { WorseningPeriodMs = 0 }];
++        yield return [Tuning with { RecoveryPeriodMs = 300 }];
++        yield return [Tuning with { ReducedResolutionScale = 1 }];
++        yield return [Tuning with { MinimumResolutionScale = 0.8 }];
++        yield return [Tuning with { BusyTransferFactor = 2 }];
++        yield return [Tuning with { UploadBudget = new(-1, 1) }];
++        yield return [Tuning with { AdoptionBudget = new(1, -1) }];
++        yield return [Tuning with { GestureUploadBudget = new(2_000, 10) }];
++        yield return [Tuning with { GestureAdoptionBudget = new(2_000, 21) }];
++        yield return [Tuning with { BackgroundConcurrency = 0 }];
++        yield return [Tuning with { MaxBackgroundConcurrency = 0 }];
++        yield return [Tuning with { BusyBackgroundConcurrency = 2 }];
++    }
++
++    [Theory]
++    [MemberData(nameof(InvalidTunings))]
++    public void Tuning_is_validated(FramePlanTuning tuning) =>
++        Assert.Throws<ArgumentException>(() => new FramePlanner(tuning));
++
++    [Fact]
++    public void Custom_thresholds_control_policy_and_zero_budgets_remain_zero()
++    {
++        var tuning = Tuning with
++        {
++            EnterRatio = 0.9, ReducedResolutionScale = 0.8, MinimumResolutionScale = 0.6,
++            UploadBudget = new(0, 0), GestureUploadBudget = new(0, 0)
++        };
++        var stream = new Stream(tuning);
++        Assert.Equal(1, stream.To(2_000, Hot).SceneResolutionScale);
++        Assert.Equal(0.8, stream.To(2_300, Hot with { FrameWorkMs = 9.5 }).SceneResolutionScale);
++        Assert.Equal(0.6, stream.To(2_600, Hot with { FrameWorkMs = 9.5 }).SceneResolutionScale);
++        Assert.Equal(new FrameWorkBudget(0, 0), stream.Last.UploadBudget);
++    }
++}
+diff --git a/tests/Map.Rendering.Tests/FramePlanTestData.cs b/tests/Map.Rendering.Tests/FramePlanTestData.cs
+new file mode 100644
+index 0000000..39d9bfb
+--- /dev/null
++++ b/tests/Map.Rendering.Tests/FramePlanTestData.cs
+@@ -0,0 +1,44 @@
++using Map.Rendering.Reserve;
++
++namespace Map.Rendering.Tests;
++
++internal static class FramePlanTestData
++{
++    public static readonly ReserveDecision Normal = new(ReserveState.Normal, ReserveReasons.None, 0, 1, false, 1, 0, false, false);
++    public static readonly FramePlanSample Healthy = new(Normal, 4, 10, true);
++    public static readonly FramePlanSample Hot = Healthy with { FrameWorkMs = 8 };
++
++    // Keep transfer ceilings equal here to isolate gesture hysteresis from admission policy.
++    public static FramePlanTuning Tuning => new()
++    {
++        WindowMs = 100, PressureWindows = 2, HealthyReleaseMs = 200,
++        WorseningPeriodMs = 300, RecoveryPeriodMs = 500,
++        UploadBudget = new(1_000, 10), GestureUploadBudget = new(1_000, 10),
++        AdoptionBudget = new(2_000, 20), GestureAdoptionBudget = new(2_000, 20)
++    };
++
++    public sealed class Stream(FramePlanTuning? tuning = null)
++    {
++        public FramePlanner Planner { get; } = new(tuning ?? Tuning);
++        public double NextTime { get; private set; }
++        public FramePlan Last => Planner.Current;
++
++        public FramePlan To(double inclusiveTime, FramePlanSample sample)
++        {
++            while (NextTime <= inclusiveTime)
++            {
++                Planner.Plan(sample, NextTime);
++                NextTime += 20;
++            }
++            return Last;
++        }
++    }
++
++    public static int ChangedKnobs(FramePlan before, FramePlan after) =>
++        (before.SceneResolutionScale != after.SceneResolutionScale ? 1 : 0)
++        + (before.UploadBudget != after.UploadBudget ? 1 : 0)
++        + (before.AdoptionBudget != after.AdoptionBudget ? 1 : 0)
++        + (before.UseCameraFrame != after.UseCameraFrame ? 1 : 0)
++        + (before.BackgroundConcurrencyHint != after.BackgroundConcurrencyHint ? 1 : 0)
++        + (before.StopPrefetch != after.StopPrefetch ? 1 : 0);
++}
+-- 
+2.50.1 (Apple Git-155)
+

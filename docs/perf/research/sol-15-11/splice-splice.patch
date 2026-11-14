@@ -1,0 +1,1348 @@
+From f1c361af8a0f98559ec195f463253f63a8cba77e Mon Sep 17 00:00:00 2001
+From: User <user@MacBook-Air-User.local>
+Date: Sat, 14 Nov 2026 23:28:22 +0200
+Subject: [PATCH 1/2] perf(core): persist chunk directories across structural
+ splices
+
+---
+ .../SceneObjectList.ChunkDirectory.cs         | 406 ++++++++++++++++
+ src/Map.Core/Documents/SceneObjectList.cs     | 454 +++++-------------
+ .../SceneObjectListSpliceTests.cs             | 199 ++++++++
+ 3 files changed, 726 insertions(+), 333 deletions(-)
+ create mode 100644 src/Map.Core/Documents/SceneObjectList.ChunkDirectory.cs
+ create mode 100644 tests/Map.Core.Tests/SceneObjectListSpliceTests.cs
+
+diff --git a/src/Map.Core/Documents/SceneObjectList.ChunkDirectory.cs b/src/Map.Core/Documents/SceneObjectList.ChunkDirectory.cs
+new file mode 100644
+index 0000000..c5b0ff4
+--- /dev/null
++++ b/src/Map.Core/Documents/SceneObjectList.ChunkDirectory.cs
+@@ -0,0 +1,406 @@
++using System.Numerics;
++using System.Runtime.CompilerServices;
++
++namespace Map.Core.Documents;
++
++public sealed partial class SceneObjectList
++{
++    // A leaf is stable for the lifetime of its immutable chunk. A version owns only its
++    // AVL root and persistent child -> parent links, never absolute chunk positions.
++    // Rank lookup follows subtree counts; identity lookup walks the version's parents.
++    private sealed class ChunkDirectory : IReadOnlyList<SceneObject[]>
++    {
++        private sealed class Node
++        {
++            private static long _nextId;
++            public readonly ulong Id = unchecked((ulong)Interlocked.Increment(ref _nextId));
++            public readonly SceneObject[]? Chunk;
++            public readonly Node? Left, Right;
++            public readonly int Height, Chunks, Objects, TextCount;
++            public readonly int[] Labels;
++
++            public Node(SceneObject[] chunk)
++            {
++                Chunk = chunk;
++                Height = Chunks = 1;
++                Objects = chunk.Length;
++                var text = TextOf(chunk);
++                TextCount = text.Offsets.Length;
++                Labels = text.Counts;
++            }
++
++            public Node(Node left, Node right)
++            {
++                Left = left; Right = right;
++                Height = 1 + Math.Max(left.Height, right.Height);
++                Chunks = checked(left.Chunks + right.Chunks);
++                Objects = checked(left.Objects + right.Objects);
++                TextCount = checked(left.TextCount + right.TextCount);
++                Labels = NoText.Counts;
++                if (TextCount == 0) return;
++                Labels = new int[LabelSettings.MaxImportance + 1];
++                for (var i = LabelSettings.MinImportance; i <= LabelSettings.MaxImportance; i++)
++                    Labels[i] = left.Labels[i] + right.Labels[i];
++            }
++        }
++
++        private static readonly ConditionalWeakTable<SceneObject[], Node> Leaves = new();
++        private readonly Node? _root;
++        private readonly Links? _parents;
++        // Text-free replacements keep the rank tree and change only a leaf value. The
++        // active replacement leaf forwards to its stable rank leaf through _parents.
++        private readonly Links? _values;
++        public int Count => _root?.Chunks ?? 0;
++        public int ObjectCount => _root?.Objects ?? 0;
++        public int[] Labels => _root?.Labels ?? NoText.Counts;
++
++        private ChunkDirectory(Node? root, Links? parents, Links? values)
++        { _root = root; _parents = parents; _values = values; }
++
++        private SceneObject[] ObjectsOf(Node leaf) => (Links.Get(_values, leaf) ?? leaf).Chunk!;
++
++        public static ChunkDirectory From(SceneObject[][] chunks)
++        {
++            var builder = new Builder(new ChunkDirectory(null, null, null));
++            builder.Initialize(chunks);
++            return builder.Finish();
++        }
++
++        public SceneObject[] this[int index]
++        {
++            get
++            {
++                if ((uint)index >= (uint)Count) throw new ArgumentOutOfRangeException(nameof(index));
++                var node = _root!;
++                while (node.Chunk is null)
++                {
++                    if (index < node.Left!.Chunks) node = node.Left;
++                    else { index -= node.Left.Chunks; node = node.Right!; }
++                }
++                return ObjectsOf(node);
++            }
++        }
++
++        public (int Chunk, int Offset) Locate(int index)
++        {
++            if ((uint)index >= (uint)ObjectCount) throw new ArgumentOutOfRangeException(nameof(index));
++            var node = _root!;
++            var chunk = 0;
++            while (node.Chunk is null)
++            {
++                if (index < node.Left!.Objects) node = node.Left;
++                else { index -= node.Left.Objects; chunk += node.Left.Chunks; node = node.Right!; }
++            }
++            return (chunk, index);
++        }
++
++        public SceneObject ObjectAt(int index)
++        {
++            if ((uint)index >= (uint)ObjectCount) throw new ArgumentOutOfRangeException(nameof(index));
++            var node = _root!;
++            while (node.Chunk is null)
++            {
++                if (index < node.Left!.Objects) node = node.Left;
++                else { index -= node.Left.Objects; node = node.Right!; }
++            }
++            return ObjectsOf(node)[index];
++        }
++
++        public int Start(int index)
++        {
++            if ((uint)index >= (uint)Count) throw new ArgumentOutOfRangeException(nameof(index));
++            var node = _root!;
++            var start = 0;
++            while (node.Chunk is null)
++            {
++                if (index < node.Left!.Chunks) node = node.Left;
++                else { index -= node.Left.Chunks; start += node.Left.Objects; node = node.Right!; }
++            }
++            return start;
++        }
++
++        public bool TryStart(SceneObject[] chunk, out int start)
++        {
++            start = 0;
++            if (!Leaves.TryGetValue(chunk, out var node)) return false;
++            var leaf = node;
++            while (true)
++            {
++                if (node.Chunk is not null && Links.Get(_values, node) is { } value && !ReferenceEquals(value, leaf))
++                    return false;
++                if (ReferenceEquals(node, _root)) return true;
++                var parent = Links.Get(_parents, node);
++                if (parent is null) return false;
++                if (ReferenceEquals(parent.Right, node)) start += parent.Left!.Objects;
++                node = parent;
++            }
++        }
++
++        public ChunkDirectory Replace(IReadOnlyDictionary<int, SceneObject[]> copied)
++        {
++            var builder = new Builder(this);
++            builder.ReplaceCopies(copied);
++            return builder.Finish();
++        }
++
++        public Builder Edit() => new(this);
++
++        public IEnumerable<SceneObject[]> Range(int index, int count) => WalkRange(_root, index, count);
++
++        private IEnumerable<SceneObject[]> WalkRange(Node? node, int index, int count)
++        {
++            if (node is null || count == 0) yield break;
++            if (node.Chunk is not null) { yield return ObjectsOf(node); yield break; }
++            var leftCount = Math.Min(count, Math.Max(0, node.Left!.Chunks - index));
++            foreach (var item in WalkRange(node.Left, index, leftCount)) yield return item;
++            foreach (var item in WalkRange(node.Right, Math.Max(0, index - node.Left.Chunks), count - leftCount)) yield return item;
++        }
++
++        public void Validate()
++        {
++            var aliases = 0;
++            var nodes = Check(_root);
++            if (Links.Count(_parents) != Math.Max(0, nodes - 1) + aliases || Links.Count(_values) != aliases)
++                throw new InvalidOperationException("Obsolete directory parent links.");
++
++            int Check(Node? node)
++            {
++                if (node is null) return 0;
++                if (node.Chunk is not null)
++                {
++                    if (Links.Get(_values, node) is { } value)
++                    {
++                        aliases++;
++                        if (!ReferenceEquals(Links.Get(_parents, value), node) || value.Objects != node.Objects
++                            || value.TextCount != 0 || node.TextCount != 0)
++                            throw new InvalidOperationException("Invalid replacement leaf link.");
++                    }
++                    return 1;
++                }
++                var left = node.Left!; var right = node.Right!;
++                if (Math.Abs(left.Height - right.Height) > 1
++                    || node.Height != 1 + Math.Max(left.Height, right.Height)
++                    || node.Objects != left.Objects + right.Objects || node.Chunks != left.Chunks + right.Chunks
++                    || !ReferenceEquals(Links.Get(_parents, left), node)
++                    || !ReferenceEquals(Links.Get(_parents, right), node))
++                    throw new InvalidOperationException("Invalid directory balance, counts or parent links.");
++                return 1 + Check(left) + Check(right);
++            }
++        }
++
++        public IEnumerator<SceneObject[]> GetEnumerator() => Walk(_root, false).GetEnumerator();
++        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
++        public IEnumerable<SceneObject[]> TextChunksOnly() => Walk(_root, true);
++
++        private IEnumerable<SceneObject[]> Walk(Node? node, bool textOnly)
++        {
++            if (node is null || textOnly && node.TextCount == 0) yield break;
++            var pending = new Stack<Node>();
++            pending.Push(node);
++            while (pending.TryPop(out node))
++            {
++                if (textOnly && node.TextCount == 0) continue;
++                if (node.Chunk is not null) yield return ObjectsOf(node);
++                else { pending.Push(node.Right!); pending.Push(node.Left!); }
++            }
++        }
++
++        // Changes are collected before publishing links: intermediate split/join nodes must
++        // never keep obsolete directories alive. Only active child -> parent edges survive.
++        public sealed class Builder
++        {
++            private readonly ChunkDirectory _source;
++            private readonly Dictionary<Node, Node?> _changes = new(ReferenceEqualityComparer.Instance);
++            private readonly Dictionary<Node, Node?> _valueChanges = new(ReferenceEqualityComparer.Instance);
++            private Node? _root;
++            public Builder(ChunkDirectory source) { _source = source; _root = source._root; }
++            public void Initialize(SceneObject[][] chunks) => _root = Build(chunks, 0, chunks.Length);
++
++            public void ReplaceCopies(IReadOnlyDictionary<int, SceneObject[]> copied)
++            {
++                var ordered = copied.OrderBy(p => p.Key).ToArray();
++                var at = 0;
++                _root = ReplacePath(_root!, 0);
++
++                Node ReplacePath(Node node, int start)
++                {
++                    if (at == ordered.Length || ordered[at].Key >= start + node.Chunks) return node;
++                    if (node.Chunk is not null)
++                    {
++                        var copy = Leaves.GetValue(ordered[at++].Value, static chunk => new Node(chunk));
++                        var previous = ValueOf(node);
++                        if (previous.TextCount == 0 && copy.TextCount == 0)
++                        {
++                            if (!ReferenceEquals(previous, node)) _changes[previous] = null;
++                            _valueChanges[node] = copy;
++                            _changes[copy] = node;
++                            return node;
++                        }
++                        Drop(node);
++                        return copy;
++                    }
++                    var left = ReplacePath(node.Left!, start);
++                    var right = ReplacePath(node.Right!, start + node.Left!.Chunks);
++                    if (ReferenceEquals(left, node.Left) && ReferenceEquals(right, node.Right)) return node;
++                    Drop(node);
++                    return Branch(left, right);
++                }
++            }
++
++            private Node Branch(Node left, Node right)
++            {
++                var node = new Node(left, right);
++                _changes[left] = node; _changes[right] = node;
++                return node;
++            }
++
++            private Node ValueOf(Node node) => _valueChanges.TryGetValue(node, out var value)
++                ? value ?? node : Links.Get(_source._values, node) ?? node;
++
++            private void Drop(Node node)
++            {
++                _changes[node] = null;
++                if (node.Chunk is null) return;
++                var value = ValueOf(node);
++                if (!ReferenceEquals(value, node)) _changes[value] = null;
++                _valueChanges[node] = null;
++            }
++            private void DropTree(Node? node)
++            {
++                if (node is null) return;
++                Drop(node);
++                DropTree(node.Left); DropTree(node.Right);
++            }
++
++            private Node? Build(IReadOnlyList<SceneObject[]> chunks, int start, int count)
++            {
++                if (count == 0) return null;
++                if (count == 1) return Leaves.GetValue(chunks[start], static chunk => new Node(chunk));
++                var half = count / 2;
++                return Branch(Build(chunks, start, half)!, Build(chunks, start + half, count - half)!);
++            }
++
++            private Node Balance(Node left, Node right)
++            {
++                if (left.Height > right.Height + 1)
++                {
++                    Drop(left);
++                    if (left.Left!.Height >= left.Right!.Height)
++                        return Branch(left.Left, Branch(left.Right, right));
++                    var middle = left.Right;
++                    Drop(middle);
++                    return Branch(Branch(left.Left, middle.Left!), Branch(middle.Right!, right));
++                }
++                if (right.Height > left.Height + 1)
++                {
++                    Drop(right);
++                    if (right.Right!.Height >= right.Left!.Height)
++                        return Branch(Branch(left, right.Left), right.Right);
++                    var middle = right.Left;
++                    Drop(middle);
++                    return Branch(Branch(left, middle.Left!), Branch(middle.Right!, right.Right));
++                }
++                return Branch(left, right);
++            }
++
++            private Node? Join(Node? left, Node? right)
++            {
++                if (left is null) return right;
++                if (right is null) return left;
++                if (left.Height > right.Height + 1)
++                {
++                    Drop(left);
++                    return Balance(left.Left!, Join(left.Right, right)!);
++                }
++                if (right.Height > left.Height + 1)
++                {
++                    Drop(right);
++                    return Balance(Join(left, right.Left)!, right.Right!);
++                }
++                return Branch(left, right);
++            }
++
++            private (Node? Left, Node? Right) Split(Node? node, int chunks)
++            {
++                if (chunks == 0) return (null, node);
++                if (chunks == node!.Chunks) return (node, null);
++                Drop(node);
++                if (chunks < node.Left!.Chunks)
++                {
++                    var (left, rest) = Split(node.Left, chunks);
++                    return (left, Join(rest, node.Right));
++                }
++                var (prefix, right) = Split(node.Right, chunks - node.Left.Chunks);
++                return (Join(node.Left, prefix), right);
++            }
++
++            public void Replace(int index, int count, IReadOnlyList<SceneObject[]> chunks)
++            {
++                var (prefix, rest) = Split(_root, index);
++                var (removed, suffix) = Split(rest, count);
++                DropTree(removed);
++                _root = Join(Join(prefix, Build(chunks, 0, chunks.Count)), suffix);
++            }
++
++            public ChunkDirectory Finish()
++            {
++                if (_root is not null) _changes[_root] = null;
++                var parents = _source._parents;
++                foreach (var (child, parent) in _changes) parents = Links.Set(parents, child, parent);
++                var values = _source._values;
++                foreach (var (leaf, value) in _valueChanges) values = Links.Set(values, leaf, value);
++                return new ChunkDirectory(_root, parents, values);
++            }
++        }
++
++        // Compressed binary trie of unique, process-local node numbers (never serialized).
++        // Lookup/update takes at most 64 branch steps, without hash collisions or a second
++        // ordered tree per AVL edge. Numbers only identify immutable nodes; they carry no rank.
++        private sealed class Links
++        {
++            private readonly ulong _key, _mask;
++            private readonly Links? _left, _right;
++            private readonly Node? _parent;
++            private Links(ulong key, Node parent) { _key = key; _parent = parent; }
++            private Links(ulong key, ulong mask, Links left, Links right)
++            { _key = key; _mask = mask; _left = left; _right = right; }
++            private bool Matches(ulong key) => (key & ~(_mask | (_mask - 1))) == _key;
++
++            public static int Count(Links? links) => links is null ? 0
++                : links._mask == 0 ? 1 : Count(links._left) + Count(links._right);
++
++            public static Node? Get(Links? links, Node node)
++            {
++                var key = node.Id;
++                while (links is { _mask: not 0 })
++                {
++                    if (!links.Matches(key)) return null;
++                    links = (key & links._mask) == 0 ? links._left : links._right;
++                }
++                return links?._key == key ? links._parent : null;
++            }
++
++            public static Links? Set(Links? links, Node node, Node? parent) => Set(links, node.Id, parent);
++
++            private static Links? Set(Links? links, ulong key, Node? parent)
++            {
++                if (links is null) return parent is null ? null : new Links(key, parent);
++                if (links._mask == 0 && key == links._key)
++                    return ReferenceEquals(parent, links._parent) ? links : parent is null ? null : new Links(key, parent);
++                if (links._mask != 0 && links.Matches(key))
++                {
++                    var left = links._left; var right = links._right;
++                    if ((key & links._mask) == 0) left = Set(left, key, parent);
++                    else right = Set(right, key, parent);
++                    if (ReferenceEquals(left, links._left) && ReferenceEquals(right, links._right)) return links;
++                    return left is null ? right : right is null ? left : new Links(links._key, links._mask, left, right);
++                }
++                if (parent is null) return links;
++                var mask = 1UL << BitOperations.Log2(key ^ links._key);
++                var prefix = key & ~(mask | (mask - 1));
++                var leaf = new Links(key, parent);
++                return (key & mask) == 0 ? new Links(prefix, mask, leaf, links) : new Links(prefix, mask, links, leaf);
++            }
++        }
++    }
++}
+diff --git a/src/Map.Core/Documents/SceneObjectList.cs b/src/Map.Core/Documents/SceneObjectList.cs
+index 0fc8e14..d97a61f 100644
+--- a/src/Map.Core/Documents/SceneObjectList.cs
++++ b/src/Map.Core/Documents/SceneObjectList.cs
+@@ -8,7 +8,7 @@ namespace Map.Core.Documents;
+ /// directory paths; insert/remove rebuild only boundary chunks and share every untouched chunk.
+ /// Enumeration and the public index contract preserve the exact serialized/draw order.
+ /// </summary>
+-public sealed class SceneObjectList : IReadOnlyList<SceneObject>
++public sealed partial class SceneObjectList : IReadOnlyList<SceneObject>
+ {
+     private IdentityTable? _identitySlots;
+     private IdentityTable? _textIdentitySlots;
+@@ -17,11 +17,6 @@ public sealed class SceneObjectList : IReadOnlyList<SceneObject>
+     private sealed record TextChunk(int[] Offsets, int[] Counts);
+     private static readonly TextChunk NoText = new([], new int[LabelSettings.MaxImportance + 1]);
+     private static readonly ConditionalWeakTable<SceneObject[], TextChunk> TextChunks = new();
+-    private readonly ImmutableSortedDictionary<int, (SceneObject[] Objects, TextChunk Text)> _textChunks;
+-    private readonly int[] _labelCounts = new int[LabelSettings.MaxImportance + 1];
+-    private readonly Dictionary<SceneObject[], int> _chunkStarts;
+-    private readonly ImmutableDictionary<SceneObject[], int> _chunkStartOverrides =
+-        ImmutableDictionary.Create<SceneObject[], int>(ReferenceEqualityComparer.Instance);
+ 
+     /// <summary>Number of full identity tables built (every object visited). Diagnostics and tests only.</summary>
+     internal static long IdentityRootBuilds => System.Threading.Interlocked.Read(ref _identityRootBuilds);
+@@ -83,101 +78,23 @@ public sealed class SceneObjectList : IReadOnlyList<SceneObject>
+     // Persistence keys derived bytes by immutable chunk identity, never by layer id or position.
+     // Friend assemblies must treat these arrays as read-only, just like the storage itself.
+     internal IReadOnlyList<SceneObject[]> StorageChunks => _chunks;
++    internal void ValidateDirectory() => _chunks.Validate();
+ 
+     private static readonly SceneObjectList EmptyInstance = new([], 0);
+     private readonly ChunkDirectory _chunks;
+-    private readonly int[] _starts;
+ 
+-    // A loaded/structurally edited list keeps its compact array directory. Replacements share
+-    // it and update a persistent overlay by chunk number; no directory-sized copy or rebuild.
+-    private sealed class ChunkDirectory(SceneObject[][] root, ImmutableDictionary<int, SceneObject[]> overrides)
+-        : IReadOnlyList<SceneObject[]>
++    private SceneObjectList(SceneObject[][] chunks, int count)
+     {
+-        public int Count => root.Length;
+-        public SceneObject[] this[int index] => overrides.TryGetValue(index, out var chunk) ? chunk : root[index];
+-        public ChunkDirectory Replace(IReadOnlyDictionary<int, SceneObject[]> copied) => new(root, overrides.SetItems(copied));
+-        public IEnumerator<SceneObject[]> GetEnumerator()
+-        {
+-            for (var i = 0; i < Count; i++) yield return this[i];
+-        }
+-        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+-    }
+-
+-    private SceneObjectList(SceneObject[][] chunks, int count, SceneObjectList? source = null, Rewrite? rewrite = null)
+-    {
+-        _chunks = new(chunks, ImmutableDictionary<int, SceneObject[]>.Empty);
++        _chunks = ChunkDirectory.From(chunks);
+         Count = count;
+-        _starts = new int[chunks.Length];
+-        _chunkStarts = new(chunks.Length, ReferenceEqualityComparer.Instance);
+-        var start = 0;
+-        var textChunks = ImmutableSortedDictionary.CreateBuilder<int, (SceneObject[] Objects, TextChunk Text)>();
+-        for (var index = 0; index < chunks.Length; index++)
+-        {
+-            _starts[index] = start;
+-            _chunkStarts[chunks[index]] = start;
+-            start += chunks[index].Length;
+-        }
+-        if (source is null)
+-        {
+-            foreach (var chunk in chunks) AddTextChunk(chunk);
+-        }
+-        else
+-        {
+-            foreach (var entry in source._textChunks.Values)
+-                if (_chunkStarts.TryGetValue(entry.Objects, out var at)) textChunks.Add(at, entry);
+-            if (rewrite is not null)
+-                foreach (var (chunk, _) in rewrite.Created) AddTextChunk(chunk);
+-        }
+-        foreach (var (_, text) in textChunks.Values)
+-            for (var i = LabelSettings.MinImportance; i <= LabelSettings.MaxImportance; i++)
+-                _labelCounts[i] += text.Counts[i];
+-        _textChunks = textChunks.ToImmutable();
+-
+-        void AddTextChunk(SceneObject[] objects)
+-        {
+-            var text = TextOf(objects);
+-            if (text.Offsets.Length != 0) textChunks.Add(_chunkStarts[objects], (objects, text));
+-        }
+-
+-        if (start != count)
+-        {
++        if (_chunks.ObjectCount != count)
+             throw new ArgumentException("Scene object chunks do not match their declared count.", nameof(chunks));
+-        }
+-        if (source?._identitySlots is { } slots && rewrite is not null)
+-        {
+-            _identitySlots = Derive(slots, rewrite);
+-        }
+-        if (_identitySlots is null && source?._textIdentitySlots is { } textSlots && rewrite is not null)
+-            _textIdentitySlots = Derive(textSlots, rewrite, textOnly: true);
+     }
+ 
+-    // Replacement keeps all starts and chunk lengths. Update only touched directory paths,
+-    // text summaries and identity runs, including across arbitrarily many preview revisions.
+-    private SceneObjectList(SceneObjectList source, IReadOnlyDictionary<int, SceneObject[]> copied, Rewrite rewrite)
++    private SceneObjectList(ChunkDirectory chunks, SceneObjectList source, Rewrite rewrite)
+     {
+-        Count = source.Count;
+-        _starts = source._starts;
+-        _chunks = source._chunks.Replace(copied);
+-        _chunkStarts = source._chunkStarts;
+-        var starts = source._chunkStartOverrides.ToBuilder();
+-        var texts = source._textChunks.ToBuilder();
+-        _labelCounts = (int[])source._labelCounts.Clone();
+-        foreach (var (index, chunk) in copied)
+-        {
+-            var original = source._chunks[index];
+-            var start = _starts[index];
+-            if (_chunkStarts.ContainsKey(original)) starts[original] = -1;
+-            else starts.Remove(original);
+-            starts.Add(chunk, start);
+-            var before = TextOf(original);
+-            var after = TextOf(chunk);
+-            texts.Remove(start);
+-            if (after.Offsets.Length != 0) texts.Add(start, (chunk, after));
+-            for (var i = LabelSettings.MinImportance; i <= LabelSettings.MaxImportance; i++)
+-                _labelCounts[i] += after.Counts[i] - before.Counts[i];
+-        }
+-        _chunkStartOverrides = starts.ToImmutable();
+-        _textChunks = texts.ToImmutable();
++        _chunks = chunks;
++        Count = chunks.ObjectCount;
+         if (source._identitySlots is { } slots) _identitySlots = Derive(slots, rewrite);
+         else if (source._textIdentitySlots is { } textSlots) _textIdentitySlots = Derive(textSlots, rewrite, textOnly: true);
+     }
+@@ -262,14 +179,15 @@ public sealed class SceneObjectList : IReadOnlyList<SceneObject>
+     {
+         var count = 0;
+         for (var i = LabelSettings.MinImportance; i <= LabelSettings.MaxImportance; i++)
+-            if ((shown & (1 << i)) != 0) count += _labelCounts[i];
++            if ((shown & (1 << i)) != 0) count += _chunks.Labels[i];
+         return count;
+     }
+ 
+     internal IEnumerable<SceneObject> TextObjects(int shown = -1)
+     {
+-        foreach (var (chunk, text) in _textChunks.Values)
++        foreach (var chunk in _chunks.TextChunksOnly())
+         {
++            var text = TextOf(chunk);
+             var relevant = false;
+             for (var i = LabelSettings.MinImportance; i <= LabelSettings.MaxImportance; i++)
+                 if ((shown & (1 << i)) != 0 && text.Counts[i] > 0) { relevant = true; break; }
+@@ -292,9 +210,9 @@ public sealed class SceneObjectList : IReadOnlyList<SceneObject>
+         var table = _textIdentitySlots;
+         if (table is null)
+         {
+-            var root = new Dictionary<ObjectId, Slot>(_textChunks.Values.Sum(c => c.Text.Offsets.Length));
+-            foreach (var (chunk, text) in _textChunks.Values)
+-                foreach (var offset in text.Offsets) root.Add(chunk[offset].Id, new Slot(chunk, offset));
++            var root = new Dictionary<ObjectId, Slot>();
++            foreach (var chunk in _chunks.TextChunksOnly())
++                foreach (var offset in TextOf(chunk).Offsets) root.Add(chunk[offset].Id, new Slot(chunk, offset));
+             Interlocked.CompareExchange(ref _textIdentitySlots,
+                 new IdentityTable(root, NoOverlay, NoForward, NoHoldings), null);
+             table = _textIdentitySlots;
+@@ -314,8 +232,7 @@ public sealed class SceneObjectList : IReadOnlyList<SceneObject>
+             : -1;
+     }
+ 
+-    private bool TryChunkStart(SceneObject[] chunk, out int start) =>
+-        _chunkStartOverrides.TryGetValue(chunk, out start) ? start >= 0 : _chunkStarts.TryGetValue(chunk, out start);
++    private bool TryChunkStart(SceneObject[] chunk, out int start) => _chunks.TryStart(chunk, out start);
+ 
+     private static int FindRun(Run[] runs, int originOffset)
+     {
+@@ -434,69 +351,10 @@ public sealed class SceneObjectList : IReadOnlyList<SceneObject>
+     /// Removes the objects at the given ascending, distinct positions. Untouched chunks are shared;
+     /// only the chunks holding a removed object are rebuilt, so the cost follows the removal.
+     /// </summary>
+-    internal SceneObjectList RemovePositions(IReadOnlyList<int> ascending)
+-    {
+-        ArgumentNullException.ThrowIfNull(ascending);
+-        if (ascending.Count == 0) return this;
+-        var chunks = new List<SceneObject[]>(_chunks.Count);
+-        var rewrite = new Rewrite();
+-        var segments = new List<Segment>();
+-        var next = 0;
+-        var previousChunk = -1;
+-        while (next < ascending.Count)
+-        {
+-            var (chunkIndex, _) = Locate(ascending[next]);
+-            for (var c = previousChunk + 1; c < chunkIndex; c++) chunks.Add(_chunks[c]);
+-            var chunk = _chunks[chunkIndex];
+-            var start = _starts[chunkIndex];
+-            var first = next;
+-            while (next < ascending.Count && ascending[next] < start + chunk.Length)
+-            {
+-                if (next > 0 && ascending[next] <= ascending[next - 1]) throw new ArgumentException("Positions must ascend.", nameof(ascending));
+-                next++;
+-            }
+-
+-            rewrite.Dropped.Add(chunk);
+-            var rebuilt = new SceneObject[chunk.Length - (next - first)];
+-            segments.Clear();
+-            var from = 0;
+-            var to = 0;
+-            for (var r = first; r <= next; r++)
+-            {
+-                // The kept run before each removed offset, then the run after the last one.
+-                var offset = r < next ? ascending[r] - start : chunk.Length;
+-                if (offset > from)
+-                {
+-                    Array.Copy(chunk, from, rebuilt, to, offset - from);
+-                    segments.Add(new Segment(chunk, from, offset - from, to));
+-                    to += offset - from;
+-                }
+-
+-                if (r < next) rewrite.Left.Add(chunk[offset].Id);
+-                from = offset + 1;
+-            }
+-
+-            if (rebuilt.Length > 0)
+-            {
+-                chunks.Add(rebuilt);
+-                rewrite.Created.Add((rebuilt, [.. segments]));
+-            }
+-
+-            previousChunk = chunkIndex;
+-        }
++    internal SceneObjectList RemovePositions(IReadOnlyList<int> ascending) =>
++        SplicePositions(ascending, ImmutableDictionary<int, IReadOnlyList<SceneObject>>.Empty);
+ 
+-        for (var c = previousChunk + 1; c < _chunks.Count; c++) chunks.Add(_chunks[c]);
+-        return new SceneObjectList([.. chunks], Count - ascending.Count, this, rewrite);
+-    }
+-
+-    public SceneObject this[int index]
+-    {
+-        get
+-        {
+-            var (chunk, offset) = Locate(index);
+-            return _chunks[chunk][offset];
+-        }
+-    }
++    public SceneObject this[int index] => _chunks.ObjectAt(index);
+ 
+     public SceneObjectList ReplaceAt(int index, SceneObject replacement)
+     {
+@@ -569,19 +427,28 @@ public sealed class SceneObjectList : IReadOnlyList<SceneObject>
+             rewrite.Created.Add((copy, [.. segments]));
+         }
+ 
+-        return new SceneObjectList(this, copied, rewrite);
++        return new SceneObjectList(_chunks.Replace(copied), this, rewrite);
+     }
+ 
+     public SceneObjectList InsertRange(int index, IReadOnlyList<SceneObject> inserted) =>
+         Splice(index, removeCount: 0, inserted);
+ 
+     /// <summary>
+-    /// One removal/insertion transaction, copying the directory only once. Insertion keys refer
+-    /// to the reduced list, before any insertions; untouched chunks and their identity runs stay shared.
++    /// One removal/insertion transaction. Keys refer to the reduced list, before any insertions.
++    /// Only affected chunks and their small neighbours enter the edit buffer; all other directory
++    /// subtrees and identity runs stay shared with the source snapshot.
+     /// </summary>
+     internal SceneObjectList SplicePositions(IReadOnlyList<int> removed,
+         IReadOnlyDictionary<int, IReadOnlyList<SceneObject>> insertions)
+     {
++        ArgumentNullException.ThrowIfNull(removed);
++        ArgumentNullException.ThrowIfNull(insertions);
++        for (var i = 0; i < removed.Count; i++)
++        {
++            if ((uint)removed[i] >= (uint)Count) throw new ArgumentOutOfRangeException(nameof(removed));
++            if (i > 0 && removed[i] <= removed[i - 1])
++                throw new ArgumentException("Positions must ascend.", nameof(removed));
++        }
+         var ordered = insertions.OrderBy(p => p.Key).ToArray();
+         var sourceKeys = new int[ordered.Length];
+         var passed = 0;
+@@ -589,123 +456,114 @@ public sealed class SceneObjectList : IReadOnlyList<SceneObject>
+         {
+             var key = ordered[i].Key;
+             if (key < 0 || key > Count - removed.Count) throw new ArgumentOutOfRangeException(nameof(insertions));
++            ArgumentNullException.ThrowIfNull(ordered[i].Value);
+             while (passed < removed.Count && removed[passed] - passed <= key) passed++;
+             sourceKeys[i] = key + passed;
+         }
+-        var chunks = new List<SceneObject[]>(_chunks.Count + ordered.Length);
+-        var rewrite = new Rewrite();
+-        var nextRemoval = 0;
+-        var nextInsertion = 0;
+-        var added = 0;
+-        for (var c = 0; c < _chunks.Count; c++)
++        if (removed.Count == 0 && ordered.All(p => p.Value.Count == 0)) return this;
++        if (Count == 0) return From(ordered.SelectMany(p => p.Value).ToArray());
++
++        var touched = new SortedSet<int>();
++        for (var i = 0; i < removed.Count;)
+         {
+-            var chunk = _chunks[c];
+-            var start = _starts[c];
+-            var end = start + chunk.Length;
+-            if ((nextRemoval == removed.Count || removed[nextRemoval] >= end)
+-                && (nextInsertion == ordered.Length || sourceKeys[nextInsertion] >= end))
+-            {
+-                chunks.Add(chunk);
+-                continue;
+-            }
+-            var buffer = new List<SceneObject>(chunk.Length);
+-            var segments = new List<Segment>();
+-            var offset = 0;
+-            while (offset < chunk.Length)
+-            {
+-                var removal = nextRemoval < removed.Count ? removed[nextRemoval] : Count;
+-                var insertion = nextInsertion < ordered.Length ? sourceKeys[nextInsertion] : Count;
+-                var stop = Math.Min(end, Math.Min(removal, insertion));
+-                var kept = stop - start - offset;
+-                if (kept > 0)
+-                {
+-                    segments.Add(new Segment(chunk, offset, kept, buffer.Count));
+-                    for (var i = 0; i < kept; i++) buffer.Add(chunk[offset++]);
+-                }
+-                if (stop == end) break;
+-                if (stop == insertion)
+-                {
+-                    var batch = ordered[nextInsertion++].Value;
+-                    if (batch.Count > 0) segments.Add(new Segment(null, 0, batch.Count, buffer.Count));
+-                    buffer.AddRange(batch);
+-                    added = checked(added + batch.Count);
+-                }
+-                if (stop == removal)
+-                {
+-                    rewrite.Left.Add(chunk[offset++].Id);
+-                    nextRemoval++;
+-                }
+-            }
+-            rewrite.Dropped.Add(chunk);
+-            AddChunks(chunks, rewrite, buffer, segments);
++            var (chunk, _) = Locate(removed[i]);
++            touched.Add(chunk);
++            var end = _chunks.Start(chunk) + _chunks[chunk].Length;
++            do { i++; } while (i < removed.Count && removed[i] < end);
+         }
+-        if (nextInsertion < ordered.Length)
++        for (var i = 0; i < ordered.Length; i++)
++            if (ordered[i].Value.Count > 0) touched.Add(LocateBoundary(sourceKeys[i]).Chunk);
++
++        // At most one small neighbour on each side is needed. Buffers are evenly split,
++        // so no edit creates a pair of adjacent chunks smaller than half a full chunk.
++        var expanded = new SortedSet<int>(touched);
++        foreach (var chunk in touched)
+         {
+-            var tail = ordered[nextInsertion].Value;
+-            added = checked(added + tail.Count);
+-            AddChunks(chunks, rewrite, tail, [new Segment(null, 0, tail.Count, 0)]);
++            if (chunk > 0 && _chunks[chunk - 1].Length < ChunkSize / 2) expanded.Add(chunk - 1);
++            if (chunk + 1 < _chunks.Count && _chunks[chunk + 1].Length < ChunkSize / 2) expanded.Add(chunk + 1);
++        }
++        var groups = new List<(int Start, int End)>();
++        foreach (var chunk in expanded)
++        {
++            if (groups.Count > 0 && groups[^1].End + 1 == chunk)
++                groups[^1] = (groups[^1].Start, chunk);
++            else groups.Add((chunk, chunk));
+         }
+-        var count = checked(Count - removed.Count + added);
+-        return count == 0 ? Empty : new SceneObjectList([.. chunks], count, this, rewrite);
+-    }
+ 
+-    /// <summary>Batch insertions at original indices; only intersected chunks are rebuilt.</summary>
+-    internal SceneObjectList InsertMany(IReadOnlyDictionary<int, IReadOnlyList<SceneObject>> insertions)
+-    {
+-        if (insertions.Count == 0) return this;
+-        var ordered = insertions.OrderBy(kv => kv.Key).ToArray();
+-        if (ordered[0].Key < 0 || ordered[^1].Key > Count) throw new ArgumentOutOfRangeException(nameof(insertions));
+-        var chunks = new List<SceneObject[]>(_chunks.Count + 2);
++        var directory = _chunks.Edit();
+         var rewrite = new Rewrite();
+-        var at = 0; var added = 0;
+-        for (var c = 0; c < _chunks.Count; c++)
++        var nextRemoval = 0;
++        var nextInsertion = 0;
++        var delta = 0;
++        foreach (var (first, last) in groups)
+         {
+-            var chunk = _chunks[c];
+-            var start = _starts[c];
+-            var end = start + chunk.Length;
+-            if (at == ordered.Length || ordered[at].Key >= end) { chunks.Add(chunk); continue; }
+-            var buffer = new List<SceneObject>(chunk.Length + 16);
++            var buffer = new List<SceneObject>();
+             var segments = new List<Segment>();
+-            var offset = 0;
+-            while (at < ordered.Length && ordered[at].Key < end)
++            var start = _chunks.Start(first);
++            foreach (var chunk in _chunks.Range(first, last - first + 1))
+             {
+-                var insertion = ordered[at++];
+-                var kept = insertion.Key - start - offset;
+-                if (kept > 0)
++                var end = start + chunk.Length;
++                var offset = 0;
++                rewrite.Dropped.Add(chunk);
++                while (offset < chunk.Length)
+                 {
+-                    segments.Add(new Segment(chunk, offset, kept, buffer.Count));
+-                    for (var i = 0; i < kept; i++) buffer.Add(chunk[offset++]);
++                    // Empty batches still consume their original key, including in untouched gaps.
++                    while (nextInsertion < ordered.Length && ordered[nextInsertion].Value.Count == 0) nextInsertion++;
++                    var removal = nextRemoval < removed.Count ? removed[nextRemoval] : Count;
++                    var insertion = nextInsertion < ordered.Length ? sourceKeys[nextInsertion] : Count;
++                    var stop = Math.Min(end, Math.Min(removal, insertion));
++                    var kept = stop - start - offset;
++                    if (kept > 0)
++                    {
++                        segments.Add(new Segment(chunk, offset, kept, buffer.Count));
++                        for (var i = 0; i < kept; i++) buffer.Add(chunk[offset++]);
++                    }
++                    if (stop == end) break;
++                    if (stop == insertion)
++                    {
++                        var batch = ordered[nextInsertion++].Value;
++                        segments.Add(new Segment(null, 0, batch.Count, buffer.Count));
++                        buffer.AddRange(batch);
++                    }
++                    if (stop == removal)
++                    {
++                        rewrite.Left.Add(chunk[offset++].Id);
++                        nextRemoval++;
++                    }
+                 }
+-                if (insertion.Value.Count > 0) segments.Add(new Segment(null, 0, insertion.Value.Count, buffer.Count));
+-                buffer.AddRange(insertion.Value);
+-                added = checked(added + insertion.Value.Count);
++                start = end;
+             }
+-            if (offset < chunk.Length)
+-            {
+-                segments.Add(new Segment(chunk, offset, chunk.Length - offset, buffer.Count));
+-                while (offset < chunk.Length) buffer.Add(chunk[offset++]);
+-            }
+-            rewrite.Dropped.Add(chunk);
++            if (last == _chunks.Count - 1)
++                while (nextInsertion < ordered.Length)
++                {
++                    var tail = ordered[nextInsertion++].Value;
++                    if (tail.Count > 0) segments.Add(new Segment(null, 0, tail.Count, buffer.Count));
++                    buffer.AddRange(tail);
++                }
++            var chunks = new List<SceneObject[]>();
+             AddChunks(chunks, rewrite, buffer, segments);
++            directory.Replace(first + delta, last - first + 1, chunks);
++            delta += chunks.Count - (last - first + 1);
+         }
+-        if (at < ordered.Length)
+-        {
+-            var tail = ordered[at].Value;
+-            added = checked(added + tail.Count);
+-            AddChunks(chunks, rewrite, tail, [new Segment(null, 0, tail.Count, 0)]);
+-        }
+-        return new SceneObjectList([.. chunks], checked(Count + added), this, rewrite);
++        var result = directory.Finish();
++        return result.ObjectCount == 0 ? Empty : new SceneObjectList(result, this, rewrite);
+     }
+ 
++    /// <summary>Batch insertions at original indices; only intersected chunks are rebuilt.</summary>
++    internal SceneObjectList InsertMany(IReadOnlyDictionary<int, IReadOnlyList<SceneObject>> insertions) =>
++        SplicePositions(Array.Empty<int>(), insertions);
++
+     /// <summary>Splits an edit buffer into chunks, clipping its runs to each chunk.</summary>
+     private static void AddChunks(List<SceneObject[]> chunks, Rewrite rewrite,
+         IReadOnlyList<SceneObject> buffer, IReadOnlyList<Segment> segments)
+     {
+         var next = 0;
+         var parts = new List<Segment>();
+-        for (var start = 0; start < buffer.Count; start += ChunkSize)
++        var chunkCount = (buffer.Count + ChunkSize - 1) / ChunkSize;
++        var start = 0;
++        for (var c = 0; c < chunkCount; c++)
+         {
+-            var part = new SceneObject[Math.Min(ChunkSize, buffer.Count - start)];
++            var part = new SceneObject[buffer.Count / chunkCount + (c < buffer.Count % chunkCount ? 1 : 0)];
+             for (var i = 0; i < part.Length; i++) part[i] = buffer[start + i];
+             var end = start + part.Length;
+             parts.Clear();
+@@ -722,12 +580,13 @@ public sealed class SceneObjectList : IReadOnlyList<SceneObject>
+ 
+             chunks.Add(part);
+             rewrite.Created.Add((part, [.. parts]));
++            start = end;
+         }
+     }
+ 
+     /// <summary>
+     /// Appends a placement/paste batch without flattening the already stored prefix. Only the
+-    /// last partial chunk, the new chunks and the small chunk directory are copied.
++    /// last boundary chunk, the new chunks and their directory paths are copied.
+     /// </summary>
+     public SceneObjectList AppendRange(IReadOnlyList<SceneObject> appended) =>
+         Splice(Count, removeCount: 0, appended);
+@@ -743,86 +602,15 @@ public sealed class SceneObjectList : IReadOnlyList<SceneObject>
+         int index, int removeCount, IReadOnlyList<SceneObject> inserted)
+     {
+         ArgumentNullException.ThrowIfNull(inserted);
+-        if (index < 0 || index > Count)
+-        {
+-            throw new ArgumentOutOfRangeException(nameof(index));
+-        }
+-        if (removeCount < 0 || removeCount > Count - index)
+-        {
+-            throw new ArgumentOutOfRangeException(nameof(removeCount));
+-        }
+-        if (removeCount == 0 && inserted.Count == 0)
+-        {
+-            return this;
+-        }
+-        if (Count == 0)
+-        {
+-            return From(inserted);
+-        }
+-
+-        var (startChunk, startOffset) = LocateBoundary(index);
+-        var (endChunk, endOffset) = LocateBoundary(index + removeCount);
+-        var chunks = new List<SceneObject[]>(_chunks.Count + (inserted.Count / ChunkSize) + 2);
+-        var rewrite = new Rewrite();
+-        for (var chunkIndex = 0; chunkIndex < startChunk; chunkIndex++)
+-        {
+-            chunks.Add(_chunks[chunkIndex]);
+-        }
+-
+-        for (var chunkIndex = startChunk; chunkIndex <= endChunk; chunkIndex++)
+-        {
+-            var dropped = _chunks[chunkIndex];
+-            rewrite.Dropped.Add(dropped);
+-            var from = chunkIndex == startChunk ? startOffset : 0;
+-            var to = chunkIndex == endChunk ? endOffset : dropped.Length;
+-            for (var offset = from; offset < to; offset++) rewrite.Left.Add(dropped[offset].Id);
+-        }
+-
+-        var first = _chunks[startChunk];
+-        var last = _chunks[endChunk];
+-        var boundaryCount = startOffset + inserted.Count + (last.Length - endOffset);
+-        if (boundaryCount > 0)
+-        {
+-            var boundary = new SceneObject[boundaryCount];
+-            var segments = new List<Segment>(3);
+-            Array.Copy(first, 0, boundary, 0, startOffset);
+-            if (startOffset > 0) segments.Add(new Segment(first, 0, startOffset, 0));
+-            for (var offset = 0; offset < inserted.Count; offset++)
+-            {
+-                boundary[startOffset + offset] = inserted[offset];
+-            }
+-            if (inserted.Count > 0) segments.Add(new Segment(null, 0, inserted.Count, startOffset));
+-            Array.Copy(last, endOffset, boundary, startOffset + inserted.Count, last.Length - endOffset);
+-            if (last.Length > endOffset)
+-                segments.Add(new Segment(last, endOffset, last.Length - endOffset, startOffset + inserted.Count));
+-
+-            AddChunks(chunks, rewrite, boundary, segments);
+-        }
+-
+-        for (var chunkIndex = endChunk + 1; chunkIndex < _chunks.Count; chunkIndex++)
+-        {
+-            chunks.Add(_chunks[chunkIndex]);
+-        }
+-
+-        var nextCount = checked(Count - removeCount + inserted.Count);
+-        return nextCount == 0 ? Empty : new SceneObjectList([.. chunks], nextCount, this, rewrite);
++        if (index < 0 || index > Count) throw new ArgumentOutOfRangeException(nameof(index));
++        if (removeCount < 0 || removeCount > Count - index) throw new ArgumentOutOfRangeException(nameof(removeCount));
++        if (removeCount == 0 && inserted.Count == 0) return this;
++        if (Count == 0) return From(inserted);
++        return SplicePositions(Enumerable.Range(index, removeCount).ToArray(),
++            new Dictionary<int, IReadOnlyList<SceneObject>> { [index] = inserted });
+     }
+ 
+-    private (int Chunk, int Offset) Locate(int index)
+-    {
+-        if ((uint)index >= (uint)Count)
+-        {
+-            throw new ArgumentOutOfRangeException(nameof(index));
+-        }
+-
+-        var chunk = Array.BinarySearch(_starts, index);
+-        if (chunk < 0)
+-        {
+-            chunk = ~chunk - 1;
+-        }
+-
+-        return (chunk, index - _starts[chunk]);
+-    }
++    private (int Chunk, int Offset) Locate(int index) => _chunks.Locate(index);
+ 
+     private (int Chunk, int Offset) LocateBoundary(int index)
+     {
+diff --git a/tests/Map.Core.Tests/SceneObjectListSpliceTests.cs b/tests/Map.Core.Tests/SceneObjectListSpliceTests.cs
+new file mode 100644
+index 0000000..5521c11
+--- /dev/null
++++ b/tests/Map.Core.Tests/SceneObjectListSpliceTests.cs
+@@ -0,0 +1,199 @@
++using Map.Core.Documents;
++using Map.Core.Editing;
++
++namespace Map.Core.Tests;
++
++public sealed class SceneObjectListSpliceTests
++{
++    [Theory]
++    [InlineData(17, false)]
++    [InlineData(256, false)]
++    [InlineData(1025, true)]
++    public void Random_splices_match_list_and_preserve_all_snapshots(int seed, bool textOnly)
++    {
++        var random = new Random(seed);
++        var model = Enumerable.Range(0, 3000).Select(i => seed == 17
++            ? Item(i) with { Kind = SceneObjectKind.Rectangle, Text = null } : Item(i)).ToList();
++        var storage = SceneObjectList.From(model);
++        if (textOnly) _ = storage.IndexOfTextId(default); else _ = storage.IndexOfId(default);
++        var history = new List<(SceneObjectList Storage, SceneObject[] Model)>();
++        var removedIds = new List<ObjectId>();
++        for (var step = 0; step < 240; step++)
++        {
++            history.Add((storage, model.ToArray()));
++            var at = random.Next(model.Count + 1);
++            switch (step % 6)
++            {
++                case 0:
++                    var added = Enumerable.Range(step, random.Next(1, 400)).Select(Item).ToArray();
++                    storage = storage.InsertRange(at, added);
++                    model.InsertRange(at, added);
++                    break;
++                case 1:
++                    var count = Math.Min(random.Next(1, 400), model.Count - at);
++                    removedIds.AddRange(model.Skip(at).Take(count).Select(o => o.Id));
++                    storage = storage.RemoveRange(at, count);
++                    model.RemoveRange(at, count);
++                    break;
++                case 2:
++                case 3:
++                    // The same atomic API implements a move and a scattered reorder. Its
++                    // keys name the reduced list, including insertions at both boundaries.
++                    var positions = Enumerable.Range(0, 12).Select(_ => random.Next(model.Count)).Distinct().Order().ToArray();
++                    var moved = positions.Select(i => model[i]).Reverse().ToArray();
++                    for (var i = positions.Length - 1; i >= 0; i--) model.RemoveAt(positions[i]);
++                    var batches = new Dictionary<int, IReadOnlyList<SceneObject>>();
++                    if (step % 6 == 2)
++                    {
++                        at = random.Next(model.Count + 1);
++                        batches.Add(at, moved);
++                    }
++                    else
++                    {
++                        batches.Add(0, moved[..(moved.Length / 2)]);
++                        batches.Add(model.Count, moved[(moved.Length / 2)..]);
++                    }
++                    storage = storage.SplicePositions(positions, batches);
++                    foreach (var batch in batches.OrderByDescending(p => p.Key)) model.InsertRange(batch.Key, batch.Value);
++                    break;
++                case 4:
++                    at = random.Next(model.Count);
++                    var replacement = Item(step) with { Id = model[at].Id };
++                    storage = storage.ReplaceAt(at, replacement);
++                    model[at] = replacement;
++                    break;
++                default:
++                    var deleted = Enumerable.Range(0, 15).Select(_ => random.Next(model.Count)).Distinct().Order().ToArray();
++                    removedIds.AddRange(deleted.Select(i => model[i].Id));
++                    storage = storage.RemovePositions(deleted);
++                    for (var i = deleted.Length - 1; i >= 0; i--) model.RemoveAt(deleted[i]);
++                    break;
++            }
++            Verify(storage, model, textOnly);
++            foreach (var id in removedIds.TakeLast(20))
++                Assert.Equal(-1, textOnly ? storage.IndexOfTextId(id) : storage.IndexOfId(id));
++        }
++        foreach (var (snapshot, expected) in history) Verify(snapshot, expected, textOnly);
++    }
++
++    [Fact]
++    public void Text_free_replacement_leaves_survive_splices_and_kind_changes()
++    {
++        var model = Enumerable.Range(0, 4096).Select(i => Item(i) with
++            { Kind = SceneObjectKind.Rectangle, Text = null }).ToList();
++        var storage = SceneObjectList.From(model);
++        _ = storage.IndexOfId(default);
++        var snapshots = new List<(SceneObjectList Storage, SceneObject[] Model)>();
++        for (var step = 0; step < 100; step++)
++        {
++            snapshots.Add((storage, model.ToArray()));
++            var at = 1024 + step % 32;
++            var before = model[at];
++            model[at] = before with { Name = step.ToString(), Kind = step % 11 == 0
++                ? SceneObjectKind.Text : SceneObjectKind.Rectangle,
++                Text = step % 11 == 0 ? new() { Content = "label", Importance = step % 5 + 1 } : null };
++            storage = storage.ReplaceAt(at, model[at]);
++            var added = Item(step) with { Kind = SceneObjectKind.Rectangle, Text = null };
++            storage = storage.InsertRange(1020, [added]);
++            model.Insert(1020, added);
++            storage = storage.RemoveRange(1030, 1);
++            model.RemoveAt(1030);
++            Verify(storage, model, false);
++        }
++        foreach (var (snapshot, expected) in snapshots) Verify(snapshot, expected, false);
++    }
++
++    [Fact]
++    public void Repeated_boundary_edits_share_distant_chunks_and_keep_chunks_bounded()
++    {
++        var storage = SceneObjectList.From(Enumerable.Range(0, 100_000).Select(Item).ToArray());
++        var snapshot = storage;
++        var distant = storage.StorageChunks[100];
++        for (var step = 0; step < 600; step++)
++        {
++            storage = storage.InsertRange(step % 2 == 0 ? 0 : storage.Count, [Item(step)]);
++            storage = storage.RemoveRange(storage.Count / 2, 1);
++            storage.ValidateDirectory();
++        }
++        Assert.Contains(storage.StorageChunks, chunk => ReferenceEquals(distant, chunk));
++        Assert.Equal(100_000, snapshot.Count);
++        Assert.Equal(100_000, storage.Count);
++        Assert.All(storage.StorageChunks, chunk => Assert.InRange(chunk.Length, 1, SceneObjectList.ChunkSize));
++        for (var i = 1; i < storage.StorageChunks.Count; i++)
++            Assert.True(storage.StorageChunks[i - 1].Length >= SceneObjectList.ChunkSize / 2
++                || storage.StorageChunks[i].Length >= SceneObjectList.ChunkSize / 2);
++    }
++
++    [Fact]
++    public void Empty_full_removal_and_invalid_positions_preserve_contract()
++    {
++        var items = Enumerable.Range(0, 513).Select(Item).ToArray();
++        var storage = SceneObjectList.Empty.AppendRange(items);
++        Assert.Same(storage, storage.InsertRange(0, []));
++        Assert.Same(SceneObjectList.Empty, storage.RemoveRange(0, items.Length));
++        Assert.Equal(items, storage);
++        Assert.Throws<ArgumentOutOfRangeException>(() => storage[-1]);
++        Assert.Throws<ArgumentOutOfRangeException>(() => storage[storage.Count]);
++        Assert.Throws<ArgumentOutOfRangeException>(() => storage.RemoveRange(510, 4));
++        Assert.Throws<ArgumentException>(() => storage.RemovePositions([2, 2]));
++        Assert.Throws<ArgumentException>(() => storage.RemovePositions([256, 1]));
++    }
++
++    [Fact]
++    public void Mixed_command_history_undo_redo_matches_every_snapshot()
++    {
++        var layer = new ObjectLayer(LayerId.New(), "objects", true, false, 1,
++            Enumerable.Range(0, 2000).Select(Item).ToArray());
++        var document = new MapDocument(DocumentId.New(), "test", DateTimeOffset.UnixEpoch,
++            new CanvasDefinition(100000, 100000, "px", "#FFFFFFFF"),
++            [new BaseColorLayer(LayerId.New(), "base", true, false, 1, "#FFFFFFFF"), layer]);
++        var session = new EditingSession(document);
++        var snapshots = new List<SceneObject[]> { layer.Objects.ToArray() };
++        for (var step = 0; step < 36; step++)
++        {
++            var current = (ObjectLayer)session.Document.FindLayer(layer.Id)!;
++            IEditCommand command = (step % 3) switch
++            {
++                0 => new AddObjectsCommand(layer.Id, Enumerable.Range(step, 17).Select(Item).ToArray()),
++                1 => new RemoveObjectsCommand(session.Document, layer.Id, [current.Objects[256].Id, current.Objects[^1].Id]),
++                _ => new ReorderObjectsCommand(session.Document, layer.Id,
++                    [current.Objects[^1].Id, current.Objects[0].Id], [0, current.Objects.Count - 1], "swap"),
++            };
++            session.Execute(command);
++            Assert.Null(session.LastResourceError);
++            snapshots.Add(((ObjectLayer)session.Document.FindLayer(layer.Id)!).Objects.ToArray());
++        }
++        for (var i = snapshots.Count - 2; i >= 0; i--)
++        {
++            Assert.True(session.Undo());
++            Verify(((ObjectLayer)session.Document.FindLayer(layer.Id)!).ObjectStorage, snapshots[i], false);
++        }
++        for (var i = 1; i < snapshots.Count; i++)
++        {
++            Assert.True(session.Redo());
++            Verify(((ObjectLayer)session.Document.FindLayer(layer.Id)!).ObjectStorage, snapshots[i], false);
++        }
++        Assert.Equal(snapshots[0], layer.Objects);
++    }
++
++    private static void Verify(SceneObjectList storage, IReadOnlyList<SceneObject> expected, bool textOnly)
++    {
++        storage.ValidateDirectory();
++        Assert.Equal(expected.Count, storage.Count);
++        Assert.True(expected.SequenceEqual(storage));
++        Assert.Equal(expected.Where(o => o.Kind == SceneObjectKind.Text && o.Visible), storage.TextObjects());
++        for (var importance = LabelSettings.MinImportance; importance <= LabelSettings.MaxImportance; importance++)
++            Assert.Equal(expected.Count(o => o.Kind == SceneObjectKind.Text && o.Visible && o.Text!.Importance == importance),
++                storage.LabelCount(1 << importance));
++        for (var i = 0; i < expected.Count; i++)
++        {
++            Assert.Same(expected[i], storage[i]);
++            if (!textOnly) Assert.Equal(i, storage.IndexOfId(expected[i].Id));
++            else if (expected[i].Kind == SceneObjectKind.Text) Assert.Equal(i, storage.IndexOfTextId(expected[i].Id));
++        }
++    }
++
++    private static SceneObject Item(int i) => new(ObjectId.New(), i % 5 == 0 ? SceneObjectKind.Text : SceneObjectKind.Rectangle,
++        "item", i, i, 24, 20, 0, "#FFFFFFFF", "#00000000", 0, i % 7 != 0, false)
++        { Text = i % 5 == 0 ? new() { Content = "label", Importance = i / 5 % 5 + 1 } : null };
++}
+-- 
+2.50.1 (Apple Git-155)
+
+
+From 6a8be281263915c64ee8a3260ba31b4d7f44d602 Mon Sep 17 00:00:00 2001
+From: User <user@MacBook-Air-User.local>
+Date: Sat, 14 Nov 2026 23:28:22 +0200
+Subject: [PATCH 2/2] test(core): enforce bounded persistent splice costs
+
+---
+ tests/Map.Core.Tests/EditCostGuardTests.cs   | 30 --------------------
+ tests/Map.Core.Tests/UndoMemoryGuardTests.cs | 23 ++-------------
+ 2 files changed, 3 insertions(+), 50 deletions(-)
+
+diff --git a/tests/Map.Core.Tests/EditCostGuardTests.cs b/tests/Map.Core.Tests/EditCostGuardTests.cs
+index 7b85a2d..eb87091 100644
+--- a/tests/Map.Core.Tests/EditCostGuardTests.cs
++++ b/tests/Map.Core.Tests/EditCostGuardTests.cs
+@@ -26,18 +26,9 @@ public sealed class EditCostGuardTests(EditCostGuardTests.Maps maps) : IClassFix
+     private static readonly string OtherHash = new('b', 64);
+     private sealed record Case(string Key, Type Type, Func<Fixture, IEditCommand> Create, string? Linear = null, string State = "ready");
+ 
+-    private static readonly HashSet<string> ChunkDirectory =
+-    [
+-        "AddObjectCommand", "TransformObjectCommand", "PasteCompositionCommand", "DeleteObjectsCommand/singleton",
+-        "RegionLabelFollowCommand", "DecorationRefreshCommand", "SetMapScaleCommand",
+-    ];
+-
+     private static Case C<T>(Func<Fixture, T> create, string? suffix = null, string? linear = null, string state = "ready") where T : IEditCommand
+     {
+         var key = typeof(T).Name + (suffix is null ? "" : "/" + suffix);
+-        linear ??= ChunkDirectory.Contains(key)
+-            ? "SceneObjectList.cs:90-97,466: copies chunk directories (O(N/256)); allocated-byte ratio exceeds 3"
+-            : null;
+         return new(key, typeof(T), f => create(f), linear, state);
+     }
+ 
+@@ -274,33 +265,12 @@ public sealed class EditCostGuardTests(EditCostGuardTests.Maps maps) : IClassFix
+ 
+     // Each documented violation has its own skipped Fact below, so xUnit discovery lists ALL
+     // commands even though a skipped Theory would never enumerate its MemberData.
+-    [Fact(Skip = "O(N): SceneObjectList.cs:90-97,466: copies chunk directories (O(N/256)); allocated-byte ratio exceeds 3")]
+-    public void Known_AddObjectCommand() => Compare(Find("AddObjectCommand"), maps.Small, maps.Large, enforce: true);
+-
+     [Fact(Skip = "O(N): EditingSession.cs:245 -> MapDecorations.cs:84: legend refresh scans every stamp on every Execute")]
+     public void Known_AddObjectsCommand_legend() => Compare(Find("AddObjectsCommand/legend"), maps.Small, maps.Large, enforce: true);
+ 
+-    [Fact(Skip = "O(N): SceneObjectList.cs:90-97,466: copies chunk directories (O(N/256)); allocated-byte ratio exceeds 3")]
+-    public void Known_TransformObjectCommand() => Compare(Find("TransformObjectCommand"), maps.Small, maps.Large, enforce: true);
+-
+-    [Fact(Skip = "O(N): SceneObjectList.cs:90-97,466: copies chunk directories (O(N/256)); allocated-byte ratio exceeds 3")]
+-    public void Known_DeleteObjectsCommand_singleton() => Compare(Find("DeleteObjectsCommand/singleton"), maps.Small, maps.Large, enforce: true);
+-
+     [Fact(Skip = "O(N): ControlledAreaGeneration.cs:23 -> UpdateLayerCommand.Replace -> WithLayers: scans/copies all stamps for one area")]
+     public void Known_UpdateLayerCommand_controlled_area() => Compare(Find("UpdateLayerCommand/controlled-area"), maps.Small, maps.Large, enforce: true);
+ 
+-    [Fact(Skip = "O(N): SceneObjectList.cs:90-97,466: copies chunk directories (O(N/256)); allocated-byte ratio exceeds 3")]
+-    public void Known_PasteCompositionCommand() => Compare(Find("PasteCompositionCommand"), maps.Small, maps.Large, enforce: true);
+-
+-    [Fact(Skip = "O(N): SceneObjectList.cs:90-97,466: copies chunk directories (O(N/256)); allocated-byte ratio exceeds 3")]
+-    public void Known_RegionLabelFollowCommand() => Compare(Find("RegionLabelFollowCommand"), maps.Small, maps.Large, enforce: true);
+-
+-    [Fact(Skip = "O(N): SceneObjectList.cs:90-97,466: copies chunk directories (O(N/256)); allocated-byte ratio exceeds 3")]
+-    public void Known_DecorationRefreshCommand() => Compare(Find("DecorationRefreshCommand"), maps.Small, maps.Large, enforce: true);
+-
+-    [Fact(Skip = "O(N): SceneObjectList.cs:90-97,466: copies chunk directories (O(N/256)); allocated-byte ratio exceeds 3")]
+-    public void Known_SetMapScaleCommand() => Compare(Find("SetMapScaleCommand"), maps.Small, maps.Large, enforce: true);
+-
+     [Fact(Skip = "O(N): ChangePackages.cs:222 -> WithLayers: the big layer arrives as another storage; its 200k objects exceed the layer-delta bound (MapDocument.MaxDeltaObjects) and take the whole-document validation")]
+     public void Known_ApplyChangePackageCommand() => Compare(Find("ApplyChangePackageCommand"), maps.Small, maps.Large, enforce: true);
+ 
+diff --git a/tests/Map.Core.Tests/UndoMemoryGuardTests.cs b/tests/Map.Core.Tests/UndoMemoryGuardTests.cs
+index 4fc38e8..8e6270e 100644
+--- a/tests/Map.Core.Tests/UndoMemoryGuardTests.cs
++++ b/tests/Map.Core.Tests/UndoMemoryGuardTests.cs
+@@ -35,30 +35,16 @@ public sealed class UndoMemoryGuardTests
+         ReorderTwoObjects,
+     }
+ 
+-    // ca390da (= 027892d) removed the two full object arrays: 919 432 -> 16 618 872 bytes before,
+-    // 7 312 -> 40 632 after (Windows, 2026-11-14). The rest still scales: x5.56 > 3.
+-    private const string ReorderCopies = "SceneObjectList.SplicePositions copies the chunk directory, starts and chunk-start dictionary (O(N/256), ~33 KB at 200k) for a two-object swap; ReorderObjectsCommand itself keeps ids and positions only. Proposal: persistent chunk directory with rank lookup for splices.";
+-    private const string ChunkDirectories = "1M violation: structural splices (insert/remove) in SceneObjectList copy chunk directories, starts and chunk-position dictionaries (O(N/256)); replacements no longer do. Proposal: persistent chunk directory/rank lookup, updating only affected chunks.";
+-    private const string PathSnapshots = "1M violation: PlacementPathEditing.cs:111,225 retains before/after documents, including SceneObjectList.cs:89-97 chunk directories. Proposal: owner/member deltas instead of document snapshots, plus a persistent chunk directory.";
++    private const string PathSnapshots = "PlacementPathEditing.cs:111,225 retains before/after documents. Persistent chunk directories are shared; owner/member deltas instead of document snapshots remain out of scope.";
+ 
+-    // Measured on Windows 2026-11-14 on claude/onfix-c (same numbers within 0.2 % without onfix-c):
+-    // the small 10k entries are only 10-16 KB, so the ~33 KB O(N/256) directory part dominates.
+-    private const string PlaceDirectories = "Place10: 10 816 -> 44 520 bytes (x4.12 > 3). InsertRange/structural splice rebuilds the chunk directory, starts and chunk-start dictionary (O(N/256)). Proposal: persistent chunk directory with rank lookup for splices.";
+-    private const string PathDirectories = "Path: 15 312 -> 46 944 bytes (x3.07 > 3; x4.88 before onfix-c). Regenerated path members are spliced into the layer, rebuilding the chunk directory (O(N/256)). Proposal: as for Place10.";
+-
+-    private static bool IsViolation(Edit edit) => edit is Edit.ReorderTwoObjects or Edit.Place10 or Edit.Path;
+-    // Move10/Style10 at 1M: 31 672 -> 31 672 bytes (x1.00) since onfix-c's persistent replace directory.
+-    // Still O(N/256) at 1M (Windows 2026-11-14): Place10 x15.7, Delete10 x6.3, Path x11.2, reorder x22.7.
+-    private static bool IsHugeViolation(Edit edit) => edit is Edit.Place10 or Edit.Delete10 or Edit.Path;
++    private static bool IsViolation(Edit edit) => false;
++    private static bool IsHugeViolation(Edit edit) => edit is Edit.Path;
+ 
+     public static IEnumerable<object[]> BoundedCases() => Enum.GetValues<Edit>()
+         .Where(edit => !IsViolation(edit)).Select(edit => new object[] { edit });
+ 
+     [Theory]
+     [MemberData(nameof(BoundedCases))]
+-    [InlineData(Edit.ReorderTwoObjects, Skip = ReorderCopies)]
+-    [InlineData(Edit.Place10, Skip = PlaceDirectories)]
+-    [InlineData(Edit.Path, Skip = PathDirectories)]
+     public void One_entry_retained_bytes_do_not_scale_with_map(Edit edit) => Compare(edit, enforce: true);
+ 
+     public static IEnumerable<object[]> HugeBoundedCases() => Enum.GetValues<Edit>()
+@@ -75,9 +61,6 @@ public sealed class UndoMemoryGuardTests
+ 
+     [HugeTheory]
+     [MemberData(nameof(HugeBoundedCases))]
+-    [InlineData(Edit.ReorderTwoObjects, Skip = ReorderCopies)]
+-    [InlineData(Edit.Place10, Skip = ChunkDirectories)]
+-    [InlineData(Edit.Delete10, Skip = ChunkDirectories)]
+     [InlineData(Edit.Path, Skip = PathSnapshots)]
+     public void One_entry_retained_bytes_at_one_million_objects(Edit edit) => CompareHuge(edit, enforce: true);
+ 
+-- 
+2.50.1 (Apple Git-155)
+

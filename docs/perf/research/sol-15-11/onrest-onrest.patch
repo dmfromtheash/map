@@ -1,0 +1,713 @@
+From 0b9e8cabd359b6d7e5eea84453ae1360ebb78601 Mon Sep 17 00:00:00 2001
+From: User <user@MacBook-Air-User.local>
+Date: Sat, 14 Nov 2026 23:26:12 +0200
+Subject: [PATCH 1/2] perf(core): reuse prepared snapshots in change package
+ history
+
+---
+ src/Map.Core/Editing/ChangePackages.cs        |  5 +++-
+ tests/Map.Core.Tests/EditCostGuardTests.cs    |  9 +++---
+ .../Editing/ChangePackageTests.cs             | 29 +++++++++++++++++++
+ 3 files changed, 38 insertions(+), 5 deletions(-)
+
+diff --git a/src/Map.Core/Editing/ChangePackages.cs b/src/Map.Core/Editing/ChangePackages.cs
+index 078a21d..19ae297 100644
+--- a/src/Map.Core/Editing/ChangePackages.cs
++++ b/src/Map.Core/Editing/ChangePackages.cs
+@@ -219,5 +219,8 @@ public sealed class ApplyChangePackageCommand(MapDocument before, MapDocument af
+     public MapDocument Apply(MapDocument document) => Take(document, after);
+     public MapDocument Revert(MapDocument document) => Take(document, before);
+     private static MapDocument Take(MapDocument document, MapDocument from) =>
+-        document.WithLayers(from.Layers).WithNotes(from.Notes).WithAssets(from.Assets) with { Entities = from.Entities };
++        // These are the document-owned immutable lists of an already validated snapshot.
++        // Like checkpoint restore, reuse their identity and all prepared derivatives rather
++        // than validating every object again. Map-wide settings/history still belong to document.
++        document with { Layers = from.Layers, Notes = from.Notes, Assets = from.Assets, Entities = from.Entities };
+ }
+diff --git a/tests/Map.Core.Tests/EditCostGuardTests.cs b/tests/Map.Core.Tests/EditCostGuardTests.cs
+index 0a9f031..c6b021f 100644
+--- a/tests/Map.Core.Tests/EditCostGuardTests.cs
++++ b/tests/Map.Core.Tests/EditCostGuardTests.cs
+@@ -143,8 +143,7 @@ public sealed class EditCostGuardTests(EditCostGuardTests.Maps maps) : IClassFix
+         C(f => new SetMapHandoutCommand(f.Document.Handout, MapHandout.Found)),
+         C(f => new SetMapScaleCommand(f.Document.Canvas.Scale, new MapScale(1, "km"))),
+         C(f => new ApplyStylePackCommand("pack", f.Document, f.Document with { Style = new MapStyle() })),
+-        C(f => new ApplyChangePackageCommand(f.Document, f.SmallChange),
+-            linear: "ChangePackages.cs:222 -> WithLayers: the big layer arrives as another storage; its 200k objects exceed the layer-delta bound (MapDocument.MaxDeltaObjects) and take the whole-document validation"),
++        C(f => new ApplyChangePackageCommand(f.Document, f.SmallChange)),
+         C(f => new MapVariantCommand("variant", f.Document, f.Document with { Handout = MapHandout.Found, Style = new MapStyle() })),
+         C(f => new ResizeCanvasCommand(f.Document, f.SmallChange)),
+         C(f => new ReplaceCityCommand(f.Target, f.Target with { Objects = f.Added }, f.Document.Notes, f.Document.Notes)),
+@@ -210,7 +209,9 @@ public sealed class EditCostGuardTests(EditCostGuardTests.Maps maps) : IClassFix
+         {
+             var previous = before.FindLayer(layer.Id) as ObjectLayer;
+             if (previous is not null && !ReferenceEquals(previous.Objects, layer.Objects))
+-                Assert.True(ObjectLayerChanges.TryGet(layer, out _), "Changed storage lost ObjectLayerChanges");
++                // Reusing the saved layer list of a fully prepared snapshot needs no forward delta.
++                Assert.True(ObjectLayerChanges.TryGet(layer, out _) || DocumentDerivedIndexes.IsPrepared(after),
++                    "Changed storage lost ObjectLayerChanges and has no prepared snapshot index");
+             var spatial = ObjectSpatialIndex.For(layer);
+             if (previous is not null && ReferenceEquals(previous.Objects, layer.Objects))
+                 Assert.Same(ObjectSpatialIndex.For(previous), spatial);
+@@ -308,7 +309,7 @@ public sealed class EditCostGuardTests(EditCostGuardTests.Maps maps) : IClassFix
+     [Fact]
+     public void Known_SetMapScaleCommand() => Compare(Find("SetMapScaleCommand"), maps.Small, maps.Large, enforce: true);
+ 
+-    [Fact(Skip = "O(N): ChangePackages.cs:222 -> WithLayers: the big layer arrives as another storage; its 200k objects exceed the layer-delta bound (MapDocument.MaxDeltaObjects) and take the whole-document validation")]
++    [Fact]
+     public void Known_ApplyChangePackageCommand() => Compare(Find("ApplyChangePackageCommand"), maps.Small, maps.Large, enforce: true);
+ 
+     [Fact]
+diff --git a/tests/Map.Core.Tests/Editing/ChangePackageTests.cs b/tests/Map.Core.Tests/Editing/ChangePackageTests.cs
+index 2441307..c1e7a2d 100644
+--- a/tests/Map.Core.Tests/Editing/ChangePackageTests.cs
++++ b/tests/Map.Core.Tests/Editing/ChangePackageTests.cs
+@@ -47,6 +47,35 @@ public sealed class ChangePackageTests
+         Assert.Equal(3, ChangePackage.Objects(command.Revert(command.Apply(theirs))).Count());
+     }
+ 
++    [Fact]
++    public void History_reuses_prepared_content_and_preserves_the_live_map_settings()
++    {
++        var label = Label("place", 10, 20);
++        var before = Doc([label], []);
++        DocumentDerivedIndexes.Prepare(before);
++        var after = DocumentEditor.ReplaceObject(before, SceneObjectClone.At(label, 40, label.Y))
++            .WithNotes([new MapNote(NoteId.New(), "note", "", NoteAnchorKind.World)]);
++        DocumentDerivedIndexes.Prepare(after);
++        var live = before with { Title = "live", Handout = MapHandout.Found, Timeline = before.Timeline with { Year = 1200 } };
++        var command = new ApplyChangePackageCommand(before, after);
++        for (var i = 0; i < 3; i++)
++        {
++            live = command.Apply(live);
++            Assert.Same(after.Layers, live.Layers);
++            Assert.Same(after.Notes, live.Notes);
++            Assert.Same(after.Assets, live.Assets);
++            Assert.True(DocumentDerivedIndexes.IsPrepared(live));
++            Assert.Equal(40, DocumentEditor.FindObject(live, label.Id)!.X);
++            live = command.Revert(live);
++            Assert.Same(before.Layers, live.Layers);
++            Assert.True(DocumentDerivedIndexes.IsPrepared(live));
++            Assert.Equal(10, DocumentEditor.FindObject(live, label.Id)!.X);
++            Assert.Equal("live", live.Title);
++            Assert.Equal(MapHandout.Found, live.Handout);
++            Assert.Equal(1200, live.Timeline.Year);
++        }
++    }
++
+     [Fact]
+     public void Nothing_changed_makes_an_empty_package()
+     {
+-- 
+2.50.1 (Apple Git-155)
+
+
+From a4ca688fa8e512e41d94954e82023e1dc792241e Mon Sep 17 00:00:00 2001
+From: User <user@MacBook-Air-User.local>
+Date: Sat, 14 Nov 2026 23:26:22 +0200
+Subject: [PATCH 2/2] perf(core): bound placement queries to labels and nearby
+ features
+
+---
+ .../Documents/DocumentDerivedIndexes.cs       |   8 +-
+ src/Map.Core/Documents/FeatureSpatialIndex.cs |  95 ++++++++++++++
+ src/Map.Core/Documents/Layers.cs              |  32 ++++-
+ src/Map.Core/Editing/LabelPriority.cs         |   2 +-
+ .../Editing/PlacementAreaRuleCheck.cs         |  45 ++++---
+ src/Map.Core/Editing/RiverEditing.cs          |   7 +-
+ src/Map.Core/Editing/RoadEditing.cs           |   7 +-
+ .../Editing/LabelPriorityTests.cs             |  23 ++++
+ .../Editing/PlacementFeatureIndexTests.cs     | 122 ++++++++++++++++++
+ tests/Map.Core.Tests/HotPathCostGuardTests.cs |  29 +++--
+ 10 files changed, 331 insertions(+), 39 deletions(-)
+ create mode 100644 src/Map.Core/Documents/FeatureSpatialIndex.cs
+ create mode 100644 tests/Map.Core.Tests/Editing/PlacementFeatureIndexTests.cs
+
+diff --git a/src/Map.Core/Documents/DocumentDerivedIndexes.cs b/src/Map.Core/Documents/DocumentDerivedIndexes.cs
+index 47975c3..a7049ff 100644
+--- a/src/Map.Core/Documents/DocumentDerivedIndexes.cs
++++ b/src/Map.Core/Documents/DocumentDerivedIndexes.cs
+@@ -19,7 +19,8 @@ public static class DocumentDerivedIndexes
+         if (!Editing.LabelPriority.IsPrepared(document)) return false;
+         foreach (var layer in document.Layers)
+         {
+-            if (layer is ObjectLayer features && (!features.RiverIds.IsPrepared || !features.RoadIds.IsPrepared))
++            if (layer is ObjectLayer features && (!features.RiverIds.IsPrepared || !features.RoadIds.IsPrepared
++                || !features.PlacementFeaturesPrepared))
+                 return false;
+             if (layer is ObjectLayer objects && objects.Objects.Count > 0
+                 && (!objects.ObjectStorage.HasIdentityTable || !ObjectSpatialIndex.IsPrepared(objects)
+@@ -47,6 +48,11 @@ public static class DocumentDerivedIndexes
+             cancellationToken.ThrowIfCancellationRequested();
+             Resources.BackgroundWork.YieldToInteraction(cancellationToken);
+             objects.RoadIds.Prepare();
++            Resources.BackgroundWork.YieldToInteraction(cancellationToken);
++            _ = objects.PlacementRivers;
++            cancellationToken.ThrowIfCancellationRequested();
++            Resources.BackgroundWork.YieldToInteraction(cancellationToken);
++            _ = objects.PlacementRoads;
+             if (objects.Objects.Count == 0) continue;
+             cancellationToken.ThrowIfCancellationRequested();
+             Resources.BackgroundWork.YieldToInteraction(cancellationToken);
+diff --git a/src/Map.Core/Documents/FeatureSpatialIndex.cs b/src/Map.Core/Documents/FeatureSpatialIndex.cs
+new file mode 100644
+index 0000000..f076dc4
+--- /dev/null
++++ b/src/Map.Core/Documents/FeatureSpatialIndex.cs
+@@ -0,0 +1,95 @@
++using System.Collections.Immutable;
++
++namespace Map.Core.Documents;
++
++/// <summary>
++/// Persistent broad phase for placement rules. A prepared layer shares unchanged cells across
++/// feature edits; buckets hold ids, so replacing one feature never copies a dense bucket.
++/// Geometry and the exact water/road predicates remain the responsibility of the caller.
++/// </summary>
++internal sealed class FeatureSpatialIndex<T> where T : class
++{
++    private const double CellSize = 1024;
++    private readonly record struct Entry(T Item, WorldBounds Bounds);
++    private readonly ImmutableDictionary<Guid, Entry> _entries;
++    private readonly ImmutableDictionary<(int X, int Y), ImmutableHashSet<Guid>> _cells;
++    private readonly ImmutableHashSet<Guid> _oversized;
++    private readonly Entry? _single;
++
++    private FeatureSpatialIndex(ImmutableDictionary<Guid, Entry> entries,
++        ImmutableDictionary<(int X, int Y), ImmutableHashSet<Guid>> cells, ImmutableHashSet<Guid> oversized)
++    {
++        _entries = entries; _cells = cells; _oversized = oversized;
++        _single = entries.Count == 1 ? entries.First().Value : null;
++    }
++
++    internal static FeatureSpatialIndex<T> Build(IEnumerable<T> items, Func<T, Guid> id, Func<T, WorldBounds> bounds) =>
++        new FeatureSpatialIndex<T>(ImmutableDictionary<Guid, Entry>.Empty,
++            ImmutableDictionary<(int, int), ImmutableHashSet<Guid>>.Empty, ImmutableHashSet<Guid>.Empty)
++        .Change([], items, id, bounds);
++
++    internal FeatureSpatialIndex<T> Change(IEnumerable<Guid> removed, IEnumerable<T> added,
++        Func<T, Guid> idOf, Func<T, WorldBounds> boundsOf)
++    {
++        var entries = _entries.ToBuilder();
++        var cells = _cells.ToBuilder();
++        var oversized = _oversized.ToBuilder();
++        foreach (var id in removed)
++            if (entries.TryGetValue(id, out var old))
++            { ChangeCells(id, old.Bounds, false); entries.Remove(id); }
++        foreach (var item in added)
++        {
++            var id = idOf(item);
++            if (entries.TryGetValue(id, out var old)) ChangeCells(id, old.Bounds, false);
++            var bounds = boundsOf(item);
++            entries[id] = new(item, bounds);
++            ChangeCells(id, bounds, true);
++        }
++        return new(entries.ToImmutable(), cells.ToImmutable(), oversized.ToImmutable());
++
++        void ChangeCells(Guid id, WorldBounds bounds, bool add)
++        {
++            if (!Range(bounds, out var x0, out var x1, out var y0, out var y1))
++            { if (add) oversized.Add(id); else oversized.Remove(id); return; }
++            for (var y = y0; y <= y1; y++) for (var x = x0; x <= x1; x++)
++            {
++                var bucket = cells.GetValueOrDefault((x, y), ImmutableHashSet<Guid>.Empty);
++                bucket = add ? bucket.Add(id) : bucket.Remove(id);
++                if (bucket.IsEmpty) cells.Remove((x, y)); else cells[(x, y)] = bucket;
++            }
++        }
++    }
++
++    // Boolean probes need no candidate list or deduplication set. Visiting a feature twice
++    // at a cell boundary is harmless for Any and keeps the common point probe allocation-free.
++    internal bool Any<TState>(WorldBounds bounds, TState state, Func<T, TState, bool> predicate)
++    {
++        if (_entries.IsEmpty) return false;
++        if (_single is { } single) return single.Bounds.Intersects(bounds) && predicate(single.Item, state);
++        if (!Range(bounds, out var x0, out var x1, out var y0, out var y1))
++        {
++            foreach (var pair in _entries)
++                if (pair.Value.Bounds.Intersects(bounds) && predicate(pair.Value.Item, state)) return true;
++            return false;
++        }
++        for (var y = y0; y <= y1; y++) for (var x = x0; x <= x1; x++)
++            if (_cells.TryGetValue((x, y), out var ids))
++                foreach (var id in ids)
++                    if (_entries[id].Bounds.Intersects(bounds) && predicate(_entries[id].Item, state)) return true;
++        foreach (var id in _oversized)
++            if (_entries[id].Bounds.Intersects(bounds) && predicate(_entries[id].Item, state)) return true;
++        return false;
++    }
++
++    private static bool Range(WorldBounds b, out int x0, out int x1, out int y0, out int y1)
++    {
++        x0 = x1 = y0 = y1 = 0;
++        var left = Math.Floor(b.Left / CellSize); var right = Math.Floor(b.Right / CellSize);
++        var top = Math.Floor(b.Top / CellSize); var bottom = Math.Floor(b.Bottom / CellSize);
++        if (!double.IsFinite(left) || !double.IsFinite(right) || !double.IsFinite(top) || !double.IsFinite(bottom)
++            || left < int.MinValue || top < int.MinValue || right >= int.MaxValue || bottom >= int.MaxValue
++            || right < left || bottom < top || (right - left + 1) * (bottom - top + 1) > 64) return false;
++        x0 = (int)left; x1 = (int)right; y0 = (int)top; y1 = (int)bottom;
++        return true;
++    }
++}
+diff --git a/src/Map.Core/Documents/Layers.cs b/src/Map.Core/Documents/Layers.cs
+index dc49e04..84c61c7 100644
+--- a/src/Map.Core/Documents/Layers.cs
++++ b/src/Map.Core/Documents/Layers.cs
+@@ -150,6 +150,13 @@ public sealed record ObjectLayer : MapLayer
+     private System.Collections.Immutable.ImmutableArray<Road> _roads = [];
+     private FeatureIdentityIndex _riverIds = FeatureIdentityIndex.Create<River>([], static r => r.Id);
+     private FeatureIdentityIndex _roadIds = FeatureIdentityIndex.Create<Road>([], static r => r.Id);
++    private Lazy<FeatureSpatialIndex<River>> _placementRivers = RiverPlacementIndex([]);
++    private Lazy<FeatureSpatialIndex<Road>> _placementRoads = RoadPlacementIndex([]);
++
++    private static Lazy<FeatureSpatialIndex<River>> RiverPlacementIndex(IEnumerable<River> rivers) =>
++        new(() => FeatureSpatialIndex<River>.Build(rivers.Where(r => r.Visible), r => r.Id, r => Editing.RiverGeometry.Evaluate(r).Bounds));
++    private static Lazy<FeatureSpatialIndex<Road>> RoadPlacementIndex(IEnumerable<Road> roads) =>
++        new(() => FeatureSpatialIndex<Road>.Build(roads.Where(r => r.Visible), r => r.Id, r => Editing.RoadGeometry.Evaluate(r).Bounds));
+ 
+     public ObjectLayer(
+         LayerId id, string name, bool visible, bool locked, double opacity,
+@@ -184,6 +191,7 @@ public sealed record ObjectLayer : MapLayer
+             if (_rivers == value) return;
+             _rivers = value;
+             _riverIds = FeatureIdentityIndex.Create(value, static r => r.Id);
++            _placementRivers = RiverPlacementIndex(value);
+         }
+     }
+ 
+@@ -196,6 +204,7 @@ public sealed record ObjectLayer : MapLayer
+             if (_roads == value) return;
+             _roads = value;
+             _roadIds = FeatureIdentityIndex.Create(value, static r => r.Id);
++            _placementRoads = RoadPlacementIndex(value);
+         }
+     }
+ 
+@@ -205,21 +214,40 @@ public sealed record ObjectLayer : MapLayer
+ 
+     internal FeatureIdentityIndex RiverIds => _riverIds;
+     internal FeatureIdentityIndex RoadIds => _roadIds;
++    internal FeatureSpatialIndex<River> PlacementRivers => _placementRivers.Value;
++    internal FeatureSpatialIndex<Road> PlacementRoads => _placementRoads.Value;
++    internal bool PlacementFeaturesPrepared => _placementRivers.IsValueCreated && _placementRoads.IsValueCreated;
+ 
+-    internal void RegisterRiverDelta(ObjectLayer source, IReadOnlyList<Guid> removed, IReadOnlyList<Guid> added)
++    internal void RegisterRiverDelta(ObjectLayer source, IReadOnlyList<Guid> removed, IReadOnlyList<Guid> added,
++        IReadOnlyList<River>? changed = null)
+     {
+         var ids = source._riverIds.Derive(removed, added);
+         if (ids.Count != Rivers.Length)
+             throw new InvalidOperationException($"River content delta does not explain index version {ids.Version}.");
+         _riverIds = ids;
++        if (changed is not null && source._placementRivers.IsValueCreated)
++        {
++            var derived = source.PlacementRivers.Change(removed, changed.Where(r => r.Visible),
++                r => r.Id, r => Editing.RiverGeometry.Evaluate(r).Bounds);
++            _placementRivers = new(() => derived);
++            _ = _placementRivers.Value;
++        }
+     }
+ 
+-    internal void RegisterRoadDelta(ObjectLayer source, IReadOnlyList<Guid> removed, IReadOnlyList<Guid> added)
++    internal void RegisterRoadDelta(ObjectLayer source, IReadOnlyList<Guid> removed, IReadOnlyList<Guid> added,
++        IReadOnlyList<Road>? changed = null)
+     {
+         var ids = source._roadIds.Derive(removed, added);
+         if (ids.Count != Roads.Length)
+             throw new InvalidOperationException($"Road content delta does not explain index version {ids.Version}.");
+         _roadIds = ids;
++        if (changed is not null && source._placementRoads.IsValueCreated)
++        {
++            var derived = source.PlacementRoads.Change(removed, changed.Where(r => r.Visible),
++                r => r.Id, r => Editing.RoadGeometry.Evaluate(r).Bounds);
++            _placementRoads = new(() => derived);
++            _ = _placementRoads.Value;
++        }
+     }
+ 
+     // Derived membership is deliberately absent from document equality/hash codes. Preparing an
+diff --git a/src/Map.Core/Editing/LabelPriority.cs b/src/Map.Core/Editing/LabelPriority.cs
+index 4b57e10..3acdcc0 100644
+--- a/src/Map.Core/Editing/LabelPriority.cs
++++ b/src/Map.Core/Editing/LabelPriority.cs
+@@ -69,6 +69,6 @@ public static partial class LabelPriority
+     public static IReadOnlyList<WorldBounds> LabelBounds(MapDocument document) =>
+         !document.Labels.ClearUnderLabels ? []
+         : [.. document.Layers.OfType<ObjectLayer>().Where(l => l.Visible)
+-            .SelectMany(l => l.Objects).Where(o => o.Kind == SceneObjectKind.Text && o.Visible && o.Text is not null)
++            .SelectMany(l => l.ObjectStorage.TextObjects()).Where(o => o.Visible && o.Text is not null)
+             .Select(SceneGeometry.BoundsOf)];
+ }
+diff --git a/src/Map.Core/Editing/PlacementAreaRuleCheck.cs b/src/Map.Core/Editing/PlacementAreaRuleCheck.cs
+index 85fbc85..d647455 100644
+--- a/src/Map.Core/Editing/PlacementAreaRuleCheck.cs
++++ b/src/Map.Core/Editing/PlacementAreaRuleCheck.cs
+@@ -3,16 +3,16 @@ using Map.Core.Documents;
+ namespace Map.Core.Editing
+ {
+     /// <summary>
+-    /// The map queries behind <see cref="PlacementAreaRules"/>, prepared once per area command:
+-    /// river and road geometry is evaluated a single time, not per slot.
++    /// The map queries behind <see cref="PlacementAreaRules"/>. Prepared feature grids restrict
++    /// each point probe to nearby rivers and roads; exact geometry predicates are unchanged.
+     /// </summary>
+     public sealed class PlacementAreaRuleCheck
+     {
+         private readonly MapDocument _document;
+         private readonly PlacementAreaRules _rules;
+         private readonly bool _hasLand;
+-        private readonly RiverGeometrySet[] _rivers;
+-        private readonly RoadGeometrySet[] _roads;
++        private readonly FeatureSpatialIndex<River>[] _rivers;
++        private readonly FeatureSpatialIndex<Road>[] _roads;
+ 
+         public PlacementAreaRuleCheck(MapDocument document, PlacementAreaRules rules)
+         {
+@@ -21,8 +21,8 @@ namespace Map.Core.Editing
+             _hasLand = document.Layers.OfType<LandLayer>().Any(l => l.Visible);
+             var layers = document.Layers.OfType<ObjectLayer>().Where(l => l.Visible).ToArray();
+             _rivers = rules.AvoidWater || rules.OnlyOnWater
+-                ? [.. layers.SelectMany(l => l.Rivers).Where(r => r.Visible).Select(r => RiverGeometry.Evaluate(r))] : [];
+-            _roads = rules.AvoidRoads ? [.. layers.SelectMany(l => l.Roads).Where(r => r.Visible).Select(r => RoadGeometry.Evaluate(r))] : [];
++                ? [.. layers.Select(l => l.PlacementRivers)] : [];
++            _roads = rules.AvoidRoads ? [.. layers.Select(l => l.PlacementRoads)] : [];
+         }
+ 
+         /// <summary>
+@@ -49,9 +49,7 @@ namespace Map.Core.Editing
+         {
+             if (_rules.AvoidWater && IsWater(x, y)) return false;
+             if (_rules.AvoidRoads)
+-                foreach (var road in _roads)
+-                    if (road.Bounds.Intersects(new WorldBounds(x - _rules.RoadMargin, y - _rules.RoadMargin, x + _rules.RoadMargin, y + _rules.RoadMargin))
+-                        && RoadGeometry.TryClosest(road, x, y, _rules.RoadMargin, out _, out _, out _, out _, out _)) return false;
++                if (OnRoad(x, y)) return false;
+             return true;
+         }
+ 
+@@ -70,21 +68,32 @@ namespace Map.Core.Editing
+             }
+ 
+             if (_rules.AvoidRoads)
+-                foreach (var road in _roads)
+-                    if (road.Bounds.Intersects(new WorldBounds(x - _rules.RoadMargin, y - _rules.RoadMargin, x + _rules.RoadMargin, y + _rules.RoadMargin))
+-                        && RoadGeometry.TryClosest(road, x, y, _rules.RoadMargin, out _, out _, out _, out _, out _)) return false;
++                if (OnRoad(x, y)) return false;
+             return true;
+         }
+ 
++        private bool OnRoad(double x, double y)
++        {
++            var bounds = new WorldBounds(x - _rules.RoadMargin, y - _rules.RoadMargin, x + _rules.RoadMargin, y + _rules.RoadMargin);
++            foreach (var index in _roads)
++                if (index.Any(bounds, (x, y, _rules.RoadMargin), static (road, point) =>
++                    RoadGeometry.TryClosest(RoadGeometry.Evaluate(road), point.x, point.y, point.RoadMargin,
++                        out _, out _, out _, out _, out _))) return true;
++            return false;
++        }
++
+         /// <summary>A river, a lake, or the open sea - the page where no land lies (on maps that have land).</summary>
+         public bool IsWater(double x, double y)
+         {
+-            foreach (var river in _rivers)
+-            {
+-                if (!river.Bounds.Intersects(new WorldBounds(x - 1, y - 1, x + 1, y + 1))) continue;
+-                if (RiverGeometry.TryClosest(river, x, y, 0, out _, out _, out _, out _, out _)) return true;
+-                if (river.Channels.Values.Any(g => RiverGeometry.InsideLake(g, x, y))) return true;
+-            }
++            foreach (var index in _rivers)
++                if (index.Any(new WorldBounds(x - 1, y - 1, x + 1, y + 1), (x, y), static (candidate, point) =>
++                {
++                    var river = RiverGeometry.Evaluate(candidate);
++                    if (RiverGeometry.TryClosest(river, point.x, point.y, 0, out _, out _, out _, out _, out _)) return true;
++                    foreach (var channel in river.Channels.Values)
++                        if (RiverGeometry.InsideLake(channel, point.x, point.y)) return true;
++                    return false;
++                })) return true;
+ 
+             return _hasLand && TerrainOrder.LandAt(_document, x, y) is null;
+         }
+diff --git a/src/Map.Core/Editing/RiverEditing.cs b/src/Map.Core/Editing/RiverEditing.cs
+index d1a8dc6..96fc2ec 100644
+--- a/src/Map.Core/Editing/RiverEditing.cs
++++ b/src/Map.Core/Editing/RiverEditing.cs
+@@ -551,18 +551,19 @@ public sealed class RiverCommand : IEditCommand
+         var removed = new[] { (Guid?)_riverId, _absorbed, _additional?.Id }
+             .OfType<Guid>().Distinct().Where(layer.ContainsRiver).ToArray();
+         var added = new[] { _requested?.Id, _additional?.Id }.OfType<Guid>().Distinct().ToArray();
+-        _before = document; _after = WithRivers(document, layer, rivers, removed, added);
++        _before = document; _after = WithRivers(document, layer, rivers, removed, added,
++            new[] { _requested, _additional }.OfType<River>().ToArray());
+         return _after;
+     }
+ 
+     public MapDocument Revert(MapDocument document) => _before ?? throw new InvalidOperationException("Команда реки ещё не выполнена.");
+ 
+     internal static MapDocument WithRivers(MapDocument document, ObjectLayer layer, IReadOnlyList<River> rivers,
+-        IReadOnlyList<Guid>? removed = null, IReadOnlyList<Guid>? added = null)
++        IReadOnlyList<Guid>? removed = null, IReadOnlyList<Guid>? added = null, IReadOnlyList<River>? changed = null)
+     {
+         var layers = document.Layers.ToArray(); var li = Array.FindIndex(layers, l => l.Id == layer.Id);
+         var targetLayer = layer with { Rivers = rivers.ToImmutableArray() }; layers[li] = targetLayer;
+-        if (removed is not null && added is not null) targetLayer.RegisterRiverDelta(layer, removed, added);
++        if (removed is not null && added is not null && changed is not null) targetLayer.RegisterRiverDelta(layer, removed, added, changed);
+         var target = document.WithRevisedLayers(layers);
+         DocumentRevisionIndex.RegisterReplacements(document, target, []); ObjectNameIndex.Share(document, target);
+         ObjectLayerChanges.Register(layer, targetLayer, [], []);
+diff --git a/src/Map.Core/Editing/RoadEditing.cs b/src/Map.Core/Editing/RoadEditing.cs
+index 5f49e5d..142af47 100644
+--- a/src/Map.Core/Editing/RoadEditing.cs
++++ b/src/Map.Core/Editing/RoadEditing.cs
+@@ -438,18 +438,19 @@ public sealed class RoadCommand : IEditCommand
+         var removed = new[] { (Guid?)_roadId, _absorbed, _additional?.Id }
+             .OfType<Guid>().Distinct().Where(layer.ContainsRoad).ToArray();
+         var addedIds = new[] { _requested?.Id, _additional?.Id }.OfType<Guid>().Distinct().ToArray();
+-        _before = document; _after = WithRoads(document, layer, roads, order, removed, addedIds);
++        _before = document; _after = WithRoads(document, layer, roads, order, removed, addedIds,
++            new[] { _requested, _additional }.OfType<Road>().ToArray());
+         return _after;
+     }
+ 
+     public MapDocument Revert(MapDocument document) => _before ?? throw new InvalidOperationException("Команда дороги ещё не выполнена.");
+ 
+     internal static MapDocument WithRoads(MapDocument document, ObjectLayer layer, IReadOnlyList<Road> roads, ImmutableArray<Guid> order,
+-        IReadOnlyList<Guid>? removed = null, IReadOnlyList<Guid>? added = null)
++        IReadOnlyList<Guid>? removed = null, IReadOnlyList<Guid>? added = null, IReadOnlyList<Road>? changed = null)
+     {
+         var layers = document.Layers.ToArray(); var li = Array.FindIndex(layers, l => l.Id == layer.Id);
+         var targetLayer = layer with { Roads = roads.ToImmutableArray(), SurfaceOrder = order }; layers[li] = targetLayer;
+-        if (removed is not null && added is not null) targetLayer.RegisterRoadDelta(layer, removed, added);
++        if (removed is not null && added is not null && changed is not null) targetLayer.RegisterRoadDelta(layer, removed, added, changed);
+         var target = document.WithRevisedLayers(layers);
+         DocumentRevisionIndex.RegisterReplacements(document, target, []); ObjectNameIndex.Share(document, target);
+         ObjectLayerChanges.Register(layer, targetLayer, [], []);
+diff --git a/tests/Map.Core.Tests/Editing/LabelPriorityTests.cs b/tests/Map.Core.Tests/Editing/LabelPriorityTests.cs
+index 2fd8372..663d576 100644
+--- a/tests/Map.Core.Tests/Editing/LabelPriorityTests.cs
++++ b/tests/Map.Core.Tests/Editing/LabelPriorityTests.cs
+@@ -226,6 +226,29 @@ public sealed class LabelPriorityTests
+         }
+     }
+ 
++    [Fact]
++    public void Clearance_bounds_keep_the_original_order_and_boxes_across_chunk_and_layer_boundaries()
++    {
++        var random = new Random(111);
++        var document = Document(
++            new ObjectLayer(LayerId.New(), "first", true, false, 1,
++                Enumerable.Range(0, 800).Select(_ => RandomObject(random)).ToArray()),
++            new ObjectLayer(LayerId.New(), "hidden", false, false, 1, [Label(1, 2, 3, 24)]),
++            new ObjectLayer(LayerId.New(), "last", true, false, 1, [Label(4, 5, 6, 24)]))
++            with { Labels = new() { ClearUnderLabels = true } };
++        void Check(MapDocument current) => Assert.Equal(current.Layers.OfType<ObjectLayer>().Where(l => l.Visible)
++            .SelectMany(l => l.Objects).Where(o => o.Kind == SceneObjectKind.Text && o.Visible && o.Text is not null)
++            .Select(SceneGeometry.BoundsOf), LabelPriority.LabelBounds(current));
++        Check(document);
++        var label = document.Layers.OfType<ObjectLayer>().First().Objects.First(o => o.Kind == SceneObjectKind.Text);
++        var session = new EditingSession(document);
++        session.Execute(new TransformObjectCommand(label, SceneObjectClone.At(label, label.X + 300, label.Y)));
++        Check(session.Document);
++        Assert.True(session.Undo()); Check(session.Document);
++        Assert.True(session.Redo()); Check(session.Document);
++        Assert.Empty(LabelPriority.LabelBounds(document with { Labels = new() }));
++    }
++
+     // Frozen reference: the original production algorithm, including its 4000-label cap.
+     internal static HashSet<ObjectId> Original(MapDocument document, double scale)
+     {
+diff --git a/tests/Map.Core.Tests/Editing/PlacementFeatureIndexTests.cs b/tests/Map.Core.Tests/Editing/PlacementFeatureIndexTests.cs
+new file mode 100644
+index 0000000..5f670c8
+--- /dev/null
++++ b/tests/Map.Core.Tests/Editing/PlacementFeatureIndexTests.cs
+@@ -0,0 +1,122 @@
++using Map.Core.Documents;
++using Map.Core.Editing;
++
++namespace Map.Core.Tests.Editing;
++
++public sealed class PlacementFeatureIndexTests
++{
++    [Fact]
++    public void Indexed_rules_match_the_original_scan_including_lakes_visibility_and_margins()
++    {
++        var river = new River { Channels = [RiverEditor.NewChannel([new(-1500, -1024), new(1600, -1024)], 80)] };
++        var lake = new River { Channels = [RiverEditor.NewChannel(
++            [new(950, 950), new(1400, 950), new(1400, 1400), new(950, 1400)], 20) with { Closed = true }] };
++        var road = RoadEditor.NewRoad([new(-1400, 1024), new(1600, 1024)], 32);
++        var layer = new ObjectLayer(LayerId.New(), "features", true, false, 1, [])
++        {
++            Rivers = [river, lake, RiverEditor.Translate(river, 0, 1000) with { Id = Guid.NewGuid(), Visible = false }],
++            Roads = [road, RoadEditor.Translate(road, 0, -1000) with { Id = Guid.NewGuid(), Visible = false }],
++        };
++        var hidden = layer with { Id = LayerId.New(), Visible = false,
++            Rivers = [RiverEditor.Translate(river, 0, 1800) with { Id = Guid.NewGuid() }], Roads = [] };
++        var document = Document(layer, hidden);
++        DocumentDerivedIndexes.Prepare(document);
++        foreach (var rules in new PlacementAreaRules[]
++        {
++            new() { AvoidWater = true }, new() { OnlyOnWater = true },
++            new() { AvoidRoads = true }, new() { AvoidWater = true, AvoidRoads = true, RoadMargin = 150 },
++            new() { AvoidRoads = true, RoadMargin = 100_000 },
++        })
++        {
++            var indexed = new PlacementAreaRuleCheck(document, rules);
++            for (var y = -1300; y < 1600; y += 73)
++            for (var x = -1600; x < 1800; x += 97)
++            {
++                Assert.Equal(OriginalAllows(document, rules, x, y), indexed.Allows(x, y));
++                var item = new SceneObject(ObjectId.New(), SceneObjectKind.Rectangle, "probe", x, y,
++                    80, 100, 0, "#FFFFFFFF", "#00000000", 0, true, false);
++                var foot = PlacementAreaRuleCheck.Foot(item);
++                var blocked = !OriginalAllows(document, rules, foot.X, foot.Y);
++                if (rules.AvoidWater || rules.AvoidRoads)
++                {
++                    var avoidance = rules with { OnlyOnWater = false };
++                    foreach (var (px, py) in new[] { (x + 16d, y + 95d), (x + 64d, y + 95d),
++                        (x + 16d, y + 55d), (x + 64d, y + 55d), (foot.X, y + 55d), (foot.X, y + 95d) })
++                        blocked |= !OriginalAllows(document, avoidance, px, py);
++                }
++                Assert.Equal(blocked, indexed.Blocks(item));
++            }
++        }
++    }
++
++    [Fact]
++    public void Prepared_feature_edits_update_the_index_and_history_keeps_both_branches()
++    {
++        var river = new River { Channels = [RiverEditor.NewChannel([new(0, 100), new(500, 100)], 40)] };
++        var road = RoadEditor.NewRoad([new(0, 700), new(500, 700)], 40);
++        var layer = new ObjectLayer(LayerId.New(), "features", true, false, 1, []) { Rivers = [river], Roads = [road] };
++        var document = Document(layer);
++        DocumentDerivedIndexes.Prepare(document);
++        var session = new EditingSession(document);
++        session.Execute(new RiverCommand(layer.Id, river.Id, RiverEditor.Translate(river, 0, 1000), "move"));
++        var changed = (ObjectLayer)session.Document.FindLayer(layer.Id)!;
++        Assert.True(changed.PlacementFeaturesPrepared);
++        Assert.Same(layer.PlacementRoads, changed.PlacementRoads);
++        Assert.False(new PlacementAreaRuleCheck(session.Document, new() { AvoidWater = true }).IsWater(200, 100));
++        Assert.True(new PlacementAreaRuleCheck(session.Document, new() { AvoidWater = true }).IsWater(200, 1100));
++        Assert.True(new PlacementAreaRuleCheck(document, new() { AvoidWater = true }).IsWater(200, 100));
++        Assert.True(session.Undo());
++        Assert.True(new PlacementAreaRuleCheck(session.Document, new() { AvoidWater = true }).IsWater(200, 100));
++        Assert.True(session.Redo());
++        session.Execute(new RoadCommand(layer.Id, road.Id, RoadEditor.Translate(road, 0, 1000), "move"));
++        changed = (ObjectLayer)session.Document.FindLayer(layer.Id)!;
++        Assert.True(changed.PlacementFeaturesPrepared);
++        var check = new PlacementAreaRuleCheck(session.Document, new() { AvoidRoads = true });
++        Assert.True(check.Allows(200, 700)); Assert.False(check.Allows(200, 1700));
++        Assert.True(session.Undo());
++        Assert.False(new PlacementAreaRuleCheck(session.Document, new() { AvoidRoads = true }).Allows(200, 700));
++        Assert.True(session.Redo());
++        session.Execute(new RiverCommand(layer.Id, river.Id, RiverEditor.Translate(river, 0, 1000) with { Visible = false }, "hide"));
++        Assert.False(new PlacementAreaRuleCheck(session.Document, new() { AvoidWater = true }).IsWater(200, 1100));
++        Assert.True(session.Undo());
++        Assert.True(new PlacementAreaRuleCheck(session.Document, new() { AvoidWater = true }).IsWater(200, 1100));
++    }
++
++    [Fact]
++    public void Dense_buckets_and_oversized_bounds_derive_without_mutating_the_source()
++    {
++        var items = Enumerable.Range(0, 3000).Select(i => new Box(Guid.NewGuid(), new(0, 0, 10, 10))).ToArray();
++        var huge = new Box(Guid.NewGuid(), new(-100_000, -100_000, 100_000, 100_000));
++        var source = FeatureSpatialIndex<Box>.Build(items.Append(huge), b => b.Id, b => b.Bounds);
++        var moved = items[0] with { Bounds = new(4096, 4096, 4100, 4100) };
++        var target = source.Change([items[0].Id, huge.Id], [moved], b => b.Id, b => b.Bounds);
++        var local = new WorldBounds(0, 0, 1, 1);
++        Assert.True(source.Any(local, items[0].Id, static (b, id) => b.Id == id));
++        Assert.False(target.Any(local, items[0].Id, static (b, id) => b.Id == id));
++        Assert.True(source.Any(local, huge.Id, static (b, id) => b.Id == id));
++        Assert.False(target.Any(local, huge.Id, static (b, id) => b.Id == id));
++        Assert.True(target.Any(new(4096, 4096, 4097, 4097), moved, static (b, expected) => ReferenceEquals(b, expected)));
++        foreach (var item in items.Skip(1))
++            Assert.True(target.Any(local, item.Id, static (b, id) => b.Id == id));
++        Assert.True(target.Any(new(-100_000, -100_000, 100_000, 100_000), moved, static (b, expected) => ReferenceEquals(b, expected)));
++    }
++
++    private sealed record Box(Guid Id, WorldBounds Bounds);
++
++    private static bool OriginalAllows(MapDocument document, PlacementAreaRules rules, double x, double y)
++    {
++        var layers = document.Layers.OfType<ObjectLayer>().Where(l => l.Visible).ToArray();
++        var water = layers.SelectMany(l => l.Rivers).Where(r => r.Visible).Select(r => RiverGeometry.Evaluate(r))
++            .Any(r => r.Bounds.Intersects(new(x - 1, y - 1, x + 1, y + 1))
++                && (RiverGeometry.TryClosest(r, x, y, 0, out _, out _, out _, out _, out _)
++                    || r.Channels.Values.Any(c => RiverGeometry.InsideLake(c, x, y))));
++        if (rules.AvoidWater && water || rules.OnlyOnWater && !water) return false;
++        return !rules.AvoidRoads || !layers.SelectMany(l => l.Roads).Where(r => r.Visible).Select(r => RoadGeometry.Evaluate(r))
++            .Any(r => r.Bounds.Intersects(new(x - rules.RoadMargin, y - rules.RoadMargin, x + rules.RoadMargin, y + rules.RoadMargin))
++                && RoadGeometry.TryClosest(r, x, y, rules.RoadMargin, out _, out _, out _, out _, out _));
++    }
++
++    private static MapDocument Document(params ObjectLayer[] layers) => new(DocumentId.New(), "features", DateTimeOffset.UnixEpoch,
++        new CanvasDefinition(100_000, 100_000, "px", "#FFFFFFFF"),
++        [new BaseColorLayer(LayerId.New(), "base", true, false, 1, "#FFFFFFFF"), .. layers]);
++}
+diff --git a/tests/Map.Core.Tests/HotPathCostGuardTests.cs b/tests/Map.Core.Tests/HotPathCostGuardTests.cs
+index 9af82b0..e2c8c72 100644
+--- a/tests/Map.Core.Tests/HotPathCostGuardTests.cs
++++ b/tests/Map.Core.Tests/HotPathCostGuardTests.cs
+@@ -18,8 +18,6 @@ public sealed class HotPathCostGuardTests : IClassFixture<HotPathCostGuardTests.
+     private readonly Maps _maps;
+     public HotPathCostGuardTests(Maps maps) => _maps = maps;
+     private static readonly WorldBounds View = new(90, 90, 510, 340);
+-    private const string LabelsLinear = "LabelPriority.cs:69-73, LabelBounds scans all objects even with three fixed labels";
+-    private const string RulesLinear = "PlacementAreaRuleCheck.cs:17-27,45-55,80-89, builds arrays and scans all rivers/roads for one local probe";
+     private const string PreviewLinear = "SceneObjectList.cs:90-97,466-480, ReplaceObject preview copies O(N/256) chunk directories";
+ 
+     [Theory]
+@@ -37,10 +35,10 @@ public sealed class HotPathCostGuardTests : IClassFixture<HotPathCostGuardTests.
+     [InlineData("derived-index-delta")]
+     public void Bounded_hot_path(string key) => Compare(key, 200_000, true);
+ 
+-    [Fact(Skip = "O(N): " + LabelsLinear)]
++    [Fact]
+     public void Label_clearance_bounds() => Compare("label-bounds", 200_000, true);
+ 
+-    [Fact(Skip = "O(N): " + RulesLinear)]
++    [Fact]
+     public void Placement_rules_with_many_features() => Compare("placement-features", 200_000, true);
+ 
+     [Fact(Skip = "O(N): " + PreviewLinear)]
+@@ -49,7 +47,7 @@ public sealed class HotPathCostGuardTests : IClassFixture<HotPathCostGuardTests.
+     [EnvironmentFact("MAP_RENDER_GUARDS_AUDIT")]
+     public void Audit_documented_linear_paths()
+     {
+-        foreach (var key in new[] { "label-bounds", "placement-features", "preview-replace" }) Compare(key, 200_000, false);
++        Compare("preview-replace", 200_000, false);
+     }
+ 
+     [EnvironmentFact("MAP_RENDER_GUARDS_HUGE")]
+@@ -169,13 +167,22 @@ public sealed class HotPathCostGuardTests : IClassFixture<HotPathCostGuardTests.
+         internal PlacementArea Area { get; } = new() { Nodes = [new(Guid.NewGuid(), 100, 100), new(Guid.NewGuid(), 400, 100),
+             new(Guid.NewGuid(), 400, 400), new(Guid.NewGuid(), 100, 400)] };
+         private MapDocument? _features;
+-        internal MapDocument Features => _features ??= Document.WithLayer(Layer.Id, _ => Layer with
++        internal MapDocument Features
+         {
+-            Objects = [],
+-            // N total features, half rivers/half roads. Local obstacles are LAST: no early-hit shortcut.
+-            Rivers = [.. Enumerable.Range(1, N / 2 - 1).Select(i => RiverEditor.Translate(River, 8192 + i % 1000 * 48, 8192 + i / 1000 * 48) with { Id = Guid.NewGuid() }), River],
+-            Roads = [.. Enumerable.Range(1, N / 2 - 1).Select(i => RoadEditor.Translate(Road, 8192 + i % 1000 * 48, 8192 + i / 1000 * 48) with { Id = Guid.NewGuid() }), Road],
+-        });
++            get
++            {
++                if (_features is not null) return _features;
++                var features = Document.WithLayer(Layer.Id, _ => Layer with
++                {
++                    Objects = [],
++                    // N total features, half rivers/half roads. Local obstacles are LAST: no early-hit shortcut.
++                    Rivers = [.. Enumerable.Range(1, N / 2 - 1).Select(i => RiverEditor.Translate(River, 8192 + i % 1000 * 48, 8192 + i / 1000 * 48) with { Id = Guid.NewGuid() }), River],
++                    Roads = [.. Enumerable.Range(1, N / 2 - 1).Select(i => RoadEditor.Translate(Road, 8192 + i % 1000 * 48, 8192 + i / 1000 * 48) with { Id = Guid.NewGuid() }), Road],
++                });
++                DocumentDerivedIndexes.Prepare(features);
++                return _features = features;
++            }
++        }
+ 
+         internal Fixture(int n)
+         {
+-- 
+2.50.1 (Apple Git-155)
+
