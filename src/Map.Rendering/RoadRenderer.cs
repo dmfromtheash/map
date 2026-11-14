@@ -36,13 +36,8 @@ public static class RoadRenderer
         ArgumentNullException.ThrowIfNull(layer);
         ArgumentNullException.ThrowIfNull(options);
         if (options.RoadOverrides is not { Count: > 0 } overrides) return layer.Roads;
-        var result = new List<Road>(layer.Roads.Length + 1);
-        foreach (var road in layer.Roads)
-            result.Add(overrides.FirstOrDefault(o => o.Id == road.Id) ?? road);
-        if (options.RoadPreviewLayerId == layer.Id)
-            foreach (var extra in overrides)
-                if (layer.Roads.All(r => r.Id != extra.Id)) result.Add(extra);
-        return result;
+        return new ResolvedFeatures<Road>(layer.Roads, overrides,
+            options.RoadPreviewLayerId == layer.Id, layer.ContainsRoad, static r => r.Id);
     }
 
     public static void DrawRoads(SKCanvas canvas, IReadOnlyList<Road> roads, WorldBounds view, RenderOptions options)
