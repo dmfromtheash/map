@@ -76,14 +76,14 @@ public sealed partial class SceneObjectList
                 if (buckets.TryGetValue(name, out var next))
                 {
                     var first = next.First();
-                    ordered.Add(new(first.Key, first.Value, list._chunks.ChunkAtKey(first.Key)[first.Value].Stamp!.AssetSha256));
+                    ordered.Add(new(first.Key, first.Value, list._legendOrder.ChunkAtKey(first.Key)[first.Value].Stamp!.AssetSha256));
                 }
             _buckets = buckets.ToImmutable();
             _ordered = ordered.ToImmutable();
 
             void Change(SceneObject[] chunk, bool add)
             {
-                var key = (add ? list._chunks : source!._chunks).KeyOf(chunk);
+                var key = (add ? list._legendOrder : source!._legendOrder).KeyOf(chunk);
                 var hashes = VisibleChunkAssets.GetValue(chunk, static items =>
                 {
                     var result = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);

@@ -91,6 +91,7 @@ public sealed partial class SceneObjectList : IReadOnlyList<SceneObject>
         Count = count;
         if (_chunks.ObjectCount != count)
             throw new ArgumentException("Scene object chunks do not match their declared count.", nameof(chunks));
+        _legendOrder = new(this, null, null);
         (_visibleLegend, _namedLegend) = DeriveLegend(null, null);
     }
 
@@ -98,6 +99,7 @@ public sealed partial class SceneObjectList : IReadOnlyList<SceneObject>
     {
         _chunks = chunks;
         Count = chunks.ObjectCount;
+        _legendOrder = new(this, source, rewrite);
         (_visibleLegend, _namedLegend) = DeriveLegend(source, rewrite);
         if ((source._identitySlots ?? (source.Count == 0 ? EmptyIdentities : null)) is { } slots) _identitySlots = Derive(slots, rewrite);
         else if (source._textIdentitySlots is { } textSlots) _textIdentitySlots = Derive(textSlots, rewrite, textOnly: true);
