@@ -33,9 +33,33 @@ public sealed partial class ZoomAssetsApplication
             throw new ArgumentException("FPS grid requires original library, style off, no matrix functions.");
         var root = System.Environment.GetEnvironmentVariable("MAP_DRIVE_LIBRARY_ROOTS")
             ?? throw new InvalidOperationException("Set MAP_DRIVE_LIBRARY_ROOTS to the owner's library.");
-        _catalog.SetMounts(Directory.GetDirectories(root).Where(p => File.Exists(Path.Combine(p, "catalog.json"))).Order().ToArray());
+        var mounts = Directory.GetDirectories(root).Where(p => File.Exists(Path.Combine(p, "catalog.json"))).Order().ToArray();
+        if (Environment.GetEnvironmentVariable("MAP_PERF_CATALOGS") is { } catalogNames)
+        {
+            var names = catalogNames.Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            mounts = mounts.Where(path => names.Contains(Path.GetFileName(path))).ToArray();
+            if (names.Count == 0 || mounts.Length != names.Count)
+                throw new ArgumentException("MAP_PERF_CATALOGS must name existing direct library catalogs, separated by semicolons.");
+        }
+        _catalog.SetMounts(mounts);
         var records = _catalog.Records.OrderBy(r => r.Sha256, StringComparer.Ordinal).ToArray();
         if (records.Length == 0) throw new InvalidOperationException("No mounted images.");
+        if (Environment.GetEnvironmentVariable("MAP_PERF_ASSET_SHA_FILE") is { } assetSetPath)
+        {
+            // Require the entire mounted set: new assets must not silently change the
+            // random shuffle, layout, memory baseline or measured cache.
+            var expected = File.ReadAllLines(assetSetPath).Select(line => line.Trim().ToLowerInvariant()).ToArray();
+            if (expected.Length == 0 || expected.Any(sha => sha.Length != 64 || sha.Any(c => !char.IsAsciiHexDigit(c)))
+                || expected.Distinct(StringComparer.Ordinal).Count() != expected.Length)
+                throw new ArgumentException("MAP_PERF_ASSET_SHA_FILE requires one unique SHA-256 per line.");
+            if (!expected.Order(StringComparer.Ordinal).SequenceEqual(records.Select(record => record.Sha256), StringComparer.Ordinal))
+                throw new InvalidOperationException("Mounted asset set changed: expected " + expected.Length + ", actual " + records.Length + ". Start a separate series.");
+            _report.Environment["asset-set-file"] = Path.GetFullPath(assetSetPath);
+        }
+        _report.Environment["catalogs"] = string.Join(";", mounts.Select(Path.GetFileName));
+        _report.Environment["asset-set-sha256"] = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(string.Join('\n', records.Select(record => record.Sha256)))));
         records = await PreparePortableFixture(records);
         var kind = System.Environment.GetEnvironmentVariable("MAP_MILLION_CASE") ?? "giant";
         var count = Options.ObjectCount;
