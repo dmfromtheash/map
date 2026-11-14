@@ -467,7 +467,14 @@ public sealed partial class SceneObjectList : IReadOnlyList<SceneObject>
             sourceKeys[i] = key + passed;
         }
         if (removed.Count == 0 && ordered.All(p => p.Value.Count == 0)) return this;
-        if (Count == 0) return From(ordered.SelectMany(p => p.Value).ToArray());
+        if (Count == 0)
+        {
+            var items = ordered.SelectMany(p => p.Value).ToArray();
+            var initialChunks = new List<SceneObject[]>();
+            var initialRewrite = new Rewrite();
+            AddChunks(initialChunks, initialRewrite, items, [new Segment(null, 0, items.Length, 0)]);
+            return new SceneObjectList(ChunkDirectory.From([.. initialChunks]), this, initialRewrite);
+        }
 
         var touched = new SortedSet<int>();
         for (var i = 0; i < removed.Count;)
@@ -611,7 +618,6 @@ public sealed partial class SceneObjectList : IReadOnlyList<SceneObject>
         if (index < 0 || index > Count) throw new ArgumentOutOfRangeException(nameof(index));
         if (removeCount < 0 || removeCount > Count - index) throw new ArgumentOutOfRangeException(nameof(removeCount));
         if (removeCount == 0 && inserted.Count == 0) return this;
-        if (Count == 0) return From(inserted);
         return SplicePositions(Enumerable.Range(index, removeCount).ToArray(),
             new Dictionary<int, IReadOnlyList<SceneObject>> { [index] = inserted });
     }
