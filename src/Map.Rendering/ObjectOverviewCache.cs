@@ -47,6 +47,8 @@ public sealed class ObjectOverviewCache : IDisposable
     private int? _ownerThread;
     private bool _frameOpen;
     private readonly HashSet<Key> _framePins = [];
+    /// <summary>Older-zoom chunks drawn in the last frame in place of a current chunk that was not ready.</summary>
+    private readonly HashSet<Key> _standIns = [];
     private readonly List<SKImage> _retired = [];
     private sealed record DetailView(int Zoom, int Left, int Top, int Right, int Bottom, long Frame);
     private readonly Dictionary<LayerId, DetailView> _refiningViews = [];
@@ -209,6 +211,7 @@ public sealed class ObjectOverviewCache : IDisposable
         {
             Touch(entry);
             if (_frameOpen) _framePins.Add(key);
+            if (key.Logical.ZoomBucket != zoom) _standIns.Add(key);
             variant = previous;
             result = new(entry.Image, true, false);
             return true;
@@ -240,6 +243,7 @@ public sealed class ObjectOverviewCache : IDisposable
         _adoptions = 0;
         _adoptionMoving = false;
         _framePins.Clear();
+        _standIns.Clear();
         // A neighbouring level can serve this frame and be evicted by the new detail it
         // builds. Keep the page fallback available too, even before that frame needs it.
         foreach (var pair in _entries)
@@ -277,6 +281,9 @@ public sealed class ObjectOverviewCache : IDisposable
     }
 
     public int Count => _entries.Count;
+    /// <summary>Entries kept as page/seed fallbacks and their bytes (diagnostics).</summary>
+    internal (int Count, long Bytes) FallbackEntries =>
+        (_entries.Values.Count(entry => entry.Fallback), _entries.Values.Where(entry => entry.Fallback).Sum(entry => entry.Bytes));
     /// <summary>Frames begun on this cache; background detail rasters nobody asked for in the last frame are cancelled.</summary>
     internal long FrameNumber => _frame;
     public long Bytes { get; private set; }
@@ -435,8 +442,27 @@ public sealed class ObjectOverviewCache : IDisposable
             // Coarse page tiles cover cold areas while detail arrives. Evicting them before
             // ordinary detail forces another whole-page build in the next pan/zoom frame.
             // This is only an eviction preference: both limits still bound the entire cache.
-            Remove(eligible.MinBy(pair => (pair.Value.Fallback, pair.Value.LastUsed)).Key, eviction: true);
+            // But what the last frame drew comes first: its own chunks, then the older levels and
+            // seeds that stood in for its gaps. Seeds of levels the view has left must never crowd
+            // out the current view, or it evicts its own chunks every frame and never completes
+            // (Chromium's tile manager frees lower-priority tiles for NOW tiles, never the reverse;
+            // Leaflet keeps a parent tile only while a current tile under it is still loading).
+            Remove(eligible.MinBy(pair => (EvictionRank(pair.Key, pair.Value), pair.Value.LastUsed)).Key, eviction: true);
         }
+    }
+
+    /// <summary>
+    /// Lower ranks go first. 0 - an entry the last frame did not use; 1 - such a page/seed fallback;
+    /// 2 - an older overview level the last frame drew in place of a chunk still on its way; 3 - the last
+    /// frame's own tiles and chunks; 4 - a seed or fallback the last frame drew or prepared (the view
+    /// completes only with its seed kept, so inside the working set the old preference stays). Without
+    /// frames (no <see cref="BeginFrame"/> yet) only the fallback preference applies, as before.
+    /// </summary>
+    private int EvictionRank(Key key, Entry entry)
+    {
+        var used = _frame > 0 && entry.LastFrame == _frame;
+        if (!used) return entry.Fallback ? 1 : 0;
+        return entry.Fallback ? 4 : _standIns.Contains(key) ? 2 : 3;
     }
 
     private bool Remove(Key key, bool eviction)
