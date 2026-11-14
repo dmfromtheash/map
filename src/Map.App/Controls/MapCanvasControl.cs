@@ -240,6 +240,11 @@ public sealed partial class MapCanvasControl : Control
     /// </summary>
     private static readonly bool GestureBudgetDisabled = Environment.GetEnvironmentVariable("MAP_PERF_GESTURE_BUDGET") == "0";
     public static double LastFrameGpuFlushMilliseconds { get; private set; }
+    /// <summary>GPU time of a recent canvas frame from the asynchronous timer query (DEC-111); null when unavailable.</summary>
+    public static double? LastFrameGpuTimerMilliseconds { get; private set; }
+    private static readonly GpuFrameTimer GpuTimer = new();
+    /// <summary>Whether the GPU timer works here, and how many results it read / dropped.</summary>
+    public static (bool Available, long Completed, long Dropped) GpuTimerStatistics => (GpuTimer.Available, GpuTimer.Completed, GpuTimer.Dropped);
     /// <summary>Canvas work including resource locking, image adoption and GPU completion;
     /// excludes diagnostic screenshot readback and monitor scan-out.</summary>
     public static double LastFrameWorkMilliseconds { get; private set; }
@@ -824,6 +829,8 @@ public sealed partial class MapCanvasControl : Control
                 objectCache.BeginFrame(); atlasCache.BeginFrame();
                 overviewFrame = true;
                 using var lease = feature.Lease();
+                // DEC-111 sensor: GPU time of this frame, read asynchronously a few frames later.
+                if (!MeasureGpuFlush) GpuTimer.Begin(lease);
                 // One Avalonia GPU context is shared by the windows. Bound its reusable texture
                 // cache; active frame resources remain owned by the borrowed lease/driver.
                 if (lease.GrContext is { } gpu && gpu.GetResourceCacheLimit() != GpuResourceCacheBytes)
@@ -1144,6 +1151,8 @@ public sealed partial class MapCanvasControl : Control
             }
 
             canvas.Restore();
+            GpuTimer.End(lease, lease.GrContext);
+            LastFrameGpuTimerMilliseconds = GpuTimer.LastMilliseconds;
             LastFrameWorkMilliseconds = Stopwatch.GetElapsedTime(frameStarted).TotalMilliseconds;
             if (lease.GrContext is not null && lease.SkSurface is { } nativeSurface) captureFrame(nativeSurface, canvas);
             // After the capture: the smokes compare map pixels, and the readout is not the map.
