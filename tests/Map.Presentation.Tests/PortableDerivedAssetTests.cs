@@ -61,14 +61,16 @@ public sealed class PortableDerivedAssetTests : IDisposable
                 else bytes = bytes[..^3];
                 File.WriteAllBytes(path, bytes);
             }
-            Assert.Equal(state == "current", store.HasCurrentPortable(sha));
+            // A touched date with the same bytes stays current: portable files are matched by
+            // path, length and verified content hash, so a copy to another machine is not rebuilt.
+            Assert.Equal(state is "current" or "source-time", store.HasCurrentPortable(sha));
             Assert.False(store.HasCurrentPortable(new string('0', 64)));
             Assert.Equal(0, store.Failures);
             await catalog.FlushMetadataAsync();
         }
         var before = File.Exists(path) ? File.ReadAllBytes(path) : null;
         var written = File.GetLastWriteTimeUtc(path);
-        var current = state == "current";
+        var current = state is "current" or "source-time";
         var dry = await RunProbe(root, dryRun: true);
         Assert.Equal(current ? 0 : 1, dry.GetProperty("built").GetInt32());
         Assert.Equal(current ? 1 : 0, dry.GetProperty("skipped").GetInt32());
