@@ -26,18 +26,9 @@ public sealed class EditCostGuardTests(EditCostGuardTests.Maps maps) : IClassFix
     private static readonly string OtherHash = new('b', 64);
     private sealed record Case(string Key, Type Type, Func<Fixture, IEditCommand> Create, string? Linear = null, string State = "ready");
 
-    private static readonly HashSet<string> ChunkDirectory =
-    [
-        "AddObjectCommand", "TransformObjectCommand", "PasteCompositionCommand", "DeleteObjectsCommand/singleton",
-        "RegionLabelFollowCommand", "DecorationRefreshCommand", "SetMapScaleCommand",
-    ];
-
     private static Case C<T>(Func<Fixture, T> create, string? suffix = null, string? linear = null, string state = "ready") where T : IEditCommand
     {
         var key = typeof(T).Name + (suffix is null ? "" : "/" + suffix);
-        linear ??= ChunkDirectory.Contains(key)
-            ? "SceneObjectList.cs:90-97,466: copies chunk directories (O(N/256)); allocated-byte ratio exceeds 3"
-            : null;
         return new(key, typeof(T), f => create(f), linear, state);
     }
 
@@ -46,18 +37,15 @@ public sealed class EditCostGuardTests(EditCostGuardTests.Maps maps) : IClassFix
     [
         C(f => new AddObjectCommand(f.Layer.Id, f.Added[0])),
         C(f => new AddObjectsCommand(f.Layer.Id, f.Added)),
-        C(f => new AddObjectsCommand(f.Layer.Id, f.Added), "legend",
-            linear: "EditingSession.cs:245 -> MapDecorations.cs:84: legend refresh scans every stamp on every Execute", state: "legend"),
-        C(f => new AddObjectsCommand(f.Layer.Id, f.Added), "append-limit",
-            linear: "DocumentRevisionIndex.cs:479: after 256 appends the next lookup rebuilds the full root", state: "append-limit"),
+        C(f => new AddObjectsCommand(f.Layer.Id, f.Added), "legend", state: "legend"),
+        C(f => new AddObjectsCommand(f.Layer.Id, f.Added), "append-limit", state: "append-limit"),
         C(f => new PlaceAssetObjectsCommand(f.Layer.Id, Asset(OtherHash), f.Added)),
         C(f => new PasteObjectsCommand(f.Layer.Id, f.Added, [Asset(OtherHash)]), linear: "Commands.cs:328 filters every object on Undo"),
         C(f => new ReplaceStampAssetCommand(f.Selected[0], Asset(OtherHash))),
         C(f => new UpdateStampStyleWithAssetCommand(f.Selected[0], f.Selected[0].Stamp! with
             { MaskAssetSha256 = OtherHash, ClipMaskEnabled = true }, Asset(OtherHash))),
         C(f => new ReplaceObjectsCommand(f.Selected, f.Moved, "move 10"), "move"),
-        C(f => new ReplaceObjectsCommand(f.Selected, f.Moved, "move 10"), "overlay-limit",
-            linear: "DocumentRevisionIndex.cs:384-387: after 1024 overrides on a map without owners the full index is rebuilt", state: "overlay-limit"),
+        C(f => new ReplaceObjectsCommand(f.Selected, f.Moved, "move 10"), "overlay-limit", state: "overlay-limit"),
         C(f => new ReplaceObjectsCommand(f.Selected, [.. f.Selected.Select(o => o with { Name = o.Name + " renamed" })], "rename 10"), "rename"),
         C(f => new ReplaceObjectsCommand(f.Selected, [.. f.Selected.Select(o => o with { ObjectOpacity = .5 })], "style 10"), "style"),
         C(f => new TransformObjectCommand(f.Selected[0], f.Moved[0])),
@@ -81,7 +69,7 @@ public sealed class EditCostGuardTests(EditCostGuardTests.Maps maps) : IClassFix
         C(f => UpdateLayerCommand.SetBlend(f.Layer, "Multiply"), "blend"),
         C(f => UpdateLayerCommand.Replace(f.Layer, f.Layer with { Name = "generation metadata" }, "apply"), "replace"),
         C(f => (UpdateLayerCommand)ControlledAreaGeneration.Create(f.Document, f.Layer.Id, f.Area.Id, CancellationToken.None),
-            "controlled-area", linear: "ControlledAreaGeneration.cs:23 -> UpdateLayerCommand.Replace -> WithLayers: scans/copies all stamps for one area"),
+            "controlled-area"),
         C(f => new BrushStrokeCommand(f.Brush.Id, f.EmptyTiles, f.RgbaTiles, "stroke")),
         C(f => new MaskStrokeCommand(f.Layer.Id, f.EmptyTiles, f.MaskTiles)),
         C(f => UpdateMaskCommand.SetEnabled(f.Layer, false)),
@@ -173,7 +161,8 @@ public sealed class EditCostGuardTests(EditCostGuardTests.Maps maps) : IClassFix
         Assert.Equal(actual.OrderBy(t => t.Name), Cases.Select(c => c.Type).Distinct().OrderBy(t => t.Name));
         Assert.Equal(Cases.Length, Cases.Select(c => c.Key).Distinct().Count());
         Assert.Equal(Cases.Where(c => c.Linear is not null).Select(c => "Known_" + c.Key.Replace('/', '_').Replace('-', '_')).Order(),
-            typeof(EditCostGuardTests).GetMethods().Where(m => m.Name.StartsWith("Known_", StringComparison.Ordinal)).Select(m => m.Name).Order());
+            typeof(EditCostGuardTests).GetMethods().Where(m => m.Name.StartsWith("Known_", StringComparison.Ordinal)
+                && m.GetCustomAttributes(typeof(FactAttribute), true).OfType<FactAttribute>().Any(a => a.Skip is not null)).Select(m => m.Name).Order());
         foreach (var c in Cases) Console.WriteLine($"EDIT_CASE|{c.Key}|{c.Type.Name}|{c.Linear ?? "bounded"}");
     }
 
@@ -186,13 +175,15 @@ public sealed class EditCostGuardTests(EditCostGuardTests.Maps maps) : IClassFix
     public void Prepared_indexes_follow_execute_undo_redo_without_full_rebuild(string key)
     {
         var f = maps.Large;
-        var session = new EditingSession(f.Document);
+        var c = Find(key);
+        var original = Original(c, f);
+        var session = new EditingSession(original);
         session.SetSelection(f.Ids);
         var roots = Roots();
         var identities = SceneObjectList.IdentityRootObjects;
         var enumerated = SceneObjectList.EnumeratedOnThisThread;
-        session.Execute(Find(key).Create(f));
-        PrepareAfter(f.Document, session.Document);
+        session.Execute(c.Create(f));
+        PrepareAfter(original, session.Document);
         var after = session.Document;
         Assert.True(session.Undo());
         PrepareAfter(after, session.Document);
@@ -275,25 +266,25 @@ public sealed class EditCostGuardTests(EditCostGuardTests.Maps maps) : IClassFix
 
     // Each documented violation has its own skipped Fact below, so xUnit discovery lists ALL
     // commands even though a skipped Theory would never enumerate its MemberData.
-    [Fact(Skip = "O(N): SceneObjectList.cs:90-97,466: copies chunk directories (O(N/256)); allocated-byte ratio exceeds 3")]
+    [Fact]
     public void Known_AddObjectCommand() => Compare(Find("AddObjectCommand"), maps.Small, maps.Large, enforce: true);
 
-    [Fact(Skip = "O(N): EditingSession.cs:245 -> MapDecorations.cs:84: legend refresh scans every stamp on every Execute")]
+    [Fact]
     public void Known_AddObjectsCommand_legend() => Compare(Find("AddObjectsCommand/legend"), maps.Small, maps.Large, enforce: true);
 
     [Fact(Skip = "O(N): Commands.cs:328 filters every object on Undo")]
     public void Known_PasteObjectsCommand() => Compare(Find("PasteObjectsCommand"), maps.Small, maps.Large, enforce: true);
 
-    [Fact(Skip = "O(N): SceneObjectList.cs:90-97,466: copies chunk directories (O(N/256)); allocated-byte ratio exceeds 3")]
+    [Fact]
     public void Known_TransformObjectCommand() => Compare(Find("TransformObjectCommand"), maps.Small, maps.Large, enforce: true);
 
-    [Fact(Skip = "O(N): SceneObjectList.cs:90-97,466: copies chunk directories (O(N/256)); allocated-byte ratio exceeds 3")]
+    [Fact]
     public void Known_DeleteObjectsCommand_singleton() => Compare(Find("DeleteObjectsCommand/singleton"), maps.Small, maps.Large, enforce: true);
 
     [Fact(Skip = "O(N): Commands.cs:553,573 captures and rebuilds the entire layer for a two-object swap")]
     public void Known_ReorderObjectsCommand() => Compare(Find("ReorderObjectsCommand"), maps.Small, maps.Large, enforce: true);
 
-    [Fact(Skip = "O(N): ControlledAreaGeneration.cs:23 -> UpdateLayerCommand.Replace -> WithLayers: scans/copies all stamps for one area")]
+    [Fact]
     public void Known_UpdateLayerCommand_controlled_area() => Compare(Find("UpdateLayerCommand/controlled-area"), maps.Small, maps.Large, enforce: true);
 
     [Fact(Skip = "O(N): VectorEditing.cs:22,35 copies and filters the whole layer")]
@@ -305,25 +296,25 @@ public sealed class EditCostGuardTests(EditCostGuardTests.Maps maps) : IClassFix
     [Fact(Skip = "O(N): Compositions.cs:163-168 scans/copies the whole layer")]
     public void Known_ReplaceObjectsWithCompositionCommand() => Compare(Find("ReplaceObjectsWithCompositionCommand"), maps.Small, maps.Large, enforce: true);
 
-    [Fact(Skip = "O(N): SceneObjectList.cs:90-97,466: copies chunk directories (O(N/256)); allocated-byte ratio exceeds 3")]
+    [Fact]
     public void Known_PasteCompositionCommand() => Compare(Find("PasteCompositionCommand"), maps.Small, maps.Large, enforce: true);
 
-    [Fact(Skip = "O(N): SceneObjectList.cs:90-97,466: copies chunk directories (O(N/256)); allocated-byte ratio exceeds 3")]
+    [Fact]
     public void Known_RegionLabelFollowCommand() => Compare(Find("RegionLabelFollowCommand"), maps.Small, maps.Large, enforce: true);
 
-    [Fact(Skip = "O(N): SceneObjectList.cs:90-97,466: copies chunk directories (O(N/256)); allocated-byte ratio exceeds 3")]
+    [Fact]
     public void Known_DecorationRefreshCommand() => Compare(Find("DecorationRefreshCommand"), maps.Small, maps.Large, enforce: true);
 
-    [Fact(Skip = "O(N): SceneObjectList.cs:90-97,466: copies chunk directories (O(N/256)); allocated-byte ratio exceeds 3")]
+    [Fact]
     public void Known_SetMapScaleCommand() => Compare(Find("SetMapScaleCommand"), maps.Small, maps.Large, enforce: true);
 
     [Fact(Skip = "O(N): ChangePackages.cs:222 -> WithLayers: the big layer arrives as another storage; its 200k objects exceed the layer-delta bound (MapDocument.MaxDeltaObjects) and take the whole-document validation")]
     public void Known_ApplyChangePackageCommand() => Compare(Find("ApplyChangePackageCommand"), maps.Small, maps.Large, enforce: true);
 
-    [Fact(Skip = "O(N): DocumentRevisionIndex.cs:479: after 256 appends the next lookup rebuilds the full root")]
+    [Fact]
     public void Known_AddObjectsCommand_append_limit() => Compare(Find("AddObjectsCommand/append-limit"), maps.Small, maps.Large, enforce: true);
 
-    [Fact(Skip = "O(N): DocumentRevisionIndex.cs:384-387: after 1024 overrides on a map without owners the full index is rebuilt")]
+    [Fact]
     public void Known_ReplaceObjectsCommand_overlay_limit() => Compare(Find("ReplaceObjectsCommand/overlay-limit"), maps.Small, maps.Large, enforce: true);
 
 
@@ -385,13 +376,7 @@ public sealed class EditCostGuardTests(EditCostGuardTests.Maps maps) : IClassFix
     {
         // Session allocation and a selected set of ten are fixed; include factory cost (not fixture
         // construction) so scans in constructors, e.g. reorder/composition, remain observable.
-        var original = c.State switch
-        {
-            "legend" => f.LegendDocument,
-            "append-limit" => f.AppendLimitDocument,
-            "overlay-limit" => f.OverlayLimitDocument,
-            _ => f.Document,
-        };
+        var original = Original(c, f);
         var session = new EditingSession(original);
         session.SetSelection(f.Ids);
         var allocated = GC.GetAllocatedBytesForCurrentThread();
@@ -418,6 +403,14 @@ public sealed class EditCostGuardTests(EditCostGuardTests.Maps maps) : IClassFix
         }
         return new(elapsed, bytes);
     }
+
+    private static MapDocument Original(Case c, Fixture f) => c.State switch
+    {
+        "legend" => f.LegendDocument,
+        "append-limit" => f.AppendLimitDocument,
+        "overlay-limit" => f.OverlayLimitDocument,
+        _ => f.Document,
+    };
 
     private static SceneObject? FindInLayers(MapDocument document, ObjectId id)
     {

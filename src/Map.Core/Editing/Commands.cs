@@ -1082,22 +1082,27 @@ public sealed class ReorderLayerCommand(LayerId layerId, bool up) : IEditCommand
 /// <summary>Rename / visibility / lock / opacity / colour: one small reversible property change.</summary>
 public sealed class UpdateLayerCommand : IEditCommand
 {
+    private readonly IEditCommand? _delta;
     private readonly LayerId _layerId;
     private readonly Func<MapLayer, MapLayer> _forward;
     private readonly Func<MapLayer, MapLayer> _backward;
 
     private UpdateLayerCommand(
-        string name, LayerId layerId, Func<MapLayer, MapLayer> forward, Func<MapLayer, MapLayer> backward)
+        string name, LayerId layerId, Func<MapLayer, MapLayer> forward, Func<MapLayer, MapLayer> backward, IEditCommand? delta = null)
     {
         Name = name;
         _layerId = layerId;
         _forward = forward;
         _backward = backward;
+        _delta = delta;
     }
 
     public string Name { get; }
 
-    public long? MeasuredWorkingBytes => EditCost.BaseBytes;
+    public long? MeasuredWorkingBytes => _delta?.MeasuredWorkingBytes ?? EditCost.BaseBytes;
+
+    internal static UpdateLayerCommand FromDelta(LayerId layerId, IEditCommand delta) =>
+        new(delta.Name, layerId, l => l, l => l, delta);
 
     public static UpdateLayerCommand Rename(MapLayer layer, string newName)
     {
@@ -1236,9 +1241,9 @@ public sealed class UpdateLayerCommand : IEditCommand
             _ => throw new InvalidOperationException($"Unknown layer type {layer.GetType().Name}."),
         };
 
-    public MapDocument Apply(MapDocument document) => document.WithLayer(_layerId, _forward);
+    public MapDocument Apply(MapDocument document) => _delta is not null ? _delta.Apply(document) : document.WithLayer(_layerId, _forward);
 
-    public MapDocument Revert(MapDocument document) => document.WithLayer(_layerId, _backward);
+    public MapDocument Revert(MapDocument document) => _delta is not null ? _delta.Revert(document) : document.WithLayer(_layerId, _backward);
 }
 
 /// <summary>Duplicates a layer (fresh ids) right above the original.</summary>
@@ -1447,7 +1452,7 @@ public static class DocumentEditor
         var targetLayer = source with { Objects = source.ObjectStorage.RemovePositions(removed) };
         layers[layerIndex] = targetLayer;
         var target = document.WithRevisedLayers(layers);
-        DocumentRevisionIndex.RegisterRemoval(document, target, layerId, removed.Count);
+        DocumentRevisionIndex.RegisterRemoval(document, target, layerId, removed.Select(i => source.Objects[i]).ToArray());
         ObjectNameIndex.Register(document, target, removed.Select(i => source.Objects[i]), []);
         ObjectLayerChanges.Register(source, targetLayer, [.. removed], [], orderCompacted: true);
         return target;

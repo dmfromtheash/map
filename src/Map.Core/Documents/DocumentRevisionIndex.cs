@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Runtime.CompilerServices;
 
 namespace Map.Core.Documents;
@@ -11,7 +12,7 @@ public readonly record struct DocumentObjectLocation(
 
 /// <summary>
 /// Revision-local derived lookup. A loaded/constructed snapshot builds a full index once. A
-/// replacement-only revision shares that root and overlays only the changed object locations;
+/// child revision shares that root and persistent trees of changed/appended object locations;
 /// nothing here participates in document equality or serialization.
 /// </summary>
 /// <remarks>
@@ -22,8 +23,6 @@ public readonly record struct DocumentObjectLocation(
 /// </remarks>
 public sealed class DocumentRevisionIndex
 {
-    private const int MaxOverlayObjects = 1_024;
-
     /// <summary>
     /// Carries the index to a revision whose layers keep the source's ids, order and object
     /// storage (only layer properties, rivers, masks or tiles differ). A retargeted copy, so that
@@ -35,7 +34,6 @@ public sealed class DocumentRevisionIndex
         Publish(target, index.Retarget(target.Layers));
     }
 
-    private const int MaxAppendDepth = 256;
     private static readonly ConditionalWeakTable<IReadOnlyList<MapLayer>, DocumentRevisionIndex> Cache = [];
 
     // A key that already has an index keeps it: both describe the same immutable layer list.
@@ -51,10 +49,10 @@ public sealed class DocumentRevisionIndex
     private readonly DocumentRevisionIndex _root;
     private readonly IReadOnlyDictionary<ObjectId, int> _rootPositions;
     private readonly IReadOnlyList<DocumentObjectLocation> _rootLocations;
-    private readonly IReadOnlyDictionary<Guid, IReadOnlyList<ObjectId>> _rootGroups;
+    private readonly ImmutableDictionary<Guid, ImmutableHashSet<ObjectId>> _groups;
     private readonly IReadOnlyDictionary<IdentityKey, ObjectId> _rootIdentities;
-    private readonly Dictionary<ObjectId, DocumentObjectLocation> _overrides;
-    private readonly IReadOnlyDictionary<IdentityKey, ObjectId> _overrideIdentities;
+    private readonly ImmutableDictionary<ObjectId, DocumentObjectLocation> _overrides;
+    private readonly ImmutableDictionary<IdentityKey, ObjectId> _overrideIdentities;
     private readonly AppendSegment? _appendTail;
     private readonly int _appendedCount;
     private readonly int _appendDepth;
@@ -123,13 +121,13 @@ public sealed class DocumentRevisionIndex
 
         _rootPositions = positions;
         _rootLocations = locations;
-        _rootGroups = groups.ToDictionary(
+        _groups = groups.ToImmutableDictionary(
             pair => pair.Key,
-            pair => (IReadOnlyList<ObjectId>)pair.Value);
+            pair => pair.Value.ToImmutableHashSet());
         _rootIdentities = identities;
         _seenLayers = [.. documentLayers.Select(layer => layer.Id)];
         _overrides = [];
-        _overrideIdentities = new Dictionary<IdentityKey, ObjectId>();
+        _overrideIdentities = ImmutableDictionary<IdentityKey, ObjectId>.Empty;
         _appendTail = null;
         _appendedCount = 0;
         _appendDepth = 0;
@@ -138,17 +136,18 @@ public sealed class DocumentRevisionIndex
     private DocumentRevisionIndex(
         IReadOnlyList<MapLayer> document,
         DocumentRevisionIndex root,
-        Dictionary<ObjectId, DocumentObjectLocation> overrides,
-        IReadOnlyDictionary<IdentityKey, ObjectId> overrideIdentities,
+        ImmutableDictionary<ObjectId, DocumentObjectLocation> overrides,
+        ImmutableDictionary<IdentityKey, ObjectId> overrideIdentities,
         AppendSegment? appendTail,
         int appendedCount,
-        int appendDepth)
+        int appendDepth,
+        ImmutableDictionary<Guid, ImmutableHashSet<ObjectId>> groups)
     {
         _layers = document;
         _root = root;
         _rootPositions = root._rootPositions;
         _rootLocations = root._rootLocations;
-        _rootGroups = root._rootGroups;
+        _groups = groups;
         _rootIdentities = root._rootIdentities;
         _overrides = overrides;
         _overrideIdentities = overrideIdentities;
@@ -159,7 +158,7 @@ public sealed class DocumentRevisionIndex
 
     /// <summary>The same stores over another layer list (same ids, order and object storage).</summary>
     private DocumentRevisionIndex Retarget(IReadOnlyList<MapLayer> layers) =>
-        new(layers, _root, _overrides, _overrideIdentities, _appendTail, _appendedCount, _appendDepth)
+        new(layers, _root, _overrides, _overrideIdentities, _appendTail, _appendedCount, _appendDepth, _groups)
         { _structuralLayers = _structuralLayers, _layerPositions = _layerPositions, _seenLayers = _seenLayers };
 
     public static DocumentRevisionIndex For(MapDocument document)
@@ -187,23 +186,22 @@ public sealed class DocumentRevisionIndex
 
     public int OverlayObjectCount => _overrides.Count;
 
-    /// <summary>Append segments chained over the root. Diagnostics and tests only.</summary>
+    /// <summary>Append deltas registered since the root; no linked lookup chain. Diagnostics only.</summary>
     internal int AppendDepth => _appendDepth;
+    internal int AppendedObjectCount => _appendTail?.LocationsById.Count ?? 0;
 
     public bool TryFind(ObjectId id, out DocumentObjectLocation location) => TryLocate(id, out location, out _);
 
     /// <summary>
-    /// Walks the stored locations newest store first. A location on a structurally changed layer
+    /// Reads overrides, the persistent append lookup and the root. A location on a structurally changed layer
     /// is checked against that layer's identity slots; when the object has left it (deleted, or
     /// moved to another layer) the walk continues to the older stores instead of giving up.
     /// </summary>
     private bool TryLocate(ObjectId id, out DocumentObjectLocation location, out SceneObject? stored)
     {
         if (_overrides.TryGetValue(id, out location) && Resolve(id, ref location, out stored)) return true;
-        for (var segment = _appendTail; segment is not null; segment = segment.Parent)
-        {
-            if (segment.LocationsById.TryGetValue(id, out location) && Resolve(id, ref location, out stored)) return true;
-        }
+        if (_appendTail is { } tail && tail.LocationsById.TryGetValue(id, out location)
+            && Resolve(id, ref location, out stored)) return true;
 
         if (_rootPositions.TryGetValue(id, out var position))
         {
@@ -259,7 +257,7 @@ public sealed class DocumentRevisionIndex
     {
         var ids = new HashSet<ObjectId>();
         var members = new List<DocumentObjectLocation>();
-        if (_rootGroups.TryGetValue(groupId, out var rootMembers))
+        if (_groups.TryGetValue(groupId, out var rootMembers))
         {
             foreach (var id in rootMembers)
             {
@@ -268,40 +266,6 @@ public sealed class DocumentRevisionIndex
                     && ids.Add(id))
                 {
                     members.Add(current);
-                }
-            }
-        }
-
-        foreach (var stored in _overrides.Values)
-        {
-            // An override can outlive its object (deleted) or its layer (moved): read the live one.
-            if (stored.Object.GroupId == groupId
-                && TryFind(stored.Object.Id, out var current)
-                && current.Object.GroupId == groupId
-                && ids.Add(current.Object.Id))
-            {
-                members.Add(current);
-            }
-        }
-
-        if (_appendTail is not null)
-        {
-            var orderedSegments = new Stack<AppendSegment>();
-            for (var segment = _appendTail; segment is not null; segment = segment.Parent)
-            {
-                orderedSegments.Push(segment);
-            }
-
-            while (orderedSegments.TryPop(out var segment))
-            {
-                foreach (var appended in segment.LocationsInOrder)
-                {
-                    if (TryFind(appended.Object.Id, out var current)
-                        && current.Object.GroupId == groupId
-                        && ids.Add(current.Object.Id))
-                    {
-                        members.Add(current);
-                    }
                 }
             }
         }
@@ -321,16 +285,7 @@ public sealed class DocumentRevisionIndex
     internal void ValidateReplacements(IReadOnlyList<SceneObject> replacements)
     {
         var proposed = replacements.ToDictionary(sceneObject => sceneObject.Id);
-        var delta = new Dictionary<ObjectId, SceneObject>();
-        foreach (var location in _overrides.Values)
-        {
-            // Only overrides whose object still exists; a deleted one owns no identity any more.
-            if (TryFind(location.Object.Id, out var live)) delta[location.Object.Id] = live.Object;
-        }
-        foreach (var replacement in replacements)
-        {
-            delta[replacement.Id] = replacement;
-        }
+        var delta = proposed;
 
         var deltaIdentities = new Dictionary<IdentityKey, ObjectId>();
         foreach (var (owner, sceneObject) in delta)
@@ -353,7 +308,7 @@ public sealed class DocumentRevisionIndex
                         "A composition child id collides with a top-level object.",
                         nameof(replacements));
                 }
-                if (_rootIdentities.TryGetValue(identity, out var rootOwner)
+                if (TryFindIdentity(identity, out var rootOwner)
                     && rootOwner != owner
                     && !delta.ContainsKey(rootOwner)
                     && TryFind(rootOwner, out _))
@@ -427,26 +382,20 @@ public sealed class DocumentRevisionIndex
             return;
         }
 
-        var overrides = new Dictionary<ObjectId, DocumentObjectLocation>(sourceIndex._overrides);
+        var overrides = sourceIndex._overrides.ToBuilder();
         foreach (var replacement in replacements)
         {
             overrides[replacement.Object.Id] = replacement;
         }
 
-        if (overrides.Count > MaxOverlayObjects
-            && !source.Layers.OfType<ObjectLayer>().Any(l => !l.PlacementPaths.IsEmpty || !l.PlacementAreas.IsEmpty))
-        {
-            return;
-        }
-
         Publish(target, new DocumentRevisionIndex(
             target.Layers,
             sourceIndex._root,
-            overrides,
-            BuildIdentityIndex(overrides.Values),
+            overrides.ToImmutable(),
+            UpdateIdentities(sourceIndex, replacements),
             sourceIndex._appendTail,
             sourceIndex._appendedCount,
-            sourceIndex._appendDepth) { _structuralLayers = sourceIndex._structuralLayers, _layerPositions = sourceIndex._layerPositions, _seenLayers = sourceIndex._seenLayers });
+            sourceIndex._appendDepth, UpdateGroups(sourceIndex, replacements)) { _structuralLayers = sourceIndex._structuralLayers, _layerPositions = sourceIndex._layerPositions, _seenLayers = sourceIndex._seenLayers });
     }
 
     /// <summary>
@@ -518,8 +467,8 @@ public sealed class DocumentRevisionIndex
     }
 
     /// <summary>
-    /// Carries a bounded append delta into the child revision. Once the chain becomes long it is
-    /// deliberately not registered; the next lookup rebuilds one compact root and starts over.
+    /// Carries an append delta into persistent lookup trees. Old snapshots remain usable and
+    /// no edit drops the prepared root, regardless of the number of preceding appends.
     /// </summary>
     internal static void RegisterAppends(
         MapDocument source,
@@ -527,24 +476,12 @@ public sealed class DocumentRevisionIndex
         IReadOnlyList<DocumentObjectLocation> additions, ObjectLayer? structuralLayer = null)
     {
         if (additions.Count == 0
-            || !Cache.TryGetValue(source.Layers, out var sourceIndex)
-            || sourceIndex._appendDepth >= MaxAppendDepth)
+            || !Cache.TryGetValue(source.Layers, out var sourceIndex))
         {
             return;
         }
 
-        var locations = additions.ToDictionary(location => location.Object.Id);
-        var identities = new Dictionary<IdentityKey, ObjectId>();
-        foreach (var addition in additions)
-        {
-            foreach (var identity in NestedIdentitiesOf(addition.Object))
-            {
-                identities.Add(identity, addition.Object.Id);
-            }
-        }
-
-        var segment = new AppendSegment(
-            sourceIndex._appendTail, locations, [.. additions], identities);
+        var segment = Append(sourceIndex._appendTail, additions);
         var structural = sourceIndex._structuralLayers;
         if (structuralLayer is not null) structural = structural.Add(structuralLayer.Id);
         Publish(target, new DocumentRevisionIndex(
@@ -554,13 +491,12 @@ public sealed class DocumentRevisionIndex
             sourceIndex._overrideIdentities,
             segment,
             checked(sourceIndex._appendedCount + additions.Count),
-            sourceIndex._appendDepth + 1) { _structuralLayers = structural, _layerPositions = sourceIndex._layerPositions, _seenLayers = sourceIndex._seenLayers });
+            sourceIndex._appendDepth + 1, UpdateGroups(sourceIndex, additions)) { _structuralLayers = structural, _layerPositions = sourceIndex._layerPositions, _seenLayers = sourceIndex._seenLayers });
     }
 
     /// <summary>
-    /// Carries the previous append-chain state through a normal LIFO undo. If the caller is not
-    /// removing exactly the latest registered segment, the range is registered as an ordinary
-    /// removal from its layer instead of leaving the target to a cold index over every object.
+    /// Tail undo uses the same identity-slot resolution as any removal. The persistent stores
+    /// do not retain a chain of older index versions solely to undo an append.
     /// </summary>
     internal static void RegisterTailRemoval(
         MapDocument source,
@@ -568,54 +504,58 @@ public sealed class DocumentRevisionIndex
         IReadOnlyList<SceneObject> removals,
         LayerId layerId)
     {
-        if (removals.Count == 0 || !Cache.TryGetValue(source.Layers, out var sourceIndex))
-        {
-            return;
-        }
-
-        var tail = sourceIndex._appendTail;
-        var matches = tail is not null && tail.LocationsInOrder.Count == removals.Count;
-        for (var index = 0; matches && index < removals.Count; index++)
-        {
-            var id = removals[index].Id;
-            matches = tail!.LocationsInOrder[index].Object.Id == id && !sourceIndex._overrides.ContainsKey(id);
-        }
-
-        if (!matches)
-        {
-            // Not the latest append segment (an edit of the appended objects came between, or a
-            // move appended them): the tail range simply leaves its layer, located by identity.
-            RegisterRemoval(source, target, layerId, removals.Count);
-            return;
-        }
-
-        Publish(target, new DocumentRevisionIndex(
-            target.Layers,
-            sourceIndex._root,
-            sourceIndex._overrides,
-            sourceIndex._overrideIdentities,
-            tail!.Parent,
-            sourceIndex._appendedCount - removals.Count,
-            sourceIndex._appendDepth - 1) { _structuralLayers = sourceIndex._structuralLayers, _layerPositions = sourceIndex._layerPositions, _seenLayers = sourceIndex._seenLayers });
+        if (removals.Count > 0) RegisterRemoval(source, target, layerId, removals);
     }
 
     /// <summary>
     /// Objects left one layer (delete, move-to-layer source, path regeneration). Nothing stored is
-    /// rewritten: the layer becomes structural, so its identity slots decide presence and position.
+    /// rewritten in the root: identity slots decide presence and position. Delta entries for the
+    /// removed objects are released, so a live index does not retain every historical append.
     /// </summary>
-    internal static void RegisterRemoval(MapDocument source, MapDocument target, LayerId layerId, int removed)
+    internal static void RegisterRemoval(MapDocument source, MapDocument target, LayerId layerId, IReadOnlyList<SceneObject> removed)
     {
         if (!Cache.TryGetValue(source.Layers, out var previous)) return;
-        Publish(target, new DocumentRevisionIndex(target.Layers, previous._root, previous._overrides,
-            previous._overrideIdentities, previous._appendTail, previous._appendedCount, previous._appendDepth)
+        var stores = previous.Without(removed);
+        Publish(target, new DocumentRevisionIndex(target.Layers, previous._root, stores.Overrides,
+            stores.Identities, stores.Appends, previous._appendedCount, previous._appendDepth, stores.Groups)
         { _structuralLayers = previous._structuralLayers.Add(layerId), _layerPositions = previous._layerPositions, _seenLayers = previous._seenLayers });
+    }
+
+    private (ImmutableDictionary<ObjectId, DocumentObjectLocation> Overrides,
+        ImmutableDictionary<IdentityKey, ObjectId> Identities, AppendSegment? Appends,
+        ImmutableDictionary<Guid, ImmutableHashSet<ObjectId>> Groups) Without(IReadOnlyList<SceneObject> removed)
+    {
+        var overrides = _overrides.ToBuilder();
+        var identities = _overrideIdentities.ToBuilder();
+        var appends = _appendTail?.LocationsById.ToBuilder();
+        var appendedIdentities = _appendTail?.Identities.ToBuilder();
+        var groups = _groups.ToBuilder();
+        foreach (var item in removed)
+        {
+            if (overrides.Remove(item.Id, out var old)) Release(identities, old.Object);
+            if (appends is not null && appends.Remove(item.Id, out var added)) Release(appendedIdentities!, added.Object);
+            if (item.GroupId is { } group && groups.TryGetValue(group, out var members))
+            {
+                members = members.Remove(item.Id);
+                if (members.IsEmpty) groups.Remove(group);
+                else groups[group] = members;
+            }
+        }
+        return (overrides.ToImmutable(), identities.ToImmutable(), appends is null || appends.Count == 0 ? null
+            : new AppendSegment(appends.ToImmutable(), appendedIdentities!.ToImmutable()), groups.ToImmutable());
+
+        static void Release(ImmutableDictionary<IdentityKey, ObjectId>.Builder map, SceneObject item)
+        {
+            foreach (var identity in NestedIdentitiesOf(item))
+                if (map.TryGetValue(identity, out var owner) && owner == item.Id) map.Remove(identity);
+        }
     }
 
     /// <summary>
     /// Undo of a removal: the very objects return to the structural layer they left. When every
     /// one of them is again what the stored locations lead to, the source state is shared as it
-    /// is (no new append segment, so delete/undo cycles never deepen the chain). Returns false
-    /// when that cannot be proven; the caller then registers an ordinary append segment.
+    /// is (no new append entries). Returns false when that cannot be proven; the caller then
+    /// registers the returning objects in the persistent append lookup.
     /// </summary>
     internal static bool RegisterReinsertion(MapDocument source, MapDocument target, LayerId layerId,
         IReadOnlyList<SceneObject> additions)
@@ -627,8 +567,9 @@ public sealed class DocumentRevisionIndex
         }
 
         var candidate = new DocumentRevisionIndex(target.Layers, previous._root, previous._overrides,
-            previous._overrideIdentities, previous._appendTail, previous._appendedCount, previous._appendDepth)
+            previous._overrideIdentities, previous._appendTail, previous._appendedCount, previous._appendDepth, previous._groups)
         { _structuralLayers = previous._structuralLayers, _layerPositions = previous._layerPositions, _seenLayers = previous._seenLayers };
+        var locations = new List<DocumentObjectLocation>(additions.Count);
         foreach (var addition in additions)
         {
             if (!candidate.TryLocate(addition.Id, out var location, out var stored)
@@ -638,9 +579,13 @@ public sealed class DocumentRevisionIndex
             {
                 return false;
             }
+            locations.Add(location);
         }
 
-        Publish(target, candidate);
+        Publish(target, new DocumentRevisionIndex(target.Layers, previous._root, previous._overrides,
+            previous._overrideIdentities, previous._appendTail, previous._appendedCount, previous._appendDepth,
+            UpdateGroups(previous, locations))
+        { _structuralLayers = previous._structuralLayers, _layerPositions = previous._layerPositions, _seenLayers = previous._seenLayers });
         return true;
     }
 
@@ -709,19 +654,20 @@ public sealed class DocumentRevisionIndex
     /// Derives the index of a layer-list revision (layers added, deleted, reordered or replaced).
     /// Stored locations are kept and read through the new layer positions; a layer that left
     /// takes its objects with it, and the objects of new or replaced object layers are appended
-    /// as one segment (an object already known under another record becomes an override, so its
+    /// in the persistent append lookup (an object already known under another record becomes an override, so its
     /// old nested identities are released). Work is proportional to those entering objects.
     /// </summary>
     internal static void RegisterLayerDelta(MapDocument source, MapDocument target,
         IReadOnlySet<LayerId> keptObjectLayers)
     {
-        if (!Cache.TryGetValue(source.Layers, out var previous) || previous._appendDepth >= MaxAppendDepth) return;
+        if (!Cache.TryGetValue(source.Layers, out var previous)) return;
         var layers = target.Layers;
         var positions = new Dictionary<LayerId, int>(layers.Count);
         for (var index = 0; index < layers.Count; index++) positions.Add(layers[index].Id, index);
         var structural = previous._structuralLayers;
-        Dictionary<ObjectId, DocumentObjectLocation>? overrides = null;
+        ImmutableDictionary<ObjectId, DocumentObjectLocation>.Builder? overrides = null;
         var appended = new List<DocumentObjectLocation>();
+        var replaced = new List<DocumentObjectLocation>();
         for (var layerIndex = 0; layerIndex < layers.Count; layerIndex++)
         {
             if (layers[layerIndex] is not ObjectLayer layer || keptObjectLayers.Contains(layer.Id)) continue;
@@ -734,8 +680,9 @@ public sealed class DocumentRevisionIndex
                 var location = new DocumentObjectLocation(sceneObject, layer.Id, layerIndex, objectIndex);
                 if (previous.TryLocate(sceneObject.Id, out _, out var known) && !ReferenceEquals(known, sceneObject))
                 {
-                    overrides ??= new(previous._overrides);
+                    overrides ??= previous._overrides.ToBuilder();
                     overrides[sceneObject.Id] = location;
+                    replaced.Add(location);
                 }
                 else
                 {
@@ -744,50 +691,56 @@ public sealed class DocumentRevisionIndex
             }
         }
 
-        if (overrides is not null && overrides.Count > MaxOverlayObjects
-            && !layers.OfType<ObjectLayer>().Any(l => !l.PlacementPaths.IsEmpty || !l.PlacementAreas.IsEmpty))
-            return;
-
         var tail = previous._appendTail;
         var appendedCount = previous._appendedCount;
         var depth = previous._appendDepth;
         if (appended.Count > 0)
         {
-            var identities = new Dictionary<IdentityKey, ObjectId>();
-            foreach (var addition in appended)
-                foreach (var identity in NestedIdentitiesOf(addition.Object))
-                    identities.Add(identity, addition.Object.Id);
-            tail = new AppendSegment(tail, appended.ToDictionary(location => location.Object.Id), [.. appended], identities);
+            tail = Append(tail, appended);
             appendedCount = checked(appendedCount + appended.Count);
             depth++;
         }
 
-        Publish(target, new DocumentRevisionIndex(layers, previous._root, overrides ?? previous._overrides,
-            overrides is null ? previous._overrideIdentities : BuildIdentityIndex(overrides.Values),
-            tail, appendedCount, depth)
-        { _structuralLayers = structural, _layerPositions = positions, _seenLayers = previous._seenLayers.Union(positions.Keys) });
+        var changed = overrides?.ToImmutable();
+        var next = new DocumentRevisionIndex(layers, previous._root, changed ?? previous._overrides,
+            changed is null ? previous._overrideIdentities : UpdateIdentities(previous, replaced),
+            tail, appendedCount, depth, UpdateGroups(previous, replaced.Concat(appended)))
+        { _structuralLayers = structural, _layerPositions = positions, _seenLayers = previous._seenLayers.Union(positions.Keys) };
+        var leaving = new List<SceneObject>();
+        foreach (var layer in source.Layers)
+            if (layer is ObjectLayer objects && !keptObjectLayers.Contains(layer.Id))
+                foreach (var item in objects.Objects)
+                    if (!next.TryFind(item.Id, out _)) leaving.Add(item);
+        if (leaving.Count > 0)
+        {
+            var stores = next.Without(leaving);
+            next = new DocumentRevisionIndex(layers, previous._root, stores.Overrides, stores.Identities,
+                stores.Appends, appendedCount, depth, stores.Groups)
+            { _structuralLayers = structural, _layerPositions = positions, _seenLayers = next._seenLayers };
+        }
+        Publish(target, next);
     }
 
     private bool TryFindIdentity(IdentityKey identity, out ObjectId owner)
     {
         // An identity is taken only while its owner is still part of the document: a deleted
         // vector or composition releases its nested ids, so Undo can bring them back.
-        if (_overrideIdentities.TryGetValue(identity, out owner) && OwnerExists(owner))
+        if (_overrideIdentities.TryGetValue(identity, out owner) && OwnerMatches(owner, _overrides[owner].Object))
         {
             return true;
         }
 
-        for (var segment = _appendTail; segment is not null; segment = segment.Parent)
+        if (_appendTail is { } segment)
         {
             if (segment.Identities.TryGetValue(identity, out owner)
-                && !_overrides.ContainsKey(owner) && OwnerExists(owner))
+                && OwnerMatches(owner, segment.LocationsById[owner].Object))
             {
                 return true;
             }
         }
 
         if (_rootIdentities.TryGetValue(identity, out owner)
-            && !_overrides.ContainsKey(owner) && OwnerExists(owner))
+            && OwnerMatches(owner, _rootLocations[_rootPositions[owner]].Object))
         {
             return true;
         }
@@ -796,22 +749,63 @@ public sealed class DocumentRevisionIndex
         return false;
     }
 
-    private bool OwnerExists(ObjectId owner) =>
-        _structuralLayers.IsEmpty && _layerPositions is null || TryFind(owner, out _);
+    private bool OwnerMatches(ObjectId owner, SceneObject stored) =>
+        TryFind(owner, out var current) && ReferenceEquals(current.Object, stored);
 
-    private static IReadOnlyDictionary<IdentityKey, ObjectId> BuildIdentityIndex(
-        IEnumerable<DocumentObjectLocation> locations)
+    private static AppendSegment Append(AppendSegment? previous, IReadOnlyList<DocumentObjectLocation> additions)
     {
-        var identities = new Dictionary<IdentityKey, ObjectId>();
+        var locations = (previous?.LocationsById ?? ImmutableDictionary<ObjectId, DocumentObjectLocation>.Empty).ToBuilder();
+        var identities = (previous?.Identities ?? ImmutableDictionary<IdentityKey, ObjectId>.Empty).ToBuilder();
+        foreach (var addition in additions)
+            if (locations.TryGetValue(addition.Object.Id, out var old))
+                foreach (var identity in NestedIdentitiesOf(old.Object))
+                    if (identities.TryGetValue(identity, out var owner) && owner == old.Object.Id) identities.Remove(identity);
+        foreach (var addition in additions)
+        {
+            locations[addition.Object.Id] = addition;
+            foreach (var identity in NestedIdentitiesOf(addition.Object)) identities[identity] = addition.Object.Id;
+        }
+        return new(locations.ToImmutable(), identities.ToImmutable());
+    }
+
+    private static ImmutableDictionary<IdentityKey, ObjectId> UpdateIdentities(
+        DocumentRevisionIndex previous, IReadOnlyList<DocumentObjectLocation> locations)
+    {
+        var identities = previous._overrideIdentities.ToBuilder();
+        foreach (var location in locations)
+            if (previous._overrides.TryGetValue(location.Object.Id, out var old))
+                foreach (var identity in NestedIdentitiesOf(old.Object))
+                    if (identities.TryGetValue(identity, out var owner) && owner == old.Object.Id) identities.Remove(identity);
         foreach (var location in locations)
         {
             foreach (var identity in NestedIdentitiesOf(location.Object))
             {
-                identities.Add(identity, location.Object.Id);
+                // Validation already rejected live collisions; this may replace a stale
+                // identity of a deleted owner still present in the persistent stores.
+                identities[identity] = location.Object.Id;
             }
         }
 
-        return identities;
+        return identities.ToImmutable();
+    }
+
+    private static ImmutableDictionary<Guid, ImmutableHashSet<ObjectId>> UpdateGroups(
+        DocumentRevisionIndex previous, IEnumerable<DocumentObjectLocation> changes)
+    {
+        var groups = previous._groups.ToBuilder();
+        foreach (var location in changes)
+        {
+            var item = location.Object;
+            if (previous.TryFind(item.Id, out var old) && old.Object.GroupId is { } oldGroup)
+            {
+                var members = groups[oldGroup].Remove(item.Id);
+                if (members.IsEmpty) groups.Remove(oldGroup);
+                else groups[oldGroup] = members;
+            }
+            if (item.GroupId is { } group)
+                groups[group] = groups.GetValueOrDefault(group, ImmutableHashSet<ObjectId>.Empty).Add(item.Id);
+        }
+        return groups.ToImmutable();
     }
 
     private static IEnumerable<IdentityKey> NestedIdentitiesOf(SceneObject owner)
@@ -855,10 +849,8 @@ public sealed class DocumentRevisionIndex
     }
 
     private sealed record AppendSegment(
-        AppendSegment? Parent,
-        IReadOnlyDictionary<ObjectId, DocumentObjectLocation> LocationsById,
-        IReadOnlyList<DocumentObjectLocation> LocationsInOrder,
-        IReadOnlyDictionary<IdentityKey, ObjectId> Identities);
+        ImmutableDictionary<ObjectId, DocumentObjectLocation> LocationsById,
+        ImmutableDictionary<IdentityKey, ObjectId> Identities);
 
     private readonly record struct IdentityKey(IdentityKind Kind, Guid Value);
 }
