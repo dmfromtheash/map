@@ -43,6 +43,9 @@ internal sealed class GpuFrameTimer
     private readonly uint[] _queries = new uint[Ring];
     private readonly bool[] _pending = new bool[Ring];
     private readonly bool[] _ignored = new bool[Ring];
+    private readonly long[] _frameQpc = new long[Ring];
+    /// <summary>QPC (Stopwatch ticks) at which the frame of <see cref="LastMilliseconds"/> opened its query.</summary>
+    public long LastFrameQpc { get; private set; }
     private int _next;
     private bool _open;
 
@@ -82,6 +85,7 @@ internal sealed class GpuFrameTimer
             Collect();
             if (_pending[_next]) { Dropped++; return; } // ring full: the GPU is several frames behind
             _begin!(TimeElapsed, _queries[_next]);
+            _frameQpc[_next] = System.Diagnostics.Stopwatch.GetTimestamp();
             _open = true;
         }
         catch (Exception ex) when (ex is EntryPointNotFoundException or MarshalDirectiveException or InvalidOperationException)
@@ -150,6 +154,7 @@ internal sealed class GpuFrameTimer
             if (_ignored[index]) { _ignored[index] = false; continue; }
             if (disjoint != 0) { Dropped++; continue; }
             LastMilliseconds = nanoseconds / 1_000_000d;
+            LastFrameQpc = _frameQpc[index];
             Completed++;
         }
     }

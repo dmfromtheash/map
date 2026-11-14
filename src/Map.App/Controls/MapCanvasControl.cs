@@ -240,6 +240,11 @@ public sealed partial class MapCanvasControl : Control
     /// </summary>
     private static readonly bool GestureBudgetDisabled = Environment.GetEnvironmentVariable("MAP_PERF_GESTURE_BUDGET") == "0";
     public static double LastFrameGpuFlushMilliseconds { get; private set; }
+    /// <summary>Diagnostics: QPC (Stopwatch ticks) of the last canvas frame's start and of the end of its CPU work.</summary>
+    public static long LastFrameStartQpc { get; private set; }
+    public static long LastFrameEndQpc { get; private set; }
+    /// <summary>QPC start of the canvas frame whose GPU timer result is <see cref="LastFrameGpuTimerMilliseconds"/>.</summary>
+    public static long LastFrameGpuTimerFrameQpc => GpuTimer.LastFrameQpc;
     /// <summary>GPU time of a recent canvas frame from the asynchronous timer query (DEC-111); null when unavailable.</summary>
     public static double? LastFrameGpuTimerMilliseconds { get; private set; }
     private static readonly GpuFrameTimer GpuTimer = new();
@@ -1155,7 +1160,10 @@ public sealed partial class MapCanvasControl : Control
             canvas.Restore();
             GpuTimer.End(lease, lease.GrContext);
             LastFrameGpuTimerMilliseconds = GpuTimer.LastMilliseconds;
-            LastFrameWorkMilliseconds = Stopwatch.GetElapsedTime(frameStarted).TotalMilliseconds;
+            var frameEnded = Stopwatch.GetTimestamp();
+            LastFrameWorkMilliseconds = Stopwatch.GetElapsedTime(frameStarted, frameEnded).TotalMilliseconds;
+            LastFrameStartQpc = frameStarted;
+            LastFrameEndQpc = frameEnded;
             if (lease.GrContext is not null && lease.SkSurface is { } nativeSurface) captureFrame(nativeSurface, canvas);
             // After the capture: the smokes compare map pixels, and the readout is not the map.
             drawBadge?.Invoke(canvas, (float)Bounds.Width, (float)Bounds.Height);
