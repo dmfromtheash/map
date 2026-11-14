@@ -51,7 +51,7 @@ public sealed class EditCostGuardTests(EditCostGuardTests.Maps maps) : IClassFix
         C(f => new AddObjectsCommand(f.Layer.Id, f.Added), "append-limit",
             linear: "DocumentRevisionIndex.cs:479: after 256 appends the next lookup rebuilds the full root", state: "append-limit"),
         C(f => new PlaceAssetObjectsCommand(f.Layer.Id, Asset(OtherHash), f.Added)),
-        C(f => new PasteObjectsCommand(f.Layer.Id, f.Added, [Asset(OtherHash)]), linear: "Commands.cs:328 filters every object on Undo"),
+        C(f => new PasteObjectsCommand(f.Layer.Id, f.Added, [Asset(OtherHash)])),
         C(f => new ReplaceStampAssetCommand(f.Selected[0], Asset(OtherHash))),
         C(f => new UpdateStampStyleWithAssetCommand(f.Selected[0], f.Selected[0].Stamp! with
             { MaskAssetSha256 = OtherHash, ClipMaskEnabled = true }, Asset(OtherHash))),
@@ -68,8 +68,10 @@ public sealed class EditCostGuardTests(EditCostGuardTests.Maps maps) : IClassFix
         C(f => SetGroupCommand.Group(f.Document, f.Ids, "new group"), "group"),
         C(f => SetGroupCommand.Ungroup(f.Document, [.. f.Grouped.Select(o => o.Id)]), "ungroup"),
         C(f => SetGroupCommand.Rename(f.Document, f.Grouped[0].GroupId!.Value, "renamed group"), "rename"),
-        C(f => new ReorderObjectsCommand(f.Layer.Id, f.Layer.Objects, SwapTwo(f.Layer.Objects), "swap two"),
-            linear: "Commands.cs:553,573 captures and rebuilds the entire layer for a two-object swap"),
+        C(f => new ReorderObjectsCommand(f.Document, f.Layer.Id,
+            [f.Layer.Objects[^1].Id, f.Layer.Objects[0].Id], [0, f.Layer.Objects.Count - 1], "swap two")),
+        C(f => ReorderObjectsCommand.MoveSelection(f.Document, f.Layer.Id, f.Ids, 1, false, "move up"), "neighbour"),
+        C(f => ReorderObjectsCommand.MoveSelection(f.Document, f.Layer.Id, f.Ids, -1, true, "move to bottom"), "extreme"),
         C(f => new AddLayerCommand(new ObjectLayer(LayerId.New(), "ten", true, false, 1, f.Added))),
         C(f => new DeleteLayerCommand(f.Document, f.Target.Id)),
         C(f => new DuplicateLayerCommand(f.Target.Id)),
@@ -94,12 +96,9 @@ public sealed class EditCostGuardTests(EditCostGuardTests.Maps maps) : IClassFix
         C(f => new VectorAssetStyleCommand(f.Shapes[0], f.Shapes[0] with
             { Shape = f.Shapes[0].Shape! with { Fill = f.Shapes[0].Shape!.Fill with { TextureAssetSha256 = OtherHash } } }, Asset(OtherHash))),
         C(f => new ReplaceObjectWithManyCommand(f.Document, f.Layer.Id, f.Shapes[0].Id,
-            [VectorGeometry.WithNewIds(f.Shapes[0]), VectorGeometry.WithNewIds(f.Shapes[0])]),
-            linear: "VectorEditing.cs:22,35 copies and filters the whole layer"),
-        C(f => new ShapeBooleanCommand(f.Document, f.Layer.Id, f.Shapes[0].Id, f.Shapes[1].Id, ShapeBooleanOperation.Add),
-            linear: "VectorEditing.cs:307,315 filters the whole layer"),
-        C(f => new ReplaceObjectsWithCompositionCommand(f.Document, f.Layer.Id, f.Ids, f.NewComposition),
-            linear: "Compositions.cs:163-168 scans/copies the whole layer"),
+            [VectorGeometry.WithNewIds(f.Shapes[0]), VectorGeometry.WithNewIds(f.Shapes[0])])),
+        C(f => new ShapeBooleanCommand(f.Document, f.Layer.Id, f.Shapes[0].Id, f.Shapes[1].Id, ShapeBooleanOperation.Add)),
+        C(f => new ReplaceObjectsWithCompositionCommand(f.Document, f.Layer.Id, f.Ids, f.NewComposition)),
         C(f => new PasteCompositionCommand(f.Layer.Id, f.NewComposition, [])),
         C(f => new FlattenCompositionCommand(f.Composition, f.Composition with
             { Kind = SceneObjectKind.Stamp, Composition = null, Stamp = new StampStyle(OtherHash) }, Asset(OtherHash))),
@@ -281,29 +280,14 @@ public sealed class EditCostGuardTests(EditCostGuardTests.Maps maps) : IClassFix
     [Fact(Skip = "O(N): EditingSession.cs:245 -> MapDecorations.cs:84: legend refresh scans every stamp on every Execute")]
     public void Known_AddObjectsCommand_legend() => Compare(Find("AddObjectsCommand/legend"), maps.Small, maps.Large, enforce: true);
 
-    [Fact(Skip = "O(N): Commands.cs:328 filters every object on Undo")]
-    public void Known_PasteObjectsCommand() => Compare(Find("PasteObjectsCommand"), maps.Small, maps.Large, enforce: true);
-
     [Fact(Skip = "O(N): SceneObjectList.cs:90-97,466: copies chunk directories (O(N/256)); allocated-byte ratio exceeds 3")]
     public void Known_TransformObjectCommand() => Compare(Find("TransformObjectCommand"), maps.Small, maps.Large, enforce: true);
 
     [Fact(Skip = "O(N): SceneObjectList.cs:90-97,466: copies chunk directories (O(N/256)); allocated-byte ratio exceeds 3")]
     public void Known_DeleteObjectsCommand_singleton() => Compare(Find("DeleteObjectsCommand/singleton"), maps.Small, maps.Large, enforce: true);
 
-    [Fact(Skip = "O(N): Commands.cs:553,573 captures and rebuilds the entire layer for a two-object swap")]
-    public void Known_ReorderObjectsCommand() => Compare(Find("ReorderObjectsCommand"), maps.Small, maps.Large, enforce: true);
-
     [Fact(Skip = "O(N): ControlledAreaGeneration.cs:23 -> UpdateLayerCommand.Replace -> WithLayers: scans/copies all stamps for one area")]
     public void Known_UpdateLayerCommand_controlled_area() => Compare(Find("UpdateLayerCommand/controlled-area"), maps.Small, maps.Large, enforce: true);
-
-    [Fact(Skip = "O(N): VectorEditing.cs:22,35 copies and filters the whole layer")]
-    public void Known_ReplaceObjectWithManyCommand() => Compare(Find("ReplaceObjectWithManyCommand"), maps.Small, maps.Large, enforce: true);
-
-    [Fact(Skip = "O(N): VectorEditing.cs:307,315 filters the whole layer")]
-    public void Known_ShapeBooleanCommand() => Compare(Find("ShapeBooleanCommand"), maps.Small, maps.Large, enforce: true);
-
-    [Fact(Skip = "O(N): Compositions.cs:163-168 scans/copies the whole layer")]
-    public void Known_ReplaceObjectsWithCompositionCommand() => Compare(Find("ReplaceObjectsWithCompositionCommand"), maps.Small, maps.Large, enforce: true);
 
     [Fact(Skip = "O(N): SceneObjectList.cs:90-97,466: copies chunk directories (O(N/256)); allocated-byte ratio exceeds 3")]
     public void Known_PasteCompositionCommand() => Compare(Find("PasteCompositionCommand"), maps.Small, maps.Large, enforce: true);
@@ -467,13 +451,6 @@ public sealed class EditCostGuardTests(EditCostGuardTests.Maps maps) : IClassFix
     {
         Assert.Equal(expected.TileCount, actual.TileCount);
         foreach (var key in expected.Keys) Assert.Equal(expected.TryGet(key), actual.TryGet(key));
-    }
-
-    private static SceneObject[] SwapTwo(IReadOnlyList<SceneObject> source)
-    {
-        var result = source.ToArray();
-        (result[0], result[^1]) = (result[^1], result[0]);
-        return result;
     }
 
     private static IEditCommand Follow(Fixture f, int kind)

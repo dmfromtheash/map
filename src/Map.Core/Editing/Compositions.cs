@@ -154,22 +154,21 @@ public static class SceneObjectClone
 
 public sealed class ReplaceObjectsWithCompositionCommand : IEditCommand
 {
-    private readonly LayerId _layerId; private readonly ObjectLayer _before; private readonly ObjectLayer _after;
+    private readonly ObjectReplacement _replacement;
     public ReplaceObjectsWithCompositionCommand(MapDocument document, LayerId layerId,
         IReadOnlyCollection<ObjectId> ids, SceneObject composition)
     {
-        _layerId = layerId; _before = (ObjectLayer)(document.FindLayer(layerId)
+        var layer = (ObjectLayer)(document.FindLayer(layerId)
             ?? throw new InvalidOperationException("Composition target layer is absent."));
-        var selected = _before.Objects.Where(item => ids.Contains(item.Id)).ToList();
-        if (selected.Count == 0 || composition.Composition is null)
+        var selected = ids.Distinct().Where(id => layer.ObjectStorage.IndexOfId(id) >= 0).ToArray();
+        if (selected.Length == 0 || composition.Composition is null)
             throw new ArgumentException("Editable composition needs selected source objects.");
-        var index = _before.Objects.ToList().FindIndex(item => ids.Contains(item.Id));
-        var objects = _before.Objects.Where(item => !ids.Contains(item.Id)).ToList();
-        objects.Insert(index, composition); _after = _before with { Objects = objects };
+        _replacement = new ObjectReplacement(document, layerId, selected, [composition]);
     }
     public string Name => "Create editable composition";
-    public MapDocument Apply(MapDocument document) => document.WithLayer(_layerId, _ => _after);
-    public MapDocument Revert(MapDocument document) => document.WithLayer(_layerId, _ => _before);
+    public long? MeasuredWorkingBytes => _replacement.WorkingBytes;
+    public MapDocument Apply(MapDocument document) => _replacement.Apply(document);
+    public MapDocument Revert(MapDocument document) => _replacement.Revert(document);
 }
 
 public sealed class PasteCompositionCommand(

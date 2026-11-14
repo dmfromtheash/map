@@ -453,7 +453,7 @@ public sealed class DocumentRevisionIndex
     /// Validates only objects appended by one command. Existing document identities were already
     /// proven by the source revision; checking the delta avoids reconstructing every global set.
     /// </summary>
-    internal void ValidateAppends(IReadOnlyList<SceneObject> additions)
+    internal void ValidateAppends(IReadOnlyList<SceneObject> additions, IReadOnlySet<ObjectId>? removed = null)
     {
         ArgumentNullException.ThrowIfNull(additions);
         var topLevelIds = new HashSet<ObjectId>();
@@ -462,13 +462,13 @@ public sealed class DocumentRevisionIndex
 
         foreach (var sceneObject in additions)
         {
-            if (!topLevelIds.Add(sceneObject.Id) || TryFind(sceneObject.Id, out _))
+            if (!topLevelIds.Add(sceneObject.Id) || TryFind(sceneObject.Id, out _) && removed?.Contains(sceneObject.Id) != true)
             {
                 throw new ArgumentException($"Duplicate object id {sceneObject.Id}.", nameof(additions));
             }
 
             var topLevelIdentity = new IdentityKey(IdentityKind.Object, sceneObject.Id.Value);
-            if (TryFindIdentity(topLevelIdentity, out _)
+            if (TryFindIdentity(topLevelIdentity, out var topOwner) && removed?.Contains(topOwner) != true
                 || nestedIdentities.ContainsKey(topLevelIdentity))
             {
                 throw new ArgumentException(
@@ -488,6 +488,7 @@ public sealed class DocumentRevisionIndex
                 if (!groupNames.TryGetValue(groupId, out var expectedName))
                 {
                     var existingMembers = GroupMembers(groupId);
+                    if (removed is not null) existingMembers = existingMembers.Where(o => !removed.Contains(o.Id)).ToArray();
                     expectedName = existingMembers.Count > 0
                         ? existingMembers[0].GroupName
                         : sceneObject.GroupName;
@@ -504,10 +505,10 @@ public sealed class DocumentRevisionIndex
             foreach (var identity in NestedIdentitiesOf(sceneObject))
             {
                 var nestedObjectCollides = identity.Kind == IdentityKind.Object
-                    && (TryFind(new ObjectId(identity.Value), out _)
+                    && (TryFind(new ObjectId(identity.Value), out _) && removed?.Contains(new ObjectId(identity.Value)) != true
                         || topLevelIds.Contains(new ObjectId(identity.Value)));
                 if (nestedObjectCollides
-                    || TryFindIdentity(identity, out _)
+                    || TryFindIdentity(identity, out var owner) && removed?.Contains(owner) != true
                     || !nestedIdentities.TryAdd(identity, sceneObject.Id))
                 {
                     throw new ArgumentException(
@@ -609,6 +610,39 @@ public sealed class DocumentRevisionIndex
         Publish(target, new DocumentRevisionIndex(target.Layers, previous._root, previous._overrides,
             previous._overrideIdentities, previous._appendTail, previous._appendedCount, previous._appendDepth)
         { _structuralLayers = previous._structuralLayers.Add(layerId), _layerPositions = previous._layerPositions, _seenLayers = previous._seenLayers });
+    }
+
+    /// <summary>A single structural splice, including new objects or changed reused identities.</summary>
+    internal static void RegisterSplice(MapDocument source, MapDocument target, LayerId layerId,
+        IReadOnlyList<DocumentObjectLocation> additions)
+    {
+        if (!Cache.TryGetValue(source.Layers, out var previous)) return;
+        var structural = previous._structuralLayers.Add(layerId);
+        var candidate = new DocumentRevisionIndex(target.Layers, previous._root, previous._overrides,
+            previous._overrideIdentities, previous._appendTail, previous._appendedCount, previous._appendDepth)
+        { _structuralLayers = structural, _layerPositions = previous._layerPositions, _seenLayers = previous._seenLayers };
+        Dictionary<ObjectId, DocumentObjectLocation>? overrides = null;
+        var entering = new List<DocumentObjectLocation>();
+        foreach (var addition in additions)
+        {
+            if (!candidate.TryLocate(addition.Object.Id, out _, out var stored)) entering.Add(addition);
+            else if (!ReferenceEquals(stored, addition.Object))
+            {
+                overrides ??= new(previous._overrides);
+                overrides[addition.Object.Id] = addition;
+            }
+        }
+        var tail = previous._appendTail;
+        if (entering.Count > 0)
+        {
+            if (previous._appendDepth >= MaxAppendDepth) return;
+            tail = new AppendSegment(tail, entering.ToDictionary(l => l.Object.Id), entering,
+                BuildIdentityIndex(entering));
+        }
+        Publish(target, new DocumentRevisionIndex(target.Layers, previous._root, overrides ?? previous._overrides,
+            overrides is null ? previous._overrideIdentities : BuildIdentityIndex(overrides.Values), tail,
+            previous._appendedCount + entering.Count, previous._appendDepth + (entering.Count > 0 ? 1 : 0))
+        { _structuralLayers = structural, _layerPositions = previous._layerPositions, _seenLayers = previous._seenLayers });
     }
 
     /// <summary>

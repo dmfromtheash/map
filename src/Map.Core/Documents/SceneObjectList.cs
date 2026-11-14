@@ -524,6 +524,80 @@ public sealed class SceneObjectList : IReadOnlyList<SceneObject>
     public SceneObjectList InsertRange(int index, IReadOnlyList<SceneObject> inserted) =>
         Splice(index, removeCount: 0, inserted);
 
+    /// <summary>
+    /// One removal/insertion transaction, copying the directory only once. Insertion keys refer
+    /// to the reduced list, before any insertions; untouched chunks and their identity runs stay shared.
+    /// </summary>
+    internal SceneObjectList SplicePositions(IReadOnlyList<int> removed,
+        IReadOnlyDictionary<int, IReadOnlyList<SceneObject>> insertions)
+    {
+        var ordered = insertions.OrderBy(p => p.Key).ToArray();
+        var sourceKeys = new int[ordered.Length];
+        var passed = 0;
+        for (var i = 0; i < ordered.Length; i++)
+        {
+            var key = ordered[i].Key;
+            if (key < 0 || key > Count - removed.Count) throw new ArgumentOutOfRangeException(nameof(insertions));
+            while (passed < removed.Count && removed[passed] - passed <= key) passed++;
+            sourceKeys[i] = key + passed;
+        }
+        var chunks = new List<SceneObject[]>(_chunks.Length + ordered.Length);
+        var rewrite = new Rewrite();
+        var nextRemoval = 0;
+        var nextInsertion = 0;
+        var added = 0;
+        for (var c = 0; c < _chunks.Length; c++)
+        {
+            var chunk = _chunks[c];
+            var start = _starts[c];
+            var end = start + chunk.Length;
+            if ((nextRemoval == removed.Count || removed[nextRemoval] >= end)
+                && (nextInsertion == ordered.Length || sourceKeys[nextInsertion] >= end))
+            {
+                chunks.Add(chunk);
+                continue;
+            }
+            var buffer = new List<SceneObject>(chunk.Length);
+            var segments = new List<Segment>();
+            var offset = 0;
+            while (offset < chunk.Length)
+            {
+                var removal = nextRemoval < removed.Count ? removed[nextRemoval] : Count;
+                var insertion = nextInsertion < ordered.Length ? sourceKeys[nextInsertion] : Count;
+                var stop = Math.Min(end, Math.Min(removal, insertion));
+                var kept = stop - start - offset;
+                if (kept > 0)
+                {
+                    segments.Add(new Segment(chunk, offset, kept, buffer.Count));
+                    for (var i = 0; i < kept; i++) buffer.Add(chunk[offset++]);
+                }
+                if (stop == end) break;
+                if (stop == insertion)
+                {
+                    var batch = ordered[nextInsertion++].Value;
+                    if (batch.Count > 0) segments.Add(new Segment(null, 0, batch.Count, buffer.Count));
+                    buffer.AddRange(batch);
+                    added = checked(added + batch.Count);
+                }
+                if (stop == removal)
+                {
+                    rewrite.Left.Add(chunk[offset++].Id);
+                    nextRemoval++;
+                }
+            }
+            rewrite.Dropped.Add(chunk);
+            AddChunks(chunks, rewrite, buffer, segments);
+        }
+        if (nextInsertion < ordered.Length)
+        {
+            var tail = ordered[nextInsertion].Value;
+            added = checked(added + tail.Count);
+            AddChunks(chunks, rewrite, tail, [new Segment(null, 0, tail.Count, 0)]);
+        }
+        var count = checked(Count - removed.Count + added);
+        return count == 0 ? Empty : new SceneObjectList([.. chunks], count, this, rewrite);
+    }
+
     /// <summary>Batch insertions at original indices; only intersected chunks are rebuilt.</summary>
     internal SceneObjectList InsertMany(IReadOnlyDictionary<int, IReadOnlyList<SceneObject>> insertions)
     {

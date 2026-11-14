@@ -155,9 +155,8 @@ public sealed class ObjectTransferAndOrderTests
         var top = Stamp("top", 0, 0, null);
         var session = new EditingSession(Document(layerId, [bottom, middle, top], asset: null));
 
-        var before = Objects(session, layerId);
-        IReadOnlyList<SceneObject> after = [middle, bottom, top];
-        session.Execute(new ReorderObjectsCommand(layerId, before, after, "Move selection down"));
+        session.Execute(new ReorderObjectsCommand(session.Document, layerId,
+            [middle.Id], [0], "Move selection down"));
 
         Assert.Equal(["middle", "bottom", "top"], Objects(session, layerId).Select(item => item.Name));
 

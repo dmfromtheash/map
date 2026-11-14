@@ -1681,41 +1681,11 @@ public sealed partial class EditorViewModel
             return false;
         }
 
-        var order = layer.Objects.ToList();
-        var selected = selection.Select(item => item.Id).ToHashSet();
         var up = direction > 0;
-
-        if (toExtreme)
-        {
-            var moved = order.Where(item => selected.Contains(item.Id)).ToList();
-            var rest = order.Where(item => !selected.Contains(item.Id)).ToList();
-            order = up ? [.. rest, .. moved] : [.. moved, .. rest];
-        }
-        else if (up)
-        {
-            // Walk from the front so a run of selected objects keeps its own internal order.
-            for (var index = order.Count - 2; index >= 0; index--)
-            {
-                if (selected.Contains(order[index].Id) && !selected.Contains(order[index + 1].Id)
-                    && order[index].Sublayer == order[index + 1].Sublayer)
-                {
-                    (order[index], order[index + 1]) = (order[index + 1], order[index]);
-                }
-            }
-        }
-        else
-        {
-            for (var index = 1; index < order.Count; index++)
-            {
-                if (selected.Contains(order[index].Id) && !selected.Contains(order[index - 1].Id)
-                    && order[index].Sublayer == order[index - 1].Sublayer)
-                {
-                    (order[index], order[index - 1]) = (order[index - 1], order[index]);
-                }
-            }
-        }
-
-        if (order.Select(item => item.Id).SequenceEqual(layer.Objects.Select(item => item.Id)))
+        var command = ReorderObjectsCommand.MoveSelection(Session.Document, layer.Id,
+            selection.Select(item => item.Id).ToArray(), direction, toExtreme,
+            up ? "Move selection up" : "Move selection down");
+        if (!command.HasChanges)
         {
             StatusDetail = up
                 ? "Выделение уже выше всех соседей своего подслоя."
@@ -1723,8 +1693,7 @@ public sealed partial class EditorViewModel
             return false;
         }
 
-        Session.Execute(new ReorderObjectsCommand(
-            layer.Id, layer.Objects, order, up ? "Move selection up" : "Move selection down"));
+        Session.Execute(command);
         AfterEdit();
         return true;
     }

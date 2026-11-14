@@ -326,12 +326,7 @@ public sealed class PasteObjectsCommand : IEditCommand
 
     public MapDocument Revert(MapDocument document)
     {
-        var ids = _objects.Select(item => item.Id).ToHashSet();
-        var withoutObjects = document.WithLayer(_layerId, layer =>
-        {
-            var objects = (ObjectLayer)layer;
-            return objects with { Objects = [.. objects.Objects.Where(item => !ids.Contains(item.Id))] };
-        });
+        var withoutObjects = DocumentEditor.RemoveAppendedObjects(document, _layerId, _objects);
 
         if (_introduced.Count == 0)
         {
@@ -538,56 +533,107 @@ public sealed class ReplaceObjectsCommand : IEditCommand
 public sealed class ReorderObjectsCommand : IEditCommand
 {
     private readonly LayerId _layerId;
-    private readonly IReadOnlyList<SceneObject> _before;
-    private readonly IReadOnlyList<SceneObject> _after;
+    private readonly (int Index, ObjectId Id)[] _before;
+    private readonly (int Index, ObjectId Id)[] _after;
 
-    public ReorderObjectsCommand(
-        LayerId layerId, IReadOnlyList<SceneObject> before, IReadOnlyList<SceneObject> after, string name)
+    /// <summary>
+    /// Moves only the supplied identities to ascending final positions. The remaining objects
+    /// retain their relative order. Both directions resolve live instances, never old values.
+    /// </summary>
+    public ReorderObjectsCommand(MapDocument document, LayerId layerId,
+        IReadOnlyList<ObjectId> ids, IReadOnlyList<int> positions, string name)
     {
-        ArgumentNullException.ThrowIfNull(before);
-        ArgumentNullException.ThrowIfNull(after);
-        if (before.Count != after.Count
-            || before.Select(item => item.Id).ToHashSet().SetEquals(after.Select(item => item.Id)) is false)
-        {
-            throw new ArgumentException("A reorder keeps exactly the same objects.", nameof(after));
-        }
-
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(ids);
+        ArgumentNullException.ThrowIfNull(positions);
+        var layer = document.FindLayer(layerId) as ObjectLayer
+            ?? throw new InvalidOperationException($"Layer {layerId} does not hold objects.");
+        if (ids.Count != positions.Count || ids.Distinct().Count() != ids.Count)
+            throw new ArgumentException("A reorder needs one position per distinct object.", nameof(ids));
         _layerId = layerId;
-        _before = [.. before];
-        _after = [.. after];
+        _before = new (int, ObjectId)[ids.Count];
+        _after = new (int, ObjectId)[ids.Count];
+        for (var i = 0; i < ids.Count; i++)
+        {
+            var index = layer.ObjectStorage.IndexOfId(ids[i]);
+            if (index < 0 || positions[i] < 0 || positions[i] >= layer.Objects.Count
+                || i > 0 && positions[i] <= positions[i - 1])
+                throw new ArgumentException("Reorder positions must ascend within the layer.", nameof(positions));
+            _before[i] = (index, ids[i]);
+            _after[i] = (positions[i], ids[i]);
+        }
+        Array.Sort(_before, static (a, b) => a.Index.CompareTo(b.Index));
         Name = string.IsNullOrWhiteSpace(name) ? "Reorder objects" : name;
     }
 
     public string Name { get; }
 
-    public long? MeasuredWorkingBytes => EditCost.ForObjects(_after.Count);
+    public long? MeasuredWorkingBytes => EditCost.ForObjects(_after.Length);
+
+    public bool HasChanges => !_before.SequenceEqual(_after);
+
+    /// <summary>The editor's one-neighbour and extreme moves, inspecting only selected slots.</summary>
+    public static ReorderObjectsCommand MoveSelection(MapDocument document, LayerId layerId,
+        IReadOnlyCollection<ObjectId> ids, int direction, bool toExtreme, string name)
+    {
+        var layer = document.FindLayer(layerId) as ObjectLayer
+            ?? throw new InvalidOperationException($"Layer {layerId} does not hold objects.");
+        var selected = ids.ToHashSet();
+        var slots = selected.Select(id => layer.ObjectStorage.IndexOfId(id)).Order().ToArray();
+        if (slots.Any(i => i < 0)) throw new ArgumentException("Selection is absent from the layer.", nameof(ids));
+        var destinations = new Dictionary<ObjectId, int>(slots.Length);
+        var changed = new Dictionary<int, SceneObject>();
+        SceneObject At(int i) => changed.TryGetValue(i, out var item) ? item : layer.Objects[i];
+        for (var j = 0; j < slots.Length; j++)
+        {
+            var index = slots[direction > 0 ? slots.Length - 1 - j : j];
+            var item = layer.Objects[index];
+            var target = index;
+            if (direction != 0 && toExtreme)
+                target = direction > 0 ? layer.Objects.Count - 1 - j : j;
+            else if (direction != 0)
+            {
+                var neighbour = index + Math.Sign(direction);
+                if (neighbour >= 0 && neighbour < layer.Objects.Count
+                    && !selected.Contains(At(neighbour).Id) && item.Sublayer == At(neighbour).Sublayer)
+                {
+                    target = neighbour;
+                    changed[index] = At(neighbour);
+                    changed[neighbour] = item;
+                }
+            }
+            if (target != index) destinations.Add(item.Id, target);
+        }
+        var ordered = destinations.OrderBy(p => p.Value).ToArray();
+        return new(document, layerId, [.. ordered.Select(p => p.Key)], [.. ordered.Select(p => p.Value)], name);
+    }
 
     public MapDocument Apply(MapDocument document) => Order(document, _after);
 
     public MapDocument Revert(MapDocument document) => Order(document, _before);
 
-    private MapDocument Order(MapDocument document, IReadOnlyList<SceneObject> order) =>
-        document.WithLayer(_layerId, layer =>
+    private MapDocument Order(MapDocument document, IReadOnlyList<(int Index, ObjectId Id)> order)
+    {
+        if (order.Count == 0) return document;
+        var layer = document.FindLayer(_layerId) as ObjectLayer
+            ?? throw new InvalidOperationException($"Layer {_layerId} does not hold objects.");
+        var live = new SceneObject[order.Count];
+        var batches = new Dictionary<int, IReadOnlyList<SceneObject>>();
+        for (var i = 0; i < order.Count; i++)
         {
-            var objects = layer as ObjectLayer
-                ?? throw new InvalidOperationException($"Layer {_layerId} does not hold objects.");
-
-            // The stored snapshots only carry identity here; the live objects may have been edited
-            // since, so the current instances are reordered rather than written back wholesale.
-            var current = objects.Objects.ToDictionary(item => item.Id);
-            var reordered = new List<SceneObject>(objects.Objects.Count);
-            foreach (var item in order)
+            var at = layer.ObjectStorage.IndexOfId(order[i].Id);
+            if (at < 0 || order[i].Index >= layer.Objects.Count) return document;
+            live[i] = layer.Objects[at];
+            var key = order[i].Index - i;
+            if (!batches.TryGetValue(key, out var batch))
             {
-                if (current.TryGetValue(item.Id, out var live))
-                {
-                    reordered.Add(live);
-                }
+                batch = new List<SceneObject>();
+                batches.Add(key, batch);
             }
-
-            return reordered.Count == objects.Objects.Count
-                ? objects with { Objects = reordered }
-                : objects;
-        });
+            ((List<SceneObject>)batch).Add(live[i]);
+        }
+        return DocumentEditor.SpliceObjects(document, _layerId, live.Select(o => o.Id).ToHashSet(), batches);
+    }
 }
 
 /// <summary>Legacy single-object transform wrapper kept for the editor's drag/inspector path.</summary>
@@ -660,6 +706,8 @@ public sealed class RemoveObjectsCommand : IEditCommand
     /// <summary>The removed objects in their layer order.</summary>
     internal IReadOnlyList<SceneObject> RemovedObjects => [.. _removed.Select(r => r.Object)];
 
+    internal IReadOnlyList<(int Index, SceneObject Object)> RemovedSlots => _removed;
+
     public MapDocument Apply(MapDocument document) =>
         _removed.Length == 0 ? document : DocumentEditor.RemoveObjects(document, _layerId, _ids);
 
@@ -690,6 +738,54 @@ public sealed class RemoveObjectsCommand : IEditCommand
         }
 
         return DocumentEditor.InsertObjects(document, _layerId, batches);
+    }
+}
+
+/// <summary>A local replacement splice; Undo restores the removed objects at their original slots.</summary>
+internal sealed class ObjectReplacement
+{
+    private readonly LayerId _layerId;
+    private readonly IReadOnlyList<(int Index, SceneObject Object)> _removed;
+    private readonly HashSet<ObjectId> _removedIds;
+    private readonly SceneObject[] _inserted;
+    private readonly HashSet<ObjectId> _insertedIds;
+    private readonly int _index;
+
+    internal ObjectReplacement(MapDocument document, LayerId layerId,
+        IReadOnlyCollection<ObjectId> ids, IReadOnlyList<SceneObject> inserted)
+    {
+        _layerId = layerId;
+        _removed = new RemoveObjectsCommand(document, layerId, ids).RemovedSlots;
+        _removedIds = ids.ToHashSet();
+        _index = _removed[0].Index;
+        _inserted = [.. inserted];
+        _insertedIds = inserted.Select(o => o.Id).ToHashSet();
+        WorkingBytes = EditCost.ForObjects(ids.Count + inserted.Count);
+    }
+
+    internal long WorkingBytes { get; }
+
+    internal MapDocument Apply(MapDocument document)
+    {
+        var layer = (ObjectLayer)document.FindLayer(_layerId)!;
+        var count = layer.Objects.Count - _removedIds.Count(id => layer.ObjectStorage.IndexOfId(id) >= 0);
+        return DocumentEditor.SpliceObjects(document, _layerId, _removedIds,
+            new Dictionary<int, IReadOnlyList<SceneObject>> { [Math.Min(_index, count)] = _inserted });
+    }
+
+    internal MapDocument Revert(MapDocument document)
+    {
+        var layer = (ObjectLayer)document.FindLayer(_layerId)!;
+        var remaining = layer.Objects.Count - _insertedIds.Count(id => layer.ObjectStorage.IndexOfId(id) >= 0);
+        var batches = new Dictionary<int, IReadOnlyList<SceneObject>>();
+        for (var i = 0; i < _removed.Count; i++)
+        {
+            var (index, item) = _removed[i];
+            var key = Math.Min(index - i, remaining);
+            if (!batches.TryGetValue(key, out var batch)) batches.Add(key, batch = new List<SceneObject>());
+            ((List<SceneObject>)batch).Add(item);
+        }
+        return DocumentEditor.SpliceObjects(document, _layerId, _insertedIds, batches);
     }
 }
 
@@ -1414,6 +1510,31 @@ public sealed class UpdateLandStyleCommand : IEditCommand
 /// <summary>Snapshot lookups shared by commands and the editor.</summary>
 public static class DocumentEditor
 {
+    /// <summary>Atomic local splice, with identities validated after discounting the outgoing objects.</summary>
+    internal static MapDocument SpliceObjects(MapDocument document, LayerId layerId, IReadOnlySet<ObjectId> ids,
+        IReadOnlyDictionary<int, IReadOnlyList<SceneObject>> batches)
+    {
+        var layers = document.Layers.ToArray();
+        var li = Array.FindIndex(layers, l => l.Id == layerId);
+        if (li < 0 || layers[li] is not ObjectLayer source)
+            throw new InvalidOperationException($"Layer {layerId} does not hold objects.");
+        var removed = ids.Select(source.ObjectStorage.IndexOfId).Where(i => i >= 0).Order().ToArray();
+        var additions = batches.OrderBy(p => p.Key).SelectMany(p => p.Value).ToArray();
+        var outgoing = removed.Select(i => source.Objects[i].Id).ToHashSet();
+        DocumentRevisionIndex.For(document).ValidateAppends(additions, outgoing);
+        var revised = source with { Objects = source.ObjectStorage.SplicePositions(removed, batches) };
+        layers[li] = revised;
+        var result = document.WithRevisedLayers(layers);
+        var locations = new List<DocumentObjectLocation>(additions.Length);
+        var offset = 0;
+        foreach (var batch in batches.OrderBy(p => p.Key))
+            foreach (var item in batch.Value) locations.Add(new(item, layerId, li, batch.Key + offset++));
+        DocumentRevisionIndex.RegisterSplice(document, result, layerId, locations);
+        ObjectNameIndex.Register(document, result, removed.Select(i => source.Objects[i]), additions);
+        ObjectLayerChanges.Register(source, revised, removed, locations.Select(l => l.ObjectIndex).ToArray(), orderCompacted: true);
+        return result;
+    }
+
     internal static MapDocument RemovePathObjects(MapDocument document, LayerId layerId, IReadOnlySet<ObjectId> ids)
     {
         _ = DocumentRevisionIndex.For(document);
