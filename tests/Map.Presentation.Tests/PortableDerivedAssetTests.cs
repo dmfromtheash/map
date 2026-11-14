@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Security.Cryptography;
 using Map.Assets;
+using Map.Performance;
 using Map.Presentation.Services;
 using SkiaSharp;
 
@@ -11,11 +12,123 @@ public sealed class PortableDerivedAssetTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "map-portable-tests", Guid.NewGuid().ToString("N"));
 
-    private static AssetRecord ImportOwner(AssetCatalog catalog)
+    private static AssetRecord ImportOwner(AssetCatalog catalog, int number = 1)
     {
         var root = new DirectoryInfo(AppContext.BaseDirectory);
         while (root is not null && !File.Exists(Path.Combine(root.FullName, "Map.slnx"))) root = root.Parent;
-        return catalog.Import(Path.Combine(root!.FullName, "tests", "fixtures", "assets", "owner-mountain-01.png"), new(), DateTimeOffset.UnixEpoch);
+        return catalog.Import(Path.Combine(root!.FullName, "tests", "fixtures", "assets", $"owner-mountain-{number:00}.png"), new(), DateTimeOffset.UnixEpoch);
+    }
+
+    private async Task<JsonElement> RunProbe(string catalog, bool dryRun = false)
+    {
+        var options = new PerformanceOptions("derived-build", 1, 1, 1, 5, Path.Combine(_root, "report.json"))
+        { Catalogs = [catalog], DryRun = dryRun };
+        var report = JsonSerializer.SerializeToElement(await DerivedBuildProbe.RunAsync(options));
+        Assert.Empty(Directory.GetDirectories(_root, "derived-build-work-*"));
+        return report.GetProperty("catalogs")[0];
+    }
+
+    [Theory]
+    [InlineData("current")]
+    [InlineData("missing")]
+    [InlineData("source-time")]
+    [InlineData("manifest")]
+    [InlineData("pixels")]
+    [InlineData("truncated")]
+    public async Task Portable_derived_probe_skips_only_current_assets_and_dry_run_does_not_write(string state)
+    {
+        var root = Path.Combine(_root, "catalog");
+        string sha;
+        string path;
+        await using (var catalog = new AssetCatalog(root))
+        {
+            var record = ImportOwner(catalog);
+            sha = record.Sha256;
+            await using var store = new StampDerivedAssetStore(catalog, Path.Combine(_root, "build-cache"));
+            path = await store.BuildPortableAsync(sha);
+            Assert.True(store.HasCurrentPortable(sha));
+            if (state == "missing") File.Delete(path);
+            else if (state == "source-time")
+            {
+                var source = catalog.SourcePath(record)!;
+                File.SetLastWriteTimeUtc(source, File.GetLastWriteTimeUtc(source).AddSeconds(2));
+            }
+            else if (state is "manifest" or "pixels" or "truncated")
+            {
+                var bytes = File.ReadAllBytes(path);
+                if (state == "manifest") bytes[44] ^= 1;
+                else if (state == "pixels") bytes[44 + BitConverter.ToInt32(bytes, 8)] ^= 0x7f;
+                else bytes = bytes[..^3];
+                File.WriteAllBytes(path, bytes);
+            }
+            Assert.Equal(state == "current", store.HasCurrentPortable(sha));
+            Assert.False(store.HasCurrentPortable(new string('0', 64)));
+            Assert.Equal(0, store.Failures);
+            await catalog.FlushMetadataAsync();
+        }
+        var before = File.Exists(path) ? File.ReadAllBytes(path) : null;
+        var written = File.GetLastWriteTimeUtc(path);
+        var current = state == "current";
+        var dry = await RunProbe(root, dryRun: true);
+        Assert.Equal(current ? 0 : 1, dry.GetProperty("built").GetInt32());
+        Assert.Equal(current ? 1 : 0, dry.GetProperty("skipped").GetInt32());
+        Assert.Equal(0, dry.GetProperty("failed").GetInt32());
+        Assert.Equal(0, dry.GetProperty("bytes").GetInt64());
+        Assert.Equal(before, File.Exists(path) ? File.ReadAllBytes(path) : null);
+        Assert.Equal(written, File.GetLastWriteTimeUtc(path));
+
+        var result = await RunProbe(root);
+        Assert.Equal(1, result.GetProperty("images").GetInt32());
+        Assert.Equal(current ? 0 : 1, result.GetProperty("built").GetInt32());
+        Assert.Equal(current ? 1 : 0, result.GetProperty("skipped").GetInt32());
+        Assert.Equal(0, result.GetProperty("failed").GetInt32());
+        Assert.Equal(current ? 0 : new FileInfo(path).Length, result.GetProperty("bytes").GetInt64());
+        Assert.True(result.GetProperty("elapsedMs").GetDouble() >= 0);
+        Assert.Empty(result.GetProperty("failures").EnumerateArray());
+        if (current) Assert.Equal(written, File.GetLastWriteTimeUtc(path));
+        await using var reopened = new AssetCatalog(root);
+        await using var reader = new StampDerivedAssetStore(reopened, Path.Combine(_root, "read-cache"));
+        Assert.True(reader.HasCurrentPortable(sha));
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("hash")]
+    public async Task Portable_derived_probe_reports_bad_sha_and_continues_with_the_next_asset(string damage)
+    {
+        var root = Path.Combine(_root, "catalog");
+        string bad;
+        string good;
+        await using (var catalog = new AssetCatalog(root))
+        {
+            var records = new[] { ImportOwner(catalog), ImportOwner(catalog, 2) }
+                .OrderBy(record => record.Sha256, StringComparer.Ordinal).ToArray();
+            bad = records[0].Sha256;
+            good = records[1].Sha256;
+            await using var store = new StampDerivedAssetStore(catalog, Path.Combine(_root, "build-cache"));
+            await store.BuildPortableAsync(bad);
+            var source = catalog.SourcePath(records[0])!;
+            if (damage == "missing") File.Delete(source);
+            else
+            {
+                File.Copy(catalog.SourcePath(records[1])!, source, overwrite: true);
+                File.SetLastWriteTimeUtc(source, DateTime.UtcNow.AddSeconds(2));
+            }
+            Assert.False(store.HasCurrentPortable(bad));
+            await catalog.FlushMetadataAsync();
+        }
+        var result = await RunProbe(root);
+        Assert.Equal(2, result.GetProperty("images").GetInt32());
+        Assert.Equal(1, result.GetProperty("built").GetInt32());
+        Assert.Equal(0, result.GetProperty("skipped").GetInt32());
+        Assert.Equal(1, result.GetProperty("failed").GetInt32());
+        var error = Assert.Single(result.GetProperty("failures").EnumerateArray());
+        Assert.Equal(bad, error.GetProperty("sha").GetString());
+        Assert.False(string.IsNullOrWhiteSpace(error.GetProperty("reason").GetString()));
+        await using var reopened = new AssetCatalog(root);
+        await using var reader = new StampDerivedAssetStore(reopened, Path.Combine(_root, "read-cache"));
+        Assert.False(reader.HasCurrentPortable(bad));
+        Assert.True(reader.HasCurrentPortable(good));
     }
 
     [Fact]

@@ -33,7 +33,9 @@ internal static class UiAudioOutput
     private static readonly List<Voice> Voices = [];
     private static Thread? _thread;
     private static long _lastSound;
-    private static bool _failed;
+    private static volatile bool _failed;
+    // A driver that refuses to close may still signal its callback. Keep that event alive.
+    private static AutoResetEvent? _unclosedDeviceEvent;
 
     /// <summary>Queues a mono clip at <see cref="SampleRate"/>; false when no device could be opened.</summary>
     public static bool Play(float[] mono, float gain = 1)
@@ -41,6 +43,7 @@ internal static class UiAudioOutput
         if (!OperatingSystem.IsWindows() || _failed) return false;
         lock (Gate)
         {
+            if (_failed) return false;
             // A burst of the same clip (a slider ticking) keeps at most a few voices.
             if (Voices.Count >= 8) Voices.RemoveAt(0);
             Voices.Add(new Voice(mono, gain));
@@ -58,7 +61,10 @@ internal static class UiAudioOutput
     {
         IntPtr device = IntPtr.Zero;
         var headers = new IntPtr[BufferCount];
-        using var ready = new AutoResetEvent(false);
+        var buffers = new IntPtr[BufferCount];
+        var prepared = new bool[BufferCount];
+        var ready = new AutoResetEvent(false);
+        var headerSize = Marshal.SizeOf<WaveHeader>();
         try
         {
             var format = new WaveFormatEx
@@ -72,15 +78,23 @@ internal static class UiAudioOutput
                 return;
             }
             var bytes = FramesPerBuffer * Channels * 2;
-            var headerSize = Marshal.SizeOf<WaveHeader>();
             for (var i = 0; i < BufferCount; i++)
             {
-                var data = Marshal.AllocHGlobal(bytes);
+                buffers[i] = Marshal.AllocHGlobal(bytes);
                 headers[i] = Marshal.AllocHGlobal(headerSize);
-                Marshal.StructureToPtr(new WaveHeader { lpData = data, dwBufferLength = (uint)bytes }, headers[i], false);
-                waveOutPrepareHeader(device, headers[i], (uint)headerSize);
-                Fill(data);
-                waveOutWrite(device, headers[i], (uint)headerSize);
+                Marshal.StructureToPtr(new WaveHeader { lpData = buffers[i], dwBufferLength = (uint)bytes }, headers[i], false);
+                if (waveOutPrepareHeader(device, headers[i], (uint)headerSize) != 0)
+                {
+                    _failed = true;
+                    return;
+                }
+                prepared[i] = true;
+                Fill(buffers[i]);
+                if (waveOutWrite(device, headers[i], (uint)headerSize) != 0)
+                {
+                    _failed = true;
+                    return;
+                }
             }
 
             var flagsOffset = (int)Marshal.OffsetOf<WaveHeader>(nameof(WaveHeader.dwFlags));
@@ -91,7 +105,6 @@ internal static class UiAudioOutput
                 {
                     if (Voices.Count == 0 && Environment.TickCount64 - _lastSound > IdleClose.TotalMilliseconds)
                     {
-                        _thread = null;
                         break;
                     }
                 }
@@ -100,36 +113,68 @@ internal static class UiAudioOutput
                     if ((Marshal.ReadInt32(header, flagsOffset) & WhdrDone) == 0) continue;
                     Fill(Marshal.ReadIntPtr(header));
                     Marshal.WriteInt32(header, flagsOffset, Marshal.ReadInt32(header, flagsOffset) & ~WhdrDone);
-                    waveOutWrite(device, header, (uint)headerSize);
+                    if (waveOutWrite(device, header, (uint)headerSize) != 0)
+                    {
+                        _failed = true;
+                        return;
+                    }
                 }
             }
         }
         catch (Exception)
         {
             _failed = true;
-            lock (Gate) _thread = null;
         }
         finally
         {
-            if (device != IntPtr.Zero)
+            var closed = device == IntPtr.Zero;
+            try
             {
-                waveOutReset(device);
-                foreach (var header in headers)
+                if (!closed)
                 {
-                    if (header == IntPtr.Zero) continue;
-                    waveOutUnprepareHeader(device, header, (uint)Marshal.SizeOf<WaveHeader>());
-                    Marshal.FreeHGlobal(Marshal.ReadIntPtr(header));
-                    Marshal.FreeHGlobal(header);
+                    if (waveOutReset(device) != 0) _failed = true;
+                    for (var i = 0; i < BufferCount; i++)
+                    {
+                        if (!prepared[i]) continue;
+                        var result = waveOutUnprepareHeader(device, headers[i], (uint)headerSize);
+                        if (result != 0) _failed = true;
+                        // If reset failed, allow the few queued buffers to finish naturally.
+                        for (var retry = 0; result == WaveStillPlaying && retry <= BufferCount; retry++)
+                        {
+                            ready.WaitOne(100);
+                            result = waveOutUnprepareHeader(device, headers[i], (uint)headerSize);
+                        }
+                        if (result == 0) prepared[i] = false;
+                    }
+                    closed = waveOutClose(device) == 0;
+                    if (!closed) _failed = true;
                 }
-                waveOutClose(device);
             }
-            // A sound queued in the moment the stream closed starts it again.
-            lock (Gate)
-                if (Voices.Count > 0 && _thread is null && !_failed)
+            catch (Exception) { _failed = true; }
+            try
+            {
+                for (var i = 0; i < BufferCount; i++)
                 {
-                    _thread = new Thread(Run) { IsBackground = true, Name = "Map UI audio", Priority = ThreadPriority.AboveNormal };
-                    _thread.Start();
+                    // Never free memory that a driver which failed reset/close may still use.
+                    if (prepared[i] && !closed) continue;
+                    if (buffers[i] != IntPtr.Zero) Marshal.FreeHGlobal(buffers[i]);
+                    if (headers[i] != IntPtr.Zero) Marshal.FreeHGlobal(headers[i]);
                 }
+                if (closed) ready.Dispose();
+                else _unclosedDeviceEvent = ready;
+                // A sound queued in the moment the stream closed starts it again.
+                lock (Gate)
+                {
+                    _thread = null;
+                    if (_failed) Voices.Clear();
+                    else if (Voices.Count > 0)
+                    {
+                        _thread = new Thread(Run) { IsBackground = true, Name = "Map UI audio", Priority = ThreadPriority.AboveNormal };
+                        _thread.Start();
+                    }
+                }
+            }
+            catch (Exception) { _failed = true; }
         }
     }
 
@@ -163,6 +208,7 @@ internal static class UiAudioOutput
     private const uint WaveMapper = unchecked((uint)-1);
     private const uint CallbackEvent = 0x00050000;
     private const int WhdrDone = 0x00000001;
+    private const int WaveStillPlaying = 33;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct WaveFormatEx

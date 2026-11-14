@@ -43,6 +43,28 @@ public sealed partial class StampDerivedAssetStore
         InvalidateFile(header.Original.Path, cancelPixels: false);
     }
 
+    /// <summary>Checks source stamps and portable integrity without building or reporting cache misses.</summary>
+    public bool HasCurrentPortable(string sha)
+    {
+        if (_disposed || _catalog.Find(sha) is not { } record || TryReadPortableHeader(record) is not { } header) return false;
+        try
+        {
+            using var file = new FileStream(header.PortablePath!, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
+            var (manifest, start) = ReadPortableManifest(file);
+            if (!string.Equals(manifest.Header.Sha, sha, StringComparison.OrdinalIgnoreCase)) return false;
+            foreach (var key in PortableKeys(record))
+            {
+                var entry = manifest.Entries.FirstOrDefault(entry => entry.Step == key.Step && entry.Level == key.Level);
+                if (entry is null) return false;
+                _ = ReadPortablePixels(file, entry, start, record, key.Step, key.Level);
+            }
+            return header.Original.Matches() && header.Working.Matches() && PortableSourcesMatch(record, manifest)
+                && VerifyPortableSources(record, manifest);
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or JsonException or ArgumentException)
+        { return false; }
+    }
+
     private static PixelKey[] PortableKeys(AssetRecord record)
     {
         var depth = AssetCatalog.DetailLadderDepth(record.Width, record.Height);
@@ -211,24 +233,29 @@ public sealed partial class StampDerivedAssetStore
                 || !VerifyPortableSources(record, manifest)) throw new InvalidDataException("Portable source identity changed.");
             var entry = manifest.Entries.FirstOrDefault(entry => entry.Step == key.Step && entry.Level == key.Level);
             if (entry is null) return null;
-            if (entry.Width != Math.Max(1, Math.Max(1, record.Width >> key.Step) >> key.Level)
-                || entry.Height != Math.Max(1, Math.Max(1, record.Height >> key.Step) >> key.Level))
-                throw new InvalidDataException("Portable pixel dimensions differ from catalog.");
-            file.Position = start + entry.Offset;
-            var compressed = new byte[entry.Length];
-            file.ReadExactly(compressed);
-            var pixels = new byte[checked(entry.Width * entry.Height * 4)];
-            using var decoder = new BrotliDecoder();
-            var decodeStarted = System.Diagnostics.Stopwatch.GetTimestamp();
-            var status = decoder.Decompress(compressed, pixels, out var consumed, out var written);
-            Interlocked.Add(ref _portableDecompressTicks, System.Diagnostics.Stopwatch.GetTimestamp() - decodeStarted);
-            if (status != System.Buffers.OperationStatus.Done || consumed != compressed.Length || written != pixels.Length
-                || !string.Equals(Convert.ToHexStringLower(SHA256.HashData(pixels)), entry.Hash, StringComparison.Ordinal))
-                throw new InvalidDataException("Portable pixels hash or size.");
-            return new(entry.Width, entry.Height, pixels);
+            return ReadPortablePixels(file, entry, start, record, key.Step, key.Level);
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or JsonException or ArgumentException)
         { RejectPortable(header, ex); return null; }
+    }
+
+    private PortablePixels ReadPortablePixels(FileStream file, PortableEntry entry, long start, AssetRecord record, int step, int level)
+    {
+        if (entry.Width != Math.Max(1, Math.Max(1, record.Width >> step) >> level)
+            || entry.Height != Math.Max(1, Math.Max(1, record.Height >> step) >> level))
+            throw new InvalidDataException("Portable pixel dimensions differ from catalog.");
+        file.Position = start + entry.Offset;
+        var compressed = new byte[entry.Length];
+        file.ReadExactly(compressed);
+        var pixels = new byte[checked(entry.Width * entry.Height * 4)];
+        using var decoder = new BrotliDecoder();
+        var decodeStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+        var status = decoder.Decompress(compressed, pixels, out var consumed, out var written);
+        Interlocked.Add(ref _portableDecompressTicks, System.Diagnostics.Stopwatch.GetTimestamp() - decodeStarted);
+        if (status != System.Buffers.OperationStatus.Done || consumed != compressed.Length || written != pixels.Length
+            || !string.Equals(Convert.ToHexStringLower(SHA256.HashData(pixels)), entry.Hash, StringComparison.Ordinal))
+            throw new InvalidDataException("Portable pixels hash or size.");
+        return new(entry.Width, entry.Height, pixels);
     }
 
     /// <summary>Explicit pipeline operation, on a separate store instance only.

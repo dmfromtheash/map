@@ -24,19 +24,37 @@ internal static class DerivedBuildProbe
             {
                 catalog.SetMounts([roots[index]]);
                 var records = catalog.Records.OrderBy(record => record.Sha256, StringComparer.Ordinal).ToArray();
+                var catalogClock = Stopwatch.StartNew();
                 long bytes = 0;
-                if (!options.DryRun)
+                var built = 0;
+                var skipped = 0;
+                var failures = new List<object>();
+                await using var store = new StampDerivedAssetStore(catalog, Path.Combine(workspace, "machine-" + index));
+                foreach (var record in records)
                 {
-                    await using var store = new StampDerivedAssetStore(catalog, Path.Combine(workspace, "machine-" + index));
-                    var completed = 0;
-                    foreach (var record in records)
+                    try
                     {
-                        var path = await store.BuildPortableAsync(record.Sha256).ConfigureAwait(false);
-                        bytes += new FileInfo(path).Length;
-                        Console.WriteLine($"derived-build: {roots[index]} {++completed}/{records.Length} {record.Sha256}");
+                        if (store.HasCurrentPortable(record.Sha256))
+                        {
+                            skipped++;
+                            continue;
+                        }
+                        if (!options.DryRun)
+                        {
+                            var path = await store.BuildPortableAsync(record.Sha256).ConfigureAwait(false);
+                            bytes += new FileInfo(path).Length;
+                        }
+                        built++;
+                        Console.WriteLine($"derived-build: {roots[index]} {(options.DryRun ? "would build" : "built")} {record.Sha256}");
+                    }
+                    catch (Exception error) when (error is not OperationCanceledException)
+                    {
+                        failures.Add(new { sha = record.Sha256, reason = error.Message });
+                        Console.WriteLine($"derived-build: {roots[index]} failed {record.Sha256}: {error.Message}");
                     }
                 }
-                rows.Add(new { catalog = roots[index], images = records.Length, bytes, dryRun = options.DryRun });
+                rows.Add(new { catalog = roots[index], images = records.Length, built, skipped, failed = failures.Count,
+                    bytes, elapsedMs = catalogClock.Elapsed.TotalMilliseconds, dryRun = options.DryRun, failures });
             }
         }
         finally
