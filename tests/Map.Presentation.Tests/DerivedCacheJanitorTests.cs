@@ -5,7 +5,8 @@ namespace Map.Presentation.Tests;
 
 public sealed class DerivedCacheJanitorTests(ITestOutputHelper output) : IDisposable
 {
-    private const long GB = 1_000_000_000;
+    // The policy is in binary GiB, the unit Windows Explorer shows as «ГБ» (PreparedDataBudget).
+    private const long GB = 1024L * 1024 * 1024;
     private readonly string _sandbox = Path.Combine(Path.GetTempPath(), "derived-janitor-" + Guid.NewGuid().ToString("N"));
     private string Root => Path.Combine(_sandbox, "derived");
     private static readonly DateTime Old = new(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc);
@@ -274,6 +275,159 @@ public sealed class DerivedCacheJanitorTests(ITestOutputHelper output) : IDispos
         Assert.True(report.CeilingSatisfied);
         AssertPairs();
     }
+
+    // ---------------------------------------------------------------- DEC-111: order, purge, shared budget
+
+    [Fact]
+    public async Task Removed_then_long_unplugged_content_goes_before_least_recently_used()
+    {
+        Pair(1, 1, 100, Old);                // live, oldest
+        Pair(1, 2, 100, Old.AddDays(30));    // removed from its catalog, newest
+        Pair(1, 3, 100, Old.AddDays(20));    // library unplugged for weeks
+        Pair(1, 4, 100, Old.AddDays(10));    // live
+        var classes = new Dictionary<string, DerivedCacheEntryClass>
+        {
+            [Id(1)] = DerivedCacheEntryClass.Live, [Id(2)] = DerivedCacheEntryClass.Unreferenced,
+            [Id(3)] = DerivedCacheEntryClass.UnmountedStale, [Id(4)] = DerivedCacheEntryClass.Live,
+        };
+        var report = await new DerivedCacheJanitor(Root, Options(300) with { Classify = e => classes[e.Sha] }, () => 10000).CleanAsync();
+        Assert.True(report.CleanupTriggered);
+        Assert.Equal(1, report.EvictedUnreferenced);
+        Assert.Equal(1, report.EvictedUnmounted);
+        Assert.Equal(0, report.EvictedLive);
+        Assert.True(File.Exists(Stem(1, 1) + ".json"));
+        Assert.True(File.Exists(Stem(1, 4) + ".json"));
+        Assert.False(File.Exists(Stem(1, 2) + ".json"));
+        Assert.False(File.Exists(Stem(1, 3) + ".pixels"));
+        AssertPairs();
+    }
+
+    [Fact]
+    public async Task Classifier_sees_the_original_path_of_the_header_and_is_not_asked_without_pressure()
+    {
+        var stem = Stem(1, 1);
+        Directory.CreateDirectory(Path.GetDirectoryName(stem)!);
+        File.WriteAllText(stem + ".json", """{"Version":1,"Original":{"Path":"X:\\MapLibrary\\refs\\originals\\a.png","Length":1,"WrittenTicks":1}}""");
+        File.WriteAllBytes(stem + ".pixels", new byte[50]);
+        var asked = new List<string?>();
+        DerivedCacheEntryClass Classify(DerivedCacheEntry e) { asked.Add(e.OriginalPath); return DerivedCacheEntryClass.Live; }
+        await new DerivedCacheJanitor(Root, Options(100000) with { Classify = Classify }, () => 10000).CleanAsync();
+        Assert.Empty(asked);
+        await new DerivedCacheJanitor(Root, Options(10) with { Classify = Classify }, () => 10000).CleanAsync();
+        Assert.Equal([@"X:\MapLibrary\refs\originals\a.png"], asked);
+    }
+
+    [Fact]
+    public async Task Purge_removes_exactly_the_selected_entries_whatever_the_ceiling()
+    {
+        Pair(1, 1, 100); Pair(1, 2, 100); Pair(1, 3, 100);
+        var foreign = Path.Combine(Root, "v1", "notes.txt");
+        Write(foreign, 7, Old);
+        var report = await Cleaner(1_000_000).PurgeAsync(e => e.Sha == Id(2));
+        Assert.True(report.LockAcquired);
+        Assert.Equal(1, report.PurgedEntries);
+        Assert.Equal(2, report.FilesDeleted);
+        Assert.Equal(100, report.BytesDeleted);
+        Assert.Equal(0, report.PurgeSkipped);
+        Assert.Equal(200, report.BytesKept);
+        Assert.False(File.Exists(Stem(1, 2) + ".json"));
+        Assert.True(File.Exists(Stem(1, 1) + ".pixels"));
+        Assert.True(File.Exists(Stem(1, 3) + ".pixels"));
+        Assert.True(File.Exists(foreign));
+        AssertPairs();
+    }
+
+    [Theory]
+    [InlineData(".json")]
+    [InlineData(".pixels")]
+    public async Task Purge_keeps_an_entry_a_reader_holds_and_names_it_for_a_retry(string extension)
+    {
+        var pair = Pair(1, 1, 100);
+        Pair(1, 2, 100);
+        // The store's readers open with read + delete sharing (ReadCompressedPixels, header reads).
+        using (new FileStream(pair + extension, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete))
+        {
+            var held = await Cleaner(0).PurgeAsync(_ => true);
+            Assert.Equal(1, held.PurgedEntries);
+            Assert.Equal(1, held.PurgeSkipped);
+            Assert.Equal([Id(1)], held.SkippedShas);
+            Assert.True(File.Exists(pair + ".json"));
+            Assert.True(File.Exists(pair + ".pixels"));
+            AssertPairs();
+        }
+        var retry = await Cleaner(0).PurgeAsync(e => e.Sha == Id(1));
+        Assert.Equal(1, retry.PurgedEntries);
+        Assert.Empty(Directory.GetFiles(Path.Combine(Root, "v1")).Where(p => !p.EndsWith(".lock", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public async Task Readers_racing_a_purge_see_a_whole_pair_or_none_and_never_crash()
+    {
+        for (var i = 1; i <= 40; i++) Pair(1, i, 4096);
+        using var stop = new CancellationTokenSource();
+        var unexpected = new List<Exception>();
+        long reads = 0;
+        var readers = Enumerable.Range(0, 4).Select(_ => Task.Run(() =>
+        {
+            var random = new Random();
+            while (!stop.IsCancellationRequested)
+            {
+                var stem = Stem(1, random.Next(1, 41));
+                try
+                {
+                    // Header first, then pixels, the order of the store's readers.
+                    using (new FileStream(stem + ".json", FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete)) { }
+                    using var pixels = new FileStream(stem + ".pixels", FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
+                    pixels.ReadByte();
+                    Interlocked.Increment(ref reads);
+                }
+                catch (Exception ex) when (ex is FileNotFoundException or IOException or UnauthorizedAccessException) { }
+                catch (Exception ex) { lock (unexpected) unexpected.Add(ex); }
+            }
+        })).ToArray();
+        var removed = 0;
+        for (var attempt = 0; attempt < 200 && removed < 40; attempt++)
+            removed += (await Cleaner(0).PurgeAsync(_ => true)).PurgedEntries;
+        stop.Cancel();
+        await Task.WhenAll(readers);
+        Assert.Empty(unexpected);
+        Assert.Equal(40, removed);
+        Assert.Empty(Directory.GetFiles(Path.Combine(Root, "v1"), "*.json"));
+        Assert.Empty(Directory.GetFiles(Path.Combine(Root, "v1"), "*.pixels"));
+        Assert.Empty(Directory.GetFiles(Path.Combine(Root, "v1"), "*.tmp"));
+        output.WriteLine($"reads during purge: {reads}");
+    }
+
+    [Fact]
+    public async Task Shared_budget_share_sets_the_ceiling_and_receives_the_kept_bytes()
+    {
+        Pair(1, 1, 400, Old); Pair(1, 2, 400, Old.AddDays(1));
+        var budget = new Map.Core.Resources.PreparedDataBudget(1000, 1, 0);
+        budget.ReportUsage(Map.Core.Resources.PreparedDataBudget.DocumentPyramid, 500);
+        var options = Options(long.MaxValue) with { Budget = budget };
+        // Pyramid holds 500 of 1000: the assets keep their 60 % guarantee (600), so 800 is over 90 %.
+        Assert.Equal(600, DerivedCacheJanitor.CalculateCeiling(options, 10000, 800));
+        var report = await new DerivedCacheJanitor(Root, options, () => 10000).CleanAsync();
+        Assert.Equal(600, report.CeilingBytes);
+        Assert.Equal(400, report.BytesKept);
+        Assert.Equal(400, budget.UsageOf(Map.Core.Resources.PreparedDataBudget.DerivedAssets));
+        Assert.True(File.Exists(Stem(1, 2) + ".json"));
+    }
+
+    [Fact]
+    public async Task Default_policy_clamps_by_measured_free_space()
+    {
+        Pair(1, 1, 100);
+        // 30 GiB free: 10 % = 3 GiB is below the 5 GiB ceiling.
+        var report = await new DerivedCacheJanitor(Root, new DerivedCacheJanitorOptions(), () => 30 * GB).CleanAsync();
+        Assert.Equal(3 * GB, report.CeilingBytes);
+        Assert.False(report.CleanupTriggered);
+        // 10.5 GiB free: only what keeps 10 GiB free may stay.
+        var tight = await new DerivedCacheJanitor(Root, new DerivedCacheJanitorOptions(), () => 10 * GB + GB / 2).CleanAsync();
+        Assert.Equal(GB / 2 + 100, tight.CeilingBytes);
+    }
+
+    private static string Id(int id) => id.ToString("x64");
 
     private DerivedCacheJanitor Cleaner(long ceiling, int version = 1) =>
         new(Root, Options(ceiling) with { CurrentVersion = version }, () => 10000);

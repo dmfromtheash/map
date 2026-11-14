@@ -1425,7 +1425,42 @@ public sealed partial class AssetCatalog : IAsyncDisposable
     /// </summary>
     public void RemoveRecord(string sha256)
     {
-        if (TryRouteRecord(sha256, mount => mount.RemoveRecord(sha256))) return;
+        if (TryRouteRecord(sha256, mount => mount.RemoveRecord(sha256))) { RecordRemoved?.Invoke(sha256); return; }
+        RemoveOwnRecord(sha256);
+        RecordRemoved?.Invoke(sha256);
+    }
+
+    /// <summary>
+    /// Raised on the removing thread after <see cref="RemoveRecord"/> saved, for this catalog or a drive library routed
+    /// through it. Listeners drop what they prepared for the content (the machine cache of DEC-111); the same content
+    /// may still be listed by another library, so they check <see cref="Find"/> first.
+    /// </summary>
+    public event Action<string>? RecordRemoved;
+
+    /// <summary>
+    /// SHA-256 of every content carrying this tag: the images and masks of the variants of tagged sets and tagged flat
+    /// records, across the owner's library and the attached drive libraries.
+    /// </summary>
+    public IReadOnlyCollection<string> ContentWithTag(string tag)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tag);
+        tag = tag.Trim();
+        var view = _view;
+        var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var record in view.Records)
+            if (record.Tags.Contains(tag, StringComparer.OrdinalIgnoreCase)) result.Add(record.Sha256);
+        foreach (var set in view.Sets.Where(set => set.Tags.Contains(tag, StringComparer.OrdinalIgnoreCase)))
+            foreach (var id in set.VariantIds)
+                if (FindVariant(id) is { } variant)
+                {
+                    result.Add(variant.Sha256);
+                    if (variant.MaskSha256 is { } mask) result.Add(mask);
+                }
+        return result;
+    }
+
+    private void RemoveOwnRecord(string sha256)
+    {
         using var mutation = BeginMutation();
         ArgumentException.ThrowIfNullOrWhiteSpace(sha256);
         var variantIds = _document.Variants

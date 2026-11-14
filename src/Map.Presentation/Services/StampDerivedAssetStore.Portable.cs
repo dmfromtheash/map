@@ -180,8 +180,9 @@ public sealed partial class StampDerivedAssetStore
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException) { ReportFailure("portable trust persistence", error); }
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
-        Interlocked.Add(ref _diskBytes, FileBytes(path) - previousBytes);
-        if (DiskBytes > _diskBudget) TrimDisk();
+        var written = FileBytes(path) - previousBytes;
+        Interlocked.Add(ref _diskBytes, written);
+        AfterBuild(written);
         return true;
     }
 

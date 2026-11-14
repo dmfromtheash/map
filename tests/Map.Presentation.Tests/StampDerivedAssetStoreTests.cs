@@ -157,6 +157,8 @@ public sealed class StampDerivedAssetStoreTests : IDisposable
         try
         {
             Assert.NotNull(await store.Request(record.Sha256).WaitAsync(TimeSpan.FromSeconds(30)));
+            // The build over the ceiling queued the janitor on its own thread; this pass runs after it.
+            await store.CleanNowAsync().WaitAsync(TimeSpan.FromSeconds(30));
             Assert.True(store.DiskBytes <= 1);
             Assert.Equal(1, store.DiskEvictions);
             Assert.Empty(Directory.GetFiles(folder, "*.json"));

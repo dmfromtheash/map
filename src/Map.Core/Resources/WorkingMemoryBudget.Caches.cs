@@ -97,11 +97,38 @@ public sealed partial class WorkingMemoryBudget
     /// <summary>Probe and test hook: replaces the measured pressure (null measures).</summary>
     public bool? SimulatedCachePressure { get; set; }
 
+    /// <summary>The current budget: between <see cref="CalculateCacheBudget"/> and <see cref="CalculateMaximumCacheBudget"/>.</summary>
     public long CacheBudgetBytes { get { lock (_cacheGate) return EnsureCacheBudget(); } }
+    /// <summary>The budget's floor, an eighth of RAM; what it returns to as soon as memory gets busy.</summary>
+    public long BaseCacheBudgetBytes { get { lock (_cacheGate) { EnsureCacheBudget(); return _cacheBudgetBase; } } }
+    public long CacheBudgetChanges => Interlocked.Read(ref _cacheBudgetChanges);
 
     /// <summary>An eighth of physical RAM, between 256 MiB and 2 GiB; documents, history and Windows keep the rest.</summary>
     public static long CalculateCacheBudget(long physicalBytes) =>
         Math.Clamp(physicalBytes / 8, 256 * MiB, 2048 * MiB);
+
+    /// <summary>DEC-111: while memory is free the caches may hold up to a quarter of RAM (at most 4 GiB).</summary>
+    public static long CalculateMaximumCacheBudget(long physicalBytes) =>
+        Math.Clamp(physicalBytes / 4, 256 * MiB, 4096 * MiB);
+
+    // Dynamic budget (DEC-111 p.3). Grow only while the physical load is at least GrowMargin below the GC's
+    // high-load threshold, counting what the caches may still fill of the budget already granted, so a full cache
+    // stays below that line; fall back to the eighth at once within ShrinkMargin of the threshold or under pressure.
+    // The 10-point gap, the grow interval and the regrow delay after a fall keep the budget from oscillating.
+    /// <summary>Growth stops this share of RAM below the GC high-load threshold.</summary>
+    public const int CacheBudgetGrowMarginPercent = 15;
+    /// <summary>Within this share of RAM below the threshold the budget returns to its eighth.</summary>
+    public const int CacheBudgetShrinkMarginPercent = 5;
+    /// <summary>One growth step is at most this fraction of RAM (512 MiB of 16 GiB).</summary>
+    public const int CacheBudgetGrowStepDivisor = 32;
+    public static readonly TimeSpan CacheBudgetGrowInterval = TimeSpan.FromSeconds(5);
+    public static readonly TimeSpan CacheBudgetRegrowDelay = TimeSpan.FromSeconds(60);
+    private const long CacheBudgetMinimumStep = 64 * MiB;
+
+    private long _cacheBudgetBase, _cacheBudgetChanges;
+    private long _lastCacheGrowMs = long.MinValue / 2, _lastCacheShrinkMs = long.MinValue / 2;
+    // Test processes pin Shared to a fixed machine; its budget stays at the eighth there.
+    private volatile bool _cacheBudgetFixed;
 
     private long EnsureCacheBudget()
     {
@@ -110,7 +137,55 @@ public sealed partial class WorkingMemoryBudget
         try { physical = _read().PhysicalBytes; }
         catch (Exception error) when (error is InvalidOperationException or System.ComponentModel.Win32Exception) { physical = 0; }
         if (physical <= 0) physical = GC.GetGCMemoryInfo().TotalAvailableMemoryBytes;
-        return _cacheBudget = CalculateCacheBudget(physical);
+        _cacheBudgetBase = CalculateCacheBudget(physical);
+        return _cacheBudget = _cacheBudgetBase;
+    }
+
+    private static double HighLoadRatio()
+    {
+        var info = GC.GetGCMemoryInfo();
+        return info.TotalAvailableMemoryBytes > 0 && info.HighMemoryLoadThresholdBytes > 0
+            ? Math.Clamp((double)info.HighMemoryLoadThresholdBytes / info.TotalAvailableMemoryBytes, .5, .99) : .9;
+    }
+
+    /// <summary>Background only (the pressure poll). Changes the budget by the rules above and rebalances the shares.</summary>
+    private void AdjustCacheBudget(WorkingMemorySnapshot memory, bool pressed)
+    {
+        if (_cacheBudgetFixed || memory.PhysicalBytes <= 0) return;
+        lock (_cacheGate)
+        {
+            EnsureCacheBudget();
+            var physical = memory.PhysicalBytes;
+            var floor = _cacheBudgetBase;
+            var ceiling = Math.Max(floor, CalculateMaximumCacheBudget(physical));
+            var threshold = (long)(physical * HighLoadRatio());
+            var load = physical - Math.Max(0, memory.AvailableBytes);
+            var now = _clock.GetUtcNow().ToUnixTimeMilliseconds();
+            var next = _cacheBudget;
+            if (pressed || load >= threshold - physical * CacheBudgetShrinkMarginPercent / 100)
+            {
+                if (_cacheBudget > floor) { next = floor; _lastCacheShrinkMs = now; }
+            }
+            else if (_cacheBudget < ceiling
+                && now - _lastCacheShrinkMs >= (long)CacheBudgetRegrowDelay.TotalMilliseconds
+                && now - _lastCacheGrowMs >= (long)CacheBudgetGrowInterval.TotalMilliseconds)
+            {
+                // Bytes the caches may still fill of what is granted already count as load.
+                var live = Rebalance();
+                var requested = live.GroupBy(account => account.Name, StringComparer.Ordinal)
+                    .Sum(group => group.Max(account => account.RequestedBytes));
+                var held = live.Sum(account => account.Bytes);
+                var unfilled = Math.Max(0, Math.Min(_cacheBudget, requested) - held);
+                var room = threshold - physical * CacheBudgetGrowMarginPercent / 100 - load - unfilled;
+                var step = Math.Min(Math.Min(physical / CacheBudgetGrowStepDivisor, room), ceiling - _cacheBudget);
+                if (step >= Math.Min(CacheBudgetMinimumStep, ceiling - _cacheBudget) && step > 0)
+                { next = _cacheBudget + step; _lastCacheGrowMs = now; }
+            }
+            if (next == _cacheBudget) return;
+            _cacheBudget = next;
+            Interlocked.Increment(ref _cacheBudgetChanges);
+            Rebalance();
+        }
     }
 
     public CacheMemoryAccount RegisterCache(string name, CacheRebuildCost cost, long requestedBytes)
@@ -157,7 +232,9 @@ public sealed partial class WorkingMemoryBudget
         if (Interlocked.CompareExchange(ref _cachePolling, 1, 0) != 0) return;
         try
         {
-            var pressed = SimulatedCachePressure ?? MeasureCachePressure();
+            var memory = _read();
+            var pressed = SimulatedCachePressure ?? MeasureCachePressure(memory);
+            AdjustCacheBudget(memory, pressed);
             var stage = CachePressureStage;
             if (!pressed) { Volatile.Write(ref _cachePressureStage, -1); return; }
             if (stage < 0) Interlocked.Increment(ref _cachePressureEvents);
@@ -168,16 +245,12 @@ public sealed partial class WorkingMemoryBudget
         finally { Volatile.Write(ref _cachePolling, 0); }
     }
 
-    private bool MeasureCachePressure()
+    private bool MeasureCachePressure(WorkingMemorySnapshot memory)
     {
-        var memory = _read();
         if (memory.PhysicalBytes <= 0) return IsUnderPressure;
         // The GC's own high-memory threshold (normally 90 % of RAM), applied to the current physical load. The
         // MemoryLoadBytes of GCMemoryInfo is as old as the last GC; native pixels grow without one.
-        var info = GC.GetGCMemoryInfo();
-        var ratio = info.TotalAvailableMemoryBytes > 0 && info.HighMemoryLoadThresholdBytes > 0
-            ? Math.Clamp((double)info.HighMemoryLoadThresholdBytes / info.TotalAvailableMemoryBytes, .5, .99) : .9;
-        var threshold = (long)(memory.PhysicalBytes * ratio);
+        var threshold = (long)(memory.PhysicalBytes * HighLoadRatio());
         if (CachesUnderPressure) threshold -= memory.PhysicalBytes * CachePressureExitMarginPercent / 100;
         var load = memory.PhysicalBytes - Math.Max(0, memory.AvailableBytes);
         return load >= threshold || IsUnderPressure;

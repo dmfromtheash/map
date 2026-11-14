@@ -21,7 +21,6 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
     private readonly string _root;
     private readonly long _diskBudget;
     private readonly object _requestsGate = new();
-    private readonly object _diskGate = new();
     private readonly object _memoryGate = new();
     private readonly Dictionary<string, byte[]> _memoryPixels = new(StringComparer.OrdinalIgnoreCase);
     private long _memoryBytes, _failures;
@@ -134,11 +133,17 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
         FileStamp Original, FileStamp Working, int FirstMip, int MipCount, string PixelHash,
         string? PortablePath = null);
 
-    public StampDerivedAssetStore(AssetCatalog catalog, string root, long diskBudgetBytes = 2L * 1024 * 1024 * 1024,
+    /// <param name="diskBudgetBytes">
+    /// Null (the program): this cache is the «derived-assets» share of <see cref="Map.Core.Resources.PreparedDataBudget.Shared"/>
+    /// (up to 5 GiB, free-space clamp). A number fixes the ceiling to it, with the same free-space clamp.
+    /// </param>
+    /// <param name="maintenance">When and how the janitor runs; null is <see cref="DerivedCacheMaintenancePolicy.Default"/>.</param>
+    public StampDerivedAssetStore(AssetCatalog catalog, string root, long? diskBudgetBytes = null,
         int metadataCapacity = 8192, int pixelCapacity = 4096, long preparedSourceByteCapacity = 64L * 1024 * 1024,
-        TimeProvider? retryClock = null, Action<FileSystemWatcher>? startWatcher = null)
+        TimeProvider? retryClock = null, Action<FileSystemWatcher>? startWatcher = null,
+        DerivedCacheMaintenancePolicy? maintenance = null)
     {
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(diskBudgetBytes);
+        if (diskBudgetBytes is { } explicitBudget) ArgumentOutOfRangeException.ThrowIfNegativeOrZero(explicitBudget);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(metadataCapacity);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(pixelCapacity);
         ArgumentOutOfRangeException.ThrowIfNegative(preparedSourceByteCapacity);
@@ -146,11 +151,13 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
         _retryClock = retryClock ?? TimeProvider.System;
         _startWatcher = startWatcher ?? (watcher => watcher.EnableRaisingEvents = true);
         _root = Path.GetFullPath(root);
-        _diskBudget = diskBudgetBytes;
         _metadataCapacity = metadataCapacity;
         _pixelCapacity = pixelCapacity;
         _preparedSourceByteCapacity = Math.Min(preparedSourceByteCapacity, AssetImagePolicy.MaxDecodedBytes);
-        _workers = Task.WhenAll(Task.Run(async () => { TrimDisk(); await Work().ConfigureAwait(false); }), Task.Run(BuildWork));
+        _policy = maintenance ?? DerivedCacheMaintenancePolicy.Default;
+        _janitor = CreateJanitor(diskBudgetBytes);
+        _diskBudget = diskBudgetBytes ?? _policy.Budget.TotalBytes;
+        _workers = Task.WhenAll(Task.Run(Work), Task.Run(BuildWork), StartMaintenance());
     }
 
     public Task<Header?> Request(string sha)
@@ -637,8 +644,10 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
             try { if (File.Exists(temporary)) File.Delete(temporary); }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { ReportFailure("temporary cleanup", ex); }
         }
-        Interlocked.Add(ref _diskBytes, FileBytes(stem + ".pixels") + FileBytes(stem + ".json") - previousBytes);
-        if (Interlocked.Increment(ref _builds) % 64 == 0 || DiskBytes > _diskBudget) TrimDisk();
+        var written = FileBytes(stem + ".pixels") + FileBytes(stem + ".json") - previousBytes;
+        Interlocked.Add(ref _diskBytes, written);
+        Interlocked.Increment(ref _builds);
+        AfterBuild(written);
         return header;
     }
 
@@ -750,40 +759,6 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return 0; }
     }
 
-    private void TrimDisk()
-    {
-        lock (_diskGate)
-        {
-            var folder = Path.Combine(_root, "v" + Version);
-            if (!Directory.Exists(folder)) return;
-            try
-            {
-                var files = new DirectoryInfo(folder).GetFiles();
-                foreach (var file in files.Where(f => f.Name.EndsWith(".tmp", StringComparison.Ordinal)
-                    && f.Name.Length == 101 && f.Name[..64].All(Uri.IsHexDigit)
-                    && f.LastWriteTimeUtc < DateTime.UtcNow.AddHours(-1)))
-                    try { file.Delete(); } catch (IOException) { } catch (UnauthorizedAccessException) { }
-                var entries = files.Where(f => f.Name.Length is 69 or 70 or 71 && f.Name[..64].All(Uri.IsHexDigit)
-                    && (f.Extension == ".json" || f.Extension == ".pixels" || f.Extension == ".trust"))
-                    .GroupBy(f => f.Name[..64], StringComparer.OrdinalIgnoreCase)
-                    .Select(group => new { Files = group.ToArray(), Used = group.Max(f => f.LastWriteTimeUtc), Bytes = group.Sum(f => f.Length) })
-                    .OrderBy(entry => entry.Used).ToArray();
-                var bytes = entries.Sum(entry => entry.Bytes);
-                foreach (var entry in entries)
-                {
-                    if (bytes <= _diskBudget) break;
-                    var removed = false;
-                    foreach (var file in entry.Files)
-                        try { var length = file.Length; file.Delete(); bytes -= length; removed = true; }
-                        catch (IOException) { } catch (UnauthorizedAccessException) { }
-                    if (removed) Interlocked.Increment(ref _diskEvictions);
-                }
-                Interlocked.Exchange(ref _diskBytes, bytes);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
-        }
-    }
-
     /// <summary>Background/test reader. Never called by a canvas getter.</summary>
     public byte[]? ReadMip(Header header, int level, out int width, out int height)
     {
@@ -827,6 +802,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
         {
             if (_disposed) return;
             _disposed = true; _stop.Cancel(); _queue.Writer.TryComplete();
+            StopMaintenance();
             Forget();
             lock (_watchers) { foreach (var watcher in _watchers.Values) watcher.Dispose(); _watchers.Clear(); }
             _watchedFiles.Clear(); SourceChanged = null; OverviewChanged = null;

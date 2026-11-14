@@ -12,10 +12,26 @@ namespace Map.Presentation.Services;
 public sealed class CatalogStampImageSource(
     AssetCatalog catalog, Func<MapDocument> document, Func<string?> projectPath, int imageCapacity = 4096,
     long cacheBytes = 512L * 1024 * 1024, bool retainSamples = true, string? derivedRoot = null,
-    TimeProvider? retryClock = null, Action<FileSystemWatcher>? startWatcher = null) : IStampImageSource, IDisposable, IAsyncDisposable
+    TimeProvider? retryClock = null, Action<FileSystemWatcher>? startWatcher = null,
+    DerivedCacheMaintenancePolicy? derivedMaintenance = null) : IStampImageSource, IDisposable, IAsyncDisposable
 {
     private readonly StampDerivedAssetStore? _derived = derivedRoot is null ? null : new(catalog, derivedRoot,
-        retryClock: retryClock, startWatcher: startWatcher);
+        retryClock: retryClock, startWatcher: startWatcher, maintenance: derivedMaintenance);
+
+    /// <summary>True when this source keeps the machine cache of preparations (and runs its janitor).</summary>
+    public bool HasDerivedCache => _derived is not null;
+    public DerivedCacheJanitorReport? LastDerivedCleanup => _derived?.LastCleanup;
+    public long DerivedCleanups => _derived?.Cleanups ?? 0;
+    // Targeted cleanup of the machine cache (DEC-111 p.4); without a cache there is nothing to remove.
+    public Task<DerivedCachePurgeResult> PurgeDerived(IEnumerable<string> sha) =>
+        _derived?.PurgeDerived(sha) ?? Task.FromResult(DerivedCachePurgeResult.Nothing);
+    public Task<DerivedCachePurgeResult> PurgeDerivedByTag(string tag) =>
+        _derived?.PurgeDerivedByTag(tag) ?? Task.FromResult(DerivedCachePurgeResult.Nothing);
+    public Task<DerivedCachePurgeResult> PurgeUnused() =>
+        _derived?.PurgeUnused() ?? Task.FromResult(DerivedCachePurgeResult.Nothing);
+    public Task<DerivedCacheJanitorReport?> CleanDerivedNowAsync() =>
+        _derived is null ? Task.FromResult<DerivedCacheJanitorReport?>(null) : CleanNow(_derived);
+    private static async Task<DerivedCacheJanitorReport?> CleanNow(StampDerivedAssetStore store) => await store.CleanNowAsync().ConfigureAwait(false);
     private readonly TimeProvider _retryClock = retryClock ?? TimeProvider.System;
     private readonly CancellationTokenSource _retryStop = new();
     private Task? _missingRetry;

@@ -1,17 +1,74 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Text.Json;
+using Map.Core.Resources;
 
 namespace Map.Presentation.Services;
 
 public sealed record DerivedCacheJanitorOptions
 {
-    // Decimal GB for disk space: 5 GB ceiling and 10 GB free-space reserve.
-    public long MaximumBytes { get; init; } = 5_000_000_000;
-    public decimal FreeSpaceFraction { get; init; } = 0.10m;
-    public long MinimumFreeBytes { get; init; } = 10_000_000_000;
+    // Binary GiB like Windows Explorer's «ГБ»: 5 GiB ceiling and 10 GiB free-space reserve (PreparedDataBudget).
+    public long MaximumBytes { get; init; } = PreparedDataBudget.DefaultTotalBytes;
+    public decimal FreeSpaceFraction { get; init; } = PreparedDataBudget.DefaultFreeSpaceFraction;
+    public long MinimumFreeBytes { get; init; } = PreparedDataBudget.DefaultMinimumFreeBytes;
     public int CurrentVersion { get; init; } = 1;
     public TimeSpan LockTimeout { get; init; } = TimeSpan.FromSeconds(2);
     public TimeSpan TemporaryFileGrace { get; init; } = TimeSpan.FromHours(1);
+    /// <summary>
+    /// When set, the ceiling is this share of the shared prepared-data budget (its policy replaces MaximumBytes,
+    /// FreeSpaceFraction and MinimumFreeBytes) and the kept bytes are reported back to it after each cleanup.
+    /// </summary>
+    public PreparedDataBudget? Budget { get; init; }
+    public PreparedDataShare Share { get; init; } = PreparedDataBudget.DerivedAssets;
+    /// <summary>Eviction class of an entry; without it every entry is <see cref="DerivedCacheEntryClass.Live"/> (plain LRU).</summary>
+    public Func<DerivedCacheEntry, DerivedCacheEntryClass>? Classify { get; init; }
+}
+
+/// <summary>Eviction order under the ceiling: lower classes go first, LRU inside a class.</summary>
+public enum DerivedCacheEntryClass
+{
+    /// <summary>No catalog lists the content any more (removed from a library, or never listed).</summary>
+    Unreferenced = 0,
+    /// <summary>The content's drive library has been unplugged for longer than the aging period.</summary>
+    UnmountedStale = 1,
+    /// <summary>Listed by an attached catalog, or by a library unplugged only recently.</summary>
+    Live = 2,
+}
+
+/// <summary>One cached content as the janitor sees it. The source path is read from the header only when asked for.</summary>
+public sealed class DerivedCacheEntry
+{
+    private readonly string? _headerPath;
+    private string? _originalPath;
+    private bool _read;
+
+    internal DerivedCacheEntry(string sha, DateTime lastUsedUtc, string? headerPath)
+    { Sha = sha; LastUsedUtc = lastUsedUtc; _headerPath = headerPath; }
+
+    public string Sha { get; }
+    public DateTime LastUsedUtc { get; }
+
+    /// <summary>The original the preparation was made from (header «Original.Path»), or null when unreadable.</summary>
+    public string? OriginalPath
+    {
+        get
+        {
+            if (_read) return _originalPath;
+            _read = true;
+            if (_headerPath is null) return null;
+            try
+            {
+                using var file = new FileStream(_headerPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                if (file.Length > 16 * 1024) return null;
+                using var json = JsonDocument.Parse(file);
+                if (json.RootElement.TryGetProperty("Original", out var original) && original.ValueKind == JsonValueKind.Object
+                    && original.TryGetProperty("Path", out var path) && path.ValueKind == JsonValueKind.String)
+                    _originalPath = path.GetString();
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException) { }
+            return _originalPath;
+        }
+    }
 }
 
 public sealed record DerivedCacheJanitorReport
@@ -29,15 +86,25 @@ public sealed record DerivedCacheJanitorReport
     public long BytesKept { get; internal init; }
     public int VersionFoldersDeleted { get; internal init; }
     public bool ReserveSatisfied { get; internal init; }
+    /// <summary>Whole entries (header + pixels) removed for the ceiling, per eviction class.</summary>
+    public int EvictedUnreferenced { get; internal init; }
+    public int EvictedUnmounted { get; internal init; }
+    public int EvictedLive { get; internal init; }
+    /// <summary>Purge only: entries selected and removed, and selected entries kept because a reader held them.</summary>
+    public int PurgedEntries { get; internal init; }
+    public int PurgeSkipped { get; internal init; }
+    public IReadOnlyList<string> SkippedShas { get; internal init; } = Array.Empty<string>();
     public bool CeilingSatisfied => ScanComplete && BytesKept <= CeilingBytes && ReserveSatisfied;
     public IReadOnlyList<string> Errors { get; internal init; } = Array.Empty<string>();
 }
 
 /// <summary>
-/// Explicit background maintenance for one derived-cache root, not a writer/admission controller.
+/// Background maintenance for one derived-cache root, not a writer/admission controller.
 /// Only canonical store filenames in v1..vCurrentVersion are owned. No recursive deletion.
 /// The store touches the header's last-write time on a disk hit; use the newest pair timestamp
 /// as LRU, rather than filesystem access times (often disabled) or another side file.
+/// Deleting renames both members while handles deny other readers and writers, then deletes the renamed files:
+/// a reader either opens the old pair before the rename (and then the pair is skipped) or finds no pair and rebuilds.
 /// </summary>
 public sealed class DerivedCacheJanitor
 {
@@ -57,6 +124,8 @@ public sealed class DerivedCacheJanitor
         _availableFreeBytes = availableFreeBytes ?? ReadAvailableFreeBytes;
     }
 
+    public string Root => _root;
+
     /// <summary>
     /// Free space already excludes the cache. The reserve therefore permits at most
     /// currentCacheBytes + free - reserve bytes to remain, clamped to zero.
@@ -69,21 +138,116 @@ public sealed class DerivedCacheJanitor
         Validate(options);
         ArgumentOutOfRangeException.ThrowIfNegative(availableFreeBytes);
         ArgumentOutOfRangeException.ThrowIfNegative(currentCacheBytes);
-        return (long)Math.Min(options.MaximumBytes, Math.Min(
-            decimal.Floor(availableFreeBytes * options.FreeSpaceFraction),
-            Math.Max(0m, (decimal)currentCacheBytes + availableFreeBytes - options.MinimumFreeBytes)));
+        if (options.Budget is { } budget) return budget.CeilingFor(options.Share, availableFreeBytes, currentCacheBytes);
+        return PreparedDataBudget.CalculateTotal(options.MaximumBytes, options.FreeSpaceFraction, options.MinimumFreeBytes,
+            availableFreeBytes, currentCacheBytes);
     }
 
     // Task.Run also moves the initial directory/drive queries and lock wait off the caller thread.
     public Task<DerivedCacheJanitorReport> CleanAsync(CancellationToken cancellationToken = default) =>
         Task.Run(() => Clean(cancellationToken), cancellationToken);
 
-    private DerivedCacheJanitorReport Clean(CancellationToken cancellationToken)
+    /// <summary>Synchronous form for a caller already on its own background thread (the store's maintenance).</summary>
+    internal DerivedCacheJanitorReport Clean(CancellationToken cancellationToken) =>
+        Run(cancellationToken, (pass, before) =>
+        {
+            // Obsolete versions, stale interrupted writes and stale singletons are maintenance,
+            // independent of pressure. Young temporary files protect their entire SHA group.
+            foreach (var entry in before.Entries.Where(e => e.Version < _options.CurrentVersion || e.Maintenance))
+                pass.Delete(entry);
+            var removedFolders = 0;
+            foreach (var folder in before.Folders.Where(f => f.Version < _options.CurrentVersion))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    CheckPath(folder.Path, directory: true);
+                    if (Directory.EnumerateFileSystemEntries(folder.Path).Any()) continue;
+                    Directory.Delete(folder.Path, recursive: false);
+                    removedFolders++;
+                }
+                catch (Exception ex) when (IsFileError(ex)) { pass.Error(folder.Path, ex); }
+            }
+
+            var current = pass.Scan();
+            var free = _availableFreeBytes();
+            var ceiling = CalculateCeiling(_options, free, current.Bytes);
+            var target = (long)decimal.Floor(ceiling * 0.70m);
+            var triggered = current.Bytes > ceiling * 0.90m;
+            var remaining = current.Bytes;
+            var evicted = new int[3];
+            if (triggered)
+            {
+                // Removed and long-unplugged content first, then least recently used. Only the ordering
+                // reads headers, and only while the ceiling is exceeded.
+                var ordered = current.Entries
+                    .Select(e => (Entry: e, Class: e.Maintenance || _options.Classify is null ? DerivedCacheEntryClass.Live
+                        : _options.Classify(pass.Describe(e))))
+                    .OrderBy(e => e.Class).ThenBy(e => e.Entry.Used).ThenBy(e => e.Entry.Files[0].Path, StringComparer.Ordinal);
+                foreach (var (entry, cls) in ordered)
+                {
+                    if (remaining <= target) break;
+                    var removed = pass.Delete(entry);
+                    if (removed > 0) evicted[(int)cls]++;
+                    remaining -= removed;
+                }
+            }
+
+            var kept = pass.Scan();
+            _options.Budget?.ReportUsage(_options.Share, kept.Bytes);
+            return new()
+            {
+                LockAcquired = true, ScanComplete = pass.Complete, CleanupTriggered = triggered,
+                AvailableFreeBytes = free, CeilingBytes = ceiling, TargetBytes = target,
+                BytesBefore = before.Bytes, FilesDeleted = pass.DeletedFiles, BytesDeleted = pass.DeletedBytes,
+                FilesKept = kept.Files, BytesKept = kept.Bytes, VersionFoldersDeleted = removedFolders,
+                ReserveSatisfied = _availableFreeBytes() >= MinimumFree,
+                EvictedUnreferenced = evicted[0], EvictedUnmounted = evicted[1], EvictedLive = evicted[2],
+                Errors = pass.Errors
+            };
+        });
+
+    /// <summary>
+    /// Removes exactly the selected entries (header + pixels of every owned version), whatever the ceiling.
+    /// Nothing else is touched. An entry a reader holds open, or one being written, is kept and named in
+    /// <see cref="DerivedCacheJanitorReport.SkippedShas"/> so the caller can try again later.
+    /// </summary>
+    public Task<DerivedCacheJanitorReport> PurgeAsync(Func<DerivedCacheEntry, bool> select,
+        CancellationToken cancellationToken = default)
     {
-        var errors = new HashSet<string>(StringComparer.Ordinal);
-        var complete = true;
-        long deletedFiles = 0, deletedBytes = 0;
-        var removedFolders = 0;
+        ArgumentNullException.ThrowIfNull(select);
+        return Task.Run(() => Purge(select, cancellationToken), cancellationToken);
+    }
+
+    internal DerivedCacheJanitorReport Purge(Func<DerivedCacheEntry, bool> select, CancellationToken cancellationToken) =>
+        Run(cancellationToken, (pass, before) =>
+        {
+            var purged = 0;
+            var skipped = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var entry in before.Entries.Where(e => !e.Files[0].Temporary))
+            {
+                if (!select(pass.Describe(entry))) continue;
+                if (pass.Delete(entry) > 0) purged++;
+                else skipped.Add(entry.Sha);
+            }
+            var kept = pass.Scan();
+            _options.Budget?.ReportUsage(_options.Share, kept.Bytes);
+            return new()
+            {
+                LockAcquired = true, ScanComplete = pass.Complete, BytesBefore = before.Bytes,
+                FilesDeleted = pass.DeletedFiles, BytesDeleted = pass.DeletedBytes, FilesKept = kept.Files,
+                BytesKept = kept.Bytes, PurgedEntries = purged, PurgeSkipped = skipped.Count,
+                SkippedShas = skipped.ToArray(), ReserveSatisfied = true, CeilingBytes = long.MaxValue,
+                Errors = pass.Errors
+            };
+        });
+
+    private long MinimumFree => _options.Budget?.MinimumFreeBytes ?? _options.MinimumFreeBytes;
+
+    private DerivedCacheJanitorReport Run(CancellationToken cancellationToken,
+        Func<Pass, Snapshot, DerivedCacheJanitorReport> body)
+    {
+        var pass = new Pass(this, cancellationToken);
         FileStream? cleanerLock = null;
         try
         {
@@ -109,75 +273,43 @@ public sealed class DerivedCacheJanitor
                     cancellationToken.WaitHandle.WaitOne(TimeSpan.FromMilliseconds(25));
                 }
             }
-
-            var before = Scan();
-            var folders = before.Folders;
-            // Obsolete versions, stale interrupted writes and stale singletons are maintenance,
-            // independent of pressure. Young temporary files protect their entire SHA group.
-            foreach (var entry in before.Entries.Where(e => e.Version < _options.CurrentVersion || e.Maintenance))
-                Delete(entry);
-            foreach (var folder in folders.Where(f => f.Version < _options.CurrentVersion))
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                try
-                {
-                    CheckPath(folder.Path, directory: true);
-                    if (Directory.EnumerateFileSystemEntries(folder.Path).Any()) continue;
-                    Directory.Delete(folder.Path, recursive: false);
-                    removedFolders++;
-                }
-                catch (Exception ex) when (IsFileError(ex)) { Error(folder.Path, ex); }
-            }
-
-            var current = Scan();
-            var free = _availableFreeBytes();
-            var ceiling = CalculateCeiling(_options, free, current.Bytes);
-            var target = (long)decimal.Floor(ceiling * 0.70m);
-            var triggered = current.Bytes > ceiling * 0.90m;
-            var remaining = current.Bytes;
-            if (triggered)
-            {
-                foreach (var entry in current.Entries.OrderBy(e => e.Used).ThenBy(e => e.Files[0].Path, StringComparer.Ordinal))
-                {
-                    if (remaining <= target) break;
-                    remaining -= Delete(entry);
-                }
-            }
-
-            var kept = Scan();
-            return new()
-            {
-                LockAcquired = true, ScanComplete = complete, CleanupTriggered = triggered,
-                AvailableFreeBytes = free, CeilingBytes = ceiling, TargetBytes = target,
-                BytesBefore = before.Bytes, FilesDeleted = deletedFiles, BytesDeleted = deletedBytes,
-                FilesKept = kept.Files, BytesKept = kept.Bytes, VersionFoldersDeleted = removedFolders,
-                ReserveSatisfied = _availableFreeBytes() >= _options.MinimumFreeBytes,
-                Errors = errors.ToArray()
-            };
+            return body(pass, pass.Scan());
         }
         catch (Exception ex) when (IsFileError(ex))
         {
-            Error(_root, ex);
-            return new() { LockAcquired = cleanerLock is not null, FilesDeleted = deletedFiles,
-                BytesDeleted = deletedBytes, VersionFoldersDeleted = removedFolders, Errors = errors.ToArray() };
+            pass.Error(_root, ex);
+            return new() { LockAcquired = cleanerLock is not null, FilesDeleted = pass.DeletedFiles,
+                BytesDeleted = pass.DeletedBytes, Errors = pass.Errors };
         }
         finally
         {
             // Keep the lock inode: unlinking it lets another cleaner lock a different inode.
             cleanerLock?.Dispose();
         }
+    }
 
-        void Error(string path, Exception ex) => errors.Add(path + ": " + ex.Message);
+    private sealed class Pass(DerivedCacheJanitor owner, CancellationToken cancellationToken)
+    {
+        private readonly HashSet<string> _errors = new(StringComparer.Ordinal);
+        public bool Complete = true;
+        public long DeletedFiles, DeletedBytes;
+        public string[] Errors => _errors.ToArray();
+        private DerivedCacheJanitorOptions Options => owner._options;
 
-        Snapshot Scan()
+        public void Error(string path, Exception ex) => _errors.Add(path + ": " + ex.Message);
+
+        public DerivedCacheEntry Describe(Entry entry) => new(entry.Sha, entry.Used,
+            entry.Files.FirstOrDefault(f => f.Path.EndsWith(".json", StringComparison.Ordinal))?.Path);
+
+        public Snapshot Scan()
         {
             var entries = new List<Entry>();
             var folders = new List<VersionFolder>();
-            CheckPath(_root, directory: true);
-            foreach (var directory in Directory.EnumerateFileSystemEntries(_root))
+            CheckPath(owner._root, directory: true);
+            foreach (var directory in Directory.EnumerateFileSystemEntries(owner._root))
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (!TryVersion(Path.GetFileName(directory), out var version) || version > _options.CurrentVersion) continue;
+                if (!TryVersion(Path.GetFileName(directory), out var version) || version > Options.CurrentVersion) continue;
                 try
                 {
                     CheckPath(directory, directory: true);
@@ -196,9 +328,9 @@ public sealed class DerivedCacheJanitor
                             files.Add(new(path, name[..64], info.Length, info.LastWriteTimeUtc, temporary));
                         }
                         catch (Exception ex) when (IsFileError(ex))
-                        { blocked.Add(name[..64]); complete = false; Error(path, ex); }
+                        { blocked.Add(name[..64]); Complete = false; Error(path, ex); }
                     }
-                    var staleBefore = DateTime.UtcNow - _options.TemporaryFileGrace;
+                    var staleBefore = DateTime.UtcNow - Options.TemporaryFileGrace;
                     foreach (var group in files.GroupBy(f => f.Sha, StringComparer.Ordinal))
                     {
                         var active = blocked.Contains(group.Key) || group.Any(f => f.Temporary && f.Written > staleBefore);
@@ -210,12 +342,12 @@ public sealed class DerivedCacheJanitor
                                 pair.Length != 2));
                     }
                 }
-                catch (Exception ex) when (IsFileError(ex)) { complete = false; Error(directory, ex); }
+                catch (Exception ex) when (IsFileError(ex)) { Complete = false; Error(directory, ex); }
             }
             return new(entries, folders);
         }
 
-        long Delete(Entry entry)
+        public long Delete(Entry entry)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (!entry.Eligible) return 0;
@@ -245,7 +377,7 @@ public sealed class DerivedCacheJanitor
                     var name = Path.GetFileName(path);
                     if (!OwnedName(name, out var temp) || !temp || name[..64] != entry.Files[0].Sha) continue;
                     CheckPath(path, directory: false);
-                    if (File.GetLastWriteTimeUtc(path) > DateTime.UtcNow - _options.TemporaryFileGrace)
+                    if (File.GetLastWriteTimeUtc(path) > DateTime.UtcNow - Options.TemporaryFileGrace)
                         throw new IOException("Active cache write; SHA group kept.");
                 }
                 // JSON sorts before pixels. Remove publication header first, then pixels.
@@ -270,7 +402,7 @@ public sealed class DerivedCacheJanitor
                         File.Move(item.Staged, item.File.Path, overwrite: false);
                     }
                     catch (Exception rollback) when (IsFileError(rollback))
-                    { complete = false; Error(item.File.Path, rollback); }
+                    { Complete = false; Error(item.File.Path, rollback); }
                 }
                 foreach (var handle in handles) handle.Dispose();
                 return 0;
@@ -284,7 +416,7 @@ public sealed class DerivedCacheJanitor
                     {
                         CheckPath(item.Staged, directory: false);
                         File.Delete(item.Staged);
-                        deletedFiles++; deletedBytes += item.File.Bytes; removed += item.File.Bytes;
+                        DeletedFiles++; DeletedBytes += item.File.Bytes; removed += item.File.Bytes;
                     }
                     catch (Exception ex) when (IsFileError(ex)) { Error(item.Staged, ex); }
                 }
@@ -330,8 +462,10 @@ public sealed class DerivedCacheJanitor
     private static bool OwnedName(string name, out bool temporary)
     {
         temporary = false;
-        if (name.Length is not (69 or 71 or 101) || !LowerHex(name.AsSpan(0, 64))) return false;
+        if (name.Length is not (69 or 70 or 71 or 101) || !LowerHex(name.AsSpan(0, 64))) return false;
         if (name.Length == 69) return name.EndsWith(".json", StringComparison.Ordinal);
+        // Portable trust record: same entry as its .json/.pixels, removed together with them.
+        if (name.Length == 70) return name.EndsWith(".trust", StringComparison.Ordinal);
         if (name.Length == 71) return name.EndsWith(".pixels", StringComparison.Ordinal);
         temporary = name[64] == '.' && LowerHex(name.AsSpan(65, 32)) && name.EndsWith(".tmp", StringComparison.Ordinal);
         return temporary;
@@ -355,6 +489,7 @@ public sealed class DerivedCacheJanitor
         ArgumentOutOfRangeException.ThrowIfNegative(options.MaximumBytes);
         ArgumentOutOfRangeException.ThrowIfNegative(options.MinimumFreeBytes);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(options.CurrentVersion);
+        ArgumentNullException.ThrowIfNull(options.Share);
         if (options.FreeSpaceFraction is < 0 or > 1 || options.LockTimeout < TimeSpan.Zero
             || options.TemporaryFileGrace < TimeSpan.Zero || options.TemporaryFileGrace > TimeSpan.FromDays(365))
             throw new ArgumentOutOfRangeException(nameof(options));
@@ -366,6 +501,7 @@ public sealed class DerivedCacheJanitor
     private sealed record Entry(int Version, CacheFile[] Files, bool Eligible, bool Maintenance)
     {
         public DateTime Used => Files.Max(f => f.Written);
+        public string Sha => Files[0].Sha;
     }
     private sealed record Snapshot(List<Entry> Entries, List<VersionFolder> Folders)
     {

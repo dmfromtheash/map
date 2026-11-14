@@ -195,6 +195,8 @@ public sealed partial class EditorViewModel : ViewModelBase
 {
     /// <summary>Set by the desktop host to its validated user/test profile, never a mounted library.</summary>
     public static string? DerivedAssetCacheRoot { get; set; }
+    /// <summary>When that cache's janitor runs; null is the program's default (startup, every 30 min, after builds).</summary>
+    public static Services.DerivedCacheMaintenancePolicy? DerivedCacheMaintenance { get; set; }
     private readonly IProjectStore _store;
     private readonly IRecentMaps _recent;
     private readonly IFilePicker _filePicker;
@@ -432,7 +434,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         StampImages = stampImages ?? (assetCatalog is null
             ? null
             : new CatalogStampImageSource(assetCatalog, () => Session.Document, () => DocumentPath,
-                derivedRoot: DerivedAssetCacheRoot));
+                derivedRoot: DerivedAssetCacheRoot, derivedMaintenance: DerivedCacheMaintenance));
         AttachLibraryTextures();
 
         // The tools start at sizes that fit this canvas (А1.2); what the map already holds is not touched.
