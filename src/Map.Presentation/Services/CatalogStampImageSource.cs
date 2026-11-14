@@ -609,6 +609,16 @@ public sealed class CatalogStampImageSource(
         }
     }
 
+    /// <summary>Prepared mip bytes a settled frame may take in (future texture uploads); zero or less — no limit.</summary>
+    public long AdoptedMipBytesPerFrame { get; set; } = 8L * 1024 * 1024;
+    /// <summary>The same while the camera moves (set by the canvas from its last frame).</summary>
+    public long GestureAdoptedMipBytesPerFrame { get; set; } = 2L * 1024 * 1024;
+    /// <summary>Whether the canvas's last frame moved the camera.</summary>
+    public bool FrameMoving { get; set; }
+    private long _byteLimitedFrames;
+    /// <summary>Frames whose mip adoption stopped at the byte limit.</summary>
+    public long ByteLimitedFrames => Interlocked.Read(ref _byteLimitedFrames);
+
     /// <summary>The canvas frame on the render thread: evictions by other threads wait until it ends.</summary>
     public IDisposable? BeginFrame()
     {
@@ -627,11 +637,25 @@ public sealed class CatalogStampImageSource(
             if (_derived is not null)
             {
                 var started = System.Diagnostics.Stopwatch.GetTimestamp();
+                // Every adopted mip becomes a texture upload when it is first drawn: on an integrated GPU a frame
+                // that takes many megabytes misses the display tick (PresentMon on the laptop, 14.11: GPU p99 24 ms,
+                // max 55 ms). Bound the bytes per frame as well as the CPU time; one mip always passes.
+                var byteBudget = FrameMoving ? GestureAdoptedMipBytesPerFrame : AdoptedMipBytesPerFrame;
+                long adoptedBytes = 0;
                 foreach (var key in _derived.ReadyPixels)
                 {
-                    if (_derived.TryTakePixels(key, out var mip)) AdoptDerivedMip(key, mip);
-                    if (System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds >= 2)
-                    { if (_derived.ReadyPixels.Any()) _derivedReady?.Invoke(); break; }
+                    if (_derived.TryTakePixels(key, out var mip))
+                    {
+                        AdoptDerivedMip(key, mip);
+                        adoptedBytes += (long)(mip?.Width ?? 0) * (mip?.Height ?? 0) * 4;
+                    }
+                    if (System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds >= 2
+                        || byteBudget > 0 && adoptedBytes >= byteBudget)
+                    {
+                        if (adoptedBytes >= byteBudget) _byteLimitedFrames++;
+                        if (_derived.ReadyPixels.Any()) _derivedReady?.Invoke();
+                        break;
+                    }
                 }
                 if (MeasureTimings) _adoptTicks += System.Diagnostics.Stopwatch.GetTimestamp() - started;
             }

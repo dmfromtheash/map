@@ -908,6 +908,8 @@ public sealed partial class MapCanvasControl : Control
             // An idle draw operation can still be queued when the next input changes the
             // shared viewport. Do not start a cold exact render of that new, moving view.
             var movingNow = cameraMoving || cameraMotionNow();
+            // The next frame's mip adoption takes the smaller gesture byte budget while the camera moves.
+            if (editor.StampImages is Map.Presentation.Services.CatalogStampImageSource movingImages) movingImages.FrameMoving = movingNow;
             // Background derived work (lookups, overview prefetch) steps aside during gestures.
             if (movingNow || fastPreview) Map.Core.Resources.BackgroundWork.NoteInteraction();
             if (GestureBudgetDisabled) { objectCache.GestureAdoptedPixelsPerFrame = 0; overviewPreparation.YieldDuringGesture = false; }
