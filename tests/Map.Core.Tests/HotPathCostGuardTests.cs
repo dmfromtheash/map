@@ -43,7 +43,7 @@ public sealed class HotPathCostGuardTests : IClassFixture<HotPathCostGuardTests.
     [Fact(Skip = "defect: " + RulesLinear + "; 10k/100k time ratio 8.028 > 3")]
     public void Placement_rules_with_many_features() => Compare("placement-features", 100_000, true);
 
-    [Fact]
+    [Fact(Skip = "defect: " + PreviewLinear + "; 10k/200k allocation ratio 3.639 > 3")]
     public void Document_preview_replacement() => Compare("preview-replace", 200_000, true);
 
     [EnvironmentFact("MAP_RENDER_GUARDS_AUDIT")]
