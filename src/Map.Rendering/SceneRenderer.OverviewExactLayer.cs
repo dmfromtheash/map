@@ -91,7 +91,8 @@ public static partial class SceneRenderer
     /// directly as before (a sparse view, an edit preview, objects the layer cannot carry, no layer yet).
     /// </summary>
     private static bool TryDrawOverviewExactLayer(SKCanvas canvas, MapDocument document, ObjectLayer layer,
-        ObjectOverviewPlan plan, int zoomBucket, double bucketScale, IReadOnlyList<SceneObject> extras, RenderOptions options)
+        ObjectOverviewPlan plan, int zoomBucket, double bucketScale, IReadOnlyList<SceneObject> extras, RenderOptions options,
+        bool visibleChunksPending)
     {
         if (!OverviewExactLayers || options.IsExport || options.RequestRefinedFrame is not { } refine
             || options.Stamps is not { } stamps || options.ObjectCache is not { } cache
@@ -207,7 +208,11 @@ public static partial class SceneRenderer
             return true;
         }
         if (state.FrameOnly == key) return false;
-        StartExactLayerWork(state, key, chunks, plan, zoomBucket, area, extras, stamps, refine, options);
+        // Chunk readiness comes first, including its separate preparation worker and bounded raster handoff.
+        // Repeated partial layer rasters during a cold open otherwise compete with the very images/chunks
+        // required for the first complete view (four-core live regression: 35 -> 175 seconds).
+        if (!visibleChunksPending && options.OverviewPreparation?.VisibleWorkPending != true)
+            StartExactLayerWork(state, key, chunks, plan, zoomBucket, area, extras, stamps, refine, options);
         if (options.Stats is { } pending) pending.DetailTilesPending++;
         refine();
         // The previous layer stands in: always while the camera moves, and for the same objects (new images or a
@@ -336,7 +341,7 @@ public static partial class SceneRenderer
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException) { work.Failed = true; }
                 finally { refine(); }
-            });
+            }, overviewLayer: true);
             return;
         }
         if (Volatile.Read(ref work.Objects) is not { } list) return;
@@ -364,7 +369,7 @@ public static partial class SceneRenderer
             Options = options.ForBackgroundTile(images, new RenderStats()),
         };
         state.Job = job;
-        QueueDetailWork(() => RunExactLayer(job));
+        QueueDetailWork(() => RunExactLayer(job), overviewLayer: true);
         if (options.Stats is { } stats) stats.OverviewExactLayerStarted++;
     }
 

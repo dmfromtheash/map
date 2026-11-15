@@ -6479,7 +6479,8 @@ public static partial class SceneRenderer
         // Without this preflight a kept layer could freeze whichever subset arrived first.
         // Many of them: one background layer the frame copies (see TryDrawOverviewExactLayer), not one draw each.
         var layered = fallbackScale is null && exactCandidates + extras.Count >= ExactLayerMinimumObjects
-            && TryDrawOverviewExactLayer(canvas, document, layer, plan, zoomBucket, bucketScale, extras, options);
+            && TryDrawOverviewExactLayer(canvas, document, layer, plan, zoomBucket, bucketScale, extras, options,
+                deferred || prepared?.ColorsPending == true);
         if (!layered)
             foreach (var variant in exactVariants)
                 foreach (var sceneObject in variant.ExactObjects)
