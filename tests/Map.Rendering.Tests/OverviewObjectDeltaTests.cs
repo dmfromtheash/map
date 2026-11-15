@@ -8,6 +8,25 @@ namespace Map.Rendering.Tests;
 public sealed class OverviewObjectDeltaTests
 {
     [Fact]
+    public void Unchanged_cold_pages_do_not_keep_a_removed_object_alive()
+    {
+        var (objects, removed) = RemoveOne();
+        GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
+        Assert.False(removed.TryGetTarget(out _));
+        GC.KeepAlive(objects);
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static (SceneRenderer.OverviewObjects Objects, WeakReference<SceneObject> Removed) RemoveOne()
+    {
+        var items = Enumerable.Range(0, 2000).Select(i => new SceneObject(ObjectId.New(), SceneObjectKind.Rectangle,
+            "object", i, 0, 16, 16, 0, "#FF445566", "#00000000", 0, true, false)).ToArray();
+        var list = SceneObjectList.From(items);
+        var root = new SceneRenderer.OverviewObjects([.. items.Select((item, i) => ((long)i, item))]);
+        return (root.Change((0, items[0]), list, false), new(items[0]));
+    }
+
+    [Fact]
     public void Long_structural_edit_sequence_preserves_draw_order_pixels_and_previous_snapshots()
     {
         var random = new Random(73);

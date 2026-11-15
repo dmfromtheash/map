@@ -7,8 +7,8 @@ namespace Map.Rendering;
 public static partial class SceneRenderer
 {
     /// <summary>
-    /// Persistent draw-order sequence. Cold leaves share slices of the sorted array; an edit
-    /// copies at most 256 entries and AVL paths, never the population of a dense world chunk.
+    /// Persistent draw-order sequence. Each leaf owns at most 256 entries; an edit copies
+    /// bounded leaves and AVL paths, never the population of a dense world chunk.
     /// No predecessor chain or tombstones: removed objects leave the current root immediately.
     /// </summary>
     internal sealed class OverviewObjects : IEnumerable<(long Order, SceneObject Item)>
@@ -43,8 +43,47 @@ public static partial class SceneRenderer
                 return node.Items[node.Offset + index];
             }
         }
-        public OverviewObjects(ImmutableArray<(long Order, SceneObject Item)> items) : this(Build(items, 0, items.Length)) { }
+        public OverviewObjects(ImmutableArray<(long Order, SceneObject Item)> items)
+            : this(FromPages(CopyPages(items))) { }
         private OverviewObjects(Node? root) => _root = root;
+
+        // Cold plans count each sublayer first, then fill these final pages in document order.
+        // No temporary full-chunk array or per-object tree nodes are needed.
+        internal sealed class Builder
+        {
+            internal readonly (long Order, SceneObject Item)[][] Pages;
+            private int _next;
+            internal Builder(int count)
+            {
+                Pages = new (long, SceneObject)[(count + LeafSize - 1) / LeafSize][];
+                for (var i = 0; i < Pages.Length; i++) Pages[i] = new (long, SceneObject)[Math.Min(LeafSize, count - i * LeafSize)];
+            }
+            internal void Add(long order, SceneObject item)
+            { Pages[_next / LeafSize][_next % LeafSize] = (order, item); _next++; }
+        }
+
+        internal static OverviewObjects FromBuilders(IEnumerable<Builder> builders) =>
+            new(FromPages(builders.SelectMany(b => b.Pages)));
+
+        private static IEnumerable<(long Order, SceneObject Item)[]> CopyPages(ImmutableArray<(long Order, SceneObject Item)> items)
+        {
+            for (var offset = 0; offset < items.Length; offset += LeafSize)
+                yield return items.AsSpan(offset, Math.Min(LeafSize, items.Length - offset)).ToArray();
+        }
+
+        private static Node? FromPages(IEnumerable<(long Order, SceneObject Item)[]> pages)
+        {
+            var leaves = pages.Select(page => new Node(
+                System.Runtime.InteropServices.ImmutableCollectionsMarshal.AsImmutableArray(page), 0, page.Length)).ToArray();
+            return Join(0, leaves.Length);
+            Node? Join(int offset, int count)
+            {
+                if (count == 0) return null;
+                if (count == 1) return leaves[offset];
+                var half = count / 2;
+                return new(Join(offset, half)!, Join(offset + half, count - half)!);
+            }
+        }
 
         private static Node? Build(ImmutableArray<(long Order, SceneObject Item)> items, int offset, int count)
         {

@@ -6554,12 +6554,9 @@ public static partial class SceneRenderer
             }
             else
             {
-                // Dense cold plans use flat builders and immutable arrays. An immutable
-                // tree node per object made the background plan itself cause long GC pauses.
-                // Two passes (count, then fill arrays of the exact size, sorted in place and handed
-                // over without a copy): a growing list per chunk plus its copy allocated about
-                // three times the plan on a million objects, all of it during the first gesture.
-                var chunks = new Dictionary<(int, int), ((long Order, SceneObject Item)[]? Items, int Count)>();
+                // Count sublayers, then fill final bounded pages in document order. Sorting
+                // the sublayer directories preserves draw order without a full-chunk array.
+                var counts = new Dictionary<(int, int), Dictionary<int, int>>();
                 var assetCounts = new Dictionary<string, int>(StringComparer.Ordinal);
                 var index = 0;
                 foreach (var item in layer.Objects)
@@ -6569,8 +6566,11 @@ public static partial class SceneRenderer
                     if ((order & 0xFFFF) == 0xFFFF) checkpoint?.Invoke();
                     if (!item.Visible) continue;
                     CountAsset(assetCounts, item, 1);
-                    System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrAddDefault(chunks, KeyOf(item), out _).Count++;
+                    if (!counts.TryGetValue(KeyOf(item), out var bands)) counts.Add(KeyOf(item), bands = []);
+                    bands[item.Sublayer] = bands.GetValueOrDefault(item.Sublayer) + 1;
                 }
+                var chunks = counts.ToDictionary(pair => pair.Key, pair => pair.Value.ToDictionary(
+                    band => band.Key, band => new OverviewObjects.Builder(band.Value)));
                 index = 0;
                 foreach (var item in layer.Objects)
                 {
@@ -6578,21 +6578,14 @@ public static partial class SceneRenderer
                     if ((order & 255) == 0) cancellationToken.ThrowIfCancellationRequested();
                     if ((order & 0xFFFF) == 0xFFFF) checkpoint?.Invoke();
                     if (!item.Visible) continue;
-                    ref var chunk = ref System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrNullRef(chunks, KeyOf(item));
-                    if (chunk.Items is null) { chunk.Items = new (long, SceneObject)[chunk.Count]; chunk.Count = 0; }
-                    chunk.Items[chunk.Count++] = (order, item);
+                    chunks[KeyOf(item)][item.Sublayer].Add(order, item);
                 }
                 var built = ImmutableDictionary.CreateBuilder<(int X, int Y), OverviewChunk>();
                 foreach (var (key, chunk) in chunks)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    var items = chunk.Items!;
-                    Array.Sort(items, static (a, b) =>
-                    {
-                        var band = a.Item.Sublayer.CompareTo(b.Item.Sublayer);
-                        return band != 0 ? band : a.Order.CompareTo(b.Order);
-                    });
-                    built.Add(key, new OverviewChunk(key.Item1, key.Item2, System.Runtime.InteropServices.ImmutableCollectionsMarshal.AsImmutableArray(items)));
+                    var items = OverviewObjects.FromBuilders(chunk.OrderBy(band => band.Key).Select(band => band.Value));
+                    built.Add(key, new OverviewChunk(key.Item1, key.Item2, items));
                 }
                 Chunks = built.ToImmutable();
                 _assetCounts = assetCounts.ToImmutableDictionary(StringComparer.Ordinal);
@@ -6692,8 +6685,11 @@ public static partial class SceneRenderer
         private ulong _tintRevision;
 
         public OverviewChunk(int x, int y, ImmutableArray<(long Order, SceneObject Item)> objects)
+            : this(x, y, new OverviewObjects(objects)) { }
+
+        internal OverviewChunk(int x, int y, OverviewObjects objects)
         {
-            X = x; Y = y; Objects = new(objects);
+            X = x; Y = y; Objects = objects;
             var assets = ImmutableSortedDictionary.CreateBuilder<string, int>(StringComparer.Ordinal);
             foreach (var (_, item) in objects)
                 if (item.Stamp is { } stamp) assets[stamp.AssetSha256] = assets.GetValueOrDefault(stamp.AssetSha256) + 1;
