@@ -16,6 +16,7 @@ public sealed class PathLabelBeautyTests
     public void A_river_name_draws_along_a_bend_with_its_halo()
     {
         using var bitmap = Render(out var label);
+        using var withoutName = Render(out _, includeLabel: false);
         Assert.True(label.Text!.Path!.Baseline.Length >= 2);
         // The halo is the paper colour around the letters: light pixels where the dark water would be.
         var dark = 0;
@@ -23,17 +24,18 @@ public sealed class PathLabelBeautyTests
             for (var x = 0; x < bitmap.Width; x++)
             {
                 var c = bitmap.GetPixel(x, y);
-                if (c.Red < 70 && c.Green < 70 && c.Blue < 80) dark++;
+                if (c.Alpha > 0 && c.Red < 70 && c.Green < 70 && c.Blue < 80
+                    && c != withoutName.GetPixel(x, y)) dark++;
             }
         Assert.True(dark > 150, $"ink of the name: {dark}");
     }
 
     /// <summary>MAP_LABEL_FRAMES=&lt;folder&gt;: a labelled bend for the eye.</summary>
-    [Fact]
+    [OptInProbe("MAP_LABEL_FRAMES", "PathLabelBeautyTests.A_river_name_draws_along_a_bend_with_its_halo")]
     public void Frames_for_review()
     {
         var folder = Environment.GetEnvironmentVariable("MAP_LABEL_FRAMES");
-        if (string.IsNullOrWhiteSpace(folder)) return;
+
         Directory.CreateDirectory(folder);
         using var bitmap = Render(out _, 2);
         using var image = SKImage.FromBitmap(bitmap);
@@ -41,7 +43,7 @@ public sealed class PathLabelBeautyTests
         File.WriteAllBytes(Path.Combine(folder, "river-label-2x.png"), data.ToArray());
     }
 
-    private static SKBitmap Render(out SceneObject label, double scale = 1)
+    private static SKBitmap Render(out SceneObject label, double scale = 1, bool includeLabel = true)
     {
         var river = new River
         {
@@ -63,7 +65,7 @@ public sealed class PathLabelBeautyTests
         };
         var laid = TextOnPath.Layout(draft, text);
         label = laid;
-        var document = draft.WithLayer(Labels, l => ((ObjectLayer)l) with { Objects = [laid] });
+        var document = draft.WithLayer(Labels, l => ((ObjectLayer)l) with { Objects = includeLabel ? [laid] : [] });
         var info = new SKImageInfo((int)(640 * scale), (int)(400 * scale));
         using var surface = SKSurface.Create(info)!;
         surface.Canvas.Scale((float)scale);

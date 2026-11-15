@@ -81,10 +81,10 @@ public sealed class ReliefRenderingTests
     }
 
     /// <summary>MAP_RELIEF_PNG=&lt;folder&gt; writes the hill with and without hachures for review.</summary>
-    [Fact]
+    [OptInProbe("MAP_RELIEF_PNG", "ReliefRenderingTests.Heights_shade_the_land_and_stay_inside_the_coast")]
     public void Relief_sheet_for_review()
     {
-        if (Environment.GetEnvironmentVariable("MAP_RELIEF_PNG") is not { Length: > 0 } folder) return;
+        var folder = Environment.GetEnvironmentVariable("MAP_RELIEF_PNG")!;
         Directory.CreateDirectory(folder);
         using var hill = Render(Island());
         LandCliffRenderingTests.Save(hill, Path.Combine(folder, "relief-hill.png"));

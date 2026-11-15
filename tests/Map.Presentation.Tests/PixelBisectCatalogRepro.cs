@@ -28,9 +28,57 @@ public sealed class PixelBisectCatalogRepro
     private static string Label => Environment.GetEnvironmentVariable("MAP_PIXREPRO_LABEL") ?? "run";
 
     [Fact]
+    public async Task Small_catalog_fit_and_edit_pixels_match_the_exact_reference()
+    {
+        var root = Directory.CreateTempSubdirectory("map-pixel-ci-").FullName;
+        try
+        {
+            await using var catalog = new AssetCatalog(Path.Combine(root, "catalog"));
+            var fixtures = new DirectoryInfo(AppContext.BaseDirectory);
+            while (fixtures is not null && !File.Exists(Path.Combine(fixtures.FullName, "Map.slnx"))) fixtures = fixtures.Parent;
+            Assert.NotNull(fixtures);
+            var records = Enumerable.Range(1, 2).Select(i => catalog.Import(Path.Combine(fixtures.FullName,
+                "tests", "fixtures", "assets", $"owner-mountain-{i:00}.png"), new(), DateTimeOffset.UnixEpoch)).ToArray();
+            var document = BuildDocument(records, 600);
+            var layer = document.Layers.OfType<ObjectLayer>().Single();
+            var original = SceneObjectClone.At(layer.Objects[0], 8000, 8000, 512, 512);
+            document = DocumentEditor.ReplaceObject(document, original);
+            var session = new EditingSession(document);
+            // This pixel reference does not test OS file notifications. Inject no watcher:
+            // macOS sandbox EventStream startup errors otherwise repeatedly invalidate cold work.
+            await using var source = new CatalogStampImageSource(catalog, () => session.Document, () => null,
+                derivedRoot: Path.Combine(root, "derived"), startWatcher: _ => { });
+            const double scale = 1d / 32;
+            using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            // Make the reference cold and on a worker: no warmed resident mip can hide a wrong lease.
+            var coldReference = ExactReference(document, source, scale, 0, 0, limit.Token);
+            using var frame = new FrameHarness(source, scale, 0, 0, TimeSpan.FromSeconds(20));
+            var first = frame.Settle(session.Document, null, null).Png;
+            Same(coldReference, first);
+            session.Execute(new ReplaceObjectsCommand([original], [SceneObjectClone.At(original, 14000, 14000)], "move"));
+            var changed = frame.Settle(session.Document, null, null).Png;
+            Same(ExactReference(session.Document, source, scale, 0, 0, limit.Token), changed);
+            using (var a = SKBitmap.Decode(first))
+            using (var b = SKBitmap.Decode(changed))
+                Assert.False(a.GetPixelSpan().SequenceEqual(b.GetPixelSpan()), "the edit never changed the catalog fit frame");
+            session.Undo(); Same(first, frame.Settle(session.Document, null, null).Png);
+            session.Redo(); Same(changed, frame.Settle(session.Document, null, null).Png);
+        }
+        finally { Directory.Delete(root, recursive: true); }
+
+        static void Same(byte[] expectedPng, byte[] actualPng)
+        {
+            using var expected = SKBitmap.Decode(expectedPng);
+            using var actual = SKBitmap.Decode(actualPng);
+            Assert.True(actual.Pixels.Distinct().Take(8).Count() == 8, "the catalog fit frame is empty");
+            Assert.Equal(expected.Bytes, actual.Bytes);
+        }
+    }
+
+    [OptInProbe("MAP_PIXREPRO_OUT", "PixelBisectCatalogRepro.Small_catalog_fit_and_edit_pixels_match_the_exact_reference")]
     public async Task Render_catalog_scenarios()
     {
-        if (Out is not { } outDir) return;
+        var outDir = Out!;
         Directory.CreateDirectory(outDir);
         var catalogRoot = Environment.GetEnvironmentVariable("MAP_PIXREPRO_CATALOG") ?? Path.Combine(outDir, "catalog");
         var derivedRoot = Path.Combine(outDir, "derived-" + Label);
@@ -80,10 +128,11 @@ public sealed class PixelBisectCatalogRepro
         }
     }
 
-    [Fact]
+    [OptInProbe("MAP_PIXREPRO_OUT,MAP_PIXREPRO_BASE", "PixelBisectCatalogRepro.Small_catalog_fit_and_edit_pixels_match_the_exact_reference")]
     public void Compare_catalog_to_base()
     {
-        if (Out is not { } outDir || Environment.GetEnvironmentVariable("MAP_PIXREPRO_BASE") is not { } baseLabel) return;
+        var outDir = Out!;
+        var baseLabel = Environment.GetEnvironmentVariable("MAP_PIXREPRO_BASE")!;
         var lines = new List<string>();
         var pairs = new[] { "fit", "edit" }.Select(n => (n, $"{baseLabel}-{n}", $"{Label}-{n}"))
             .Concat(new[] { "fit", "edit" }.Select(n => ($"{n} vs own exact", $"{Label}-{n}-exact", $"{Label}-{n}")))
@@ -93,7 +142,8 @@ public sealed class PixelBisectCatalogRepro
         {
             var a = Path.Combine(outDir, $"{left}.png");
             var b = Path.Combine(outDir, $"{right}.png");
-            if (!File.Exists(a) || !File.Exists(b)) { lines.Add($"{name}: missing"); continue; }
+            Assert.True(File.Exists(a), "comparison fixture missing: " + a);
+            Assert.True(File.Exists(b), "comparison fixture missing: " + b);
             using var ba = SKBitmap.Decode(a);
             using var bb = SKBitmap.Decode(b);
             int max = 0, over2 = 0, differ = 0;
@@ -176,22 +226,25 @@ public sealed class PixelBisectCatalogRepro
     /// Every image resolved at its exact size: a synchronous overview render (fresh cache, no refinement) off the
     /// frame thread through a lease, which decodes what it asks for instead of drawing a resident fallback.
     /// </summary>
-    private static byte[] ExactReference(MapDocument document, CatalogStampImageSource source, double scale, double ox, double oy) =>
+    private static byte[] ExactReference(MapDocument document, CatalogStampImageSource source, double scale, double ox, double oy,
+        CancellationToken cancellation = default) =>
         Task.Run(() =>
         {
             // The exact lease draws only the pixels a settled frame draws; wait until none is preparing.
             for (var attempt = 0; ; attempt++)
             {
-                var png = ExactReferenceOnce(document, source, scale, ox, oy, out var preparing);
-                if (preparing == 0 || attempt >= 600) return png;
+                cancellation.ThrowIfCancellationRequested();
+                var png = ExactReferenceOnce(document, source, scale, ox, oy, out var preparing, cancellation);
+                if (preparing == 0) return png;
+                Assert.True(attempt < 600, "exact reference still has preparing lookups after 600 attempts");
                 Thread.Sleep(100);
             }
         }).GetAwaiter().GetResult();
 
     private static byte[] ExactReferenceOnce(MapDocument document, CatalogStampImageSource source, double scale, double ox, double oy,
-        out int preparing)
+        out int preparing, CancellationToken cancellation = default)
     {
-            using var lease = source.ExactLease();
+            using var lease = source.ExactLease(cancellation);
             using var cache = new ObjectOverviewCache(1024, 256L * 1024 * 1024);
             using var surface = SKSurface.Create(new SKImageInfo(ScreenW, ScreenH, SKColorType.Rgba8888, SKAlphaType.Premul))!;
             surface.Canvas.Clear(SKColors.Black);
@@ -221,12 +274,14 @@ public sealed class PixelBisectCatalogRepro
         private static readonly Type? PreparationType = typeof(SceneRenderer).GetNestedType("OverviewPreparation", BindingFlags.Public);
         private static readonly PropertyInfo? PreparationOption = typeof(RenderOptions).GetProperty("OverviewPreparation");
         private volatile bool _requested;
+        private readonly TimeSpan _settleLimit;
         private int _frames, _unresolvedFrames;
         public string Report => $"frames {_frames}, frames with unresolved images {_unresolvedFrames}";
 
-        public FrameHarness(CatalogStampImageSource source, double scale, double ox, double oy)
+        public FrameHarness(CatalogStampImageSource source, double scale, double ox, double oy, TimeSpan? settleLimit = null)
         {
             _source = source; _scale = scale; _ox = ox; _oy = oy;
+            _settleLimit = settleLimit ?? TimeSpan.FromMinutes(25);
             if (PreparationType is not null && Environment.GetEnvironmentVariable("MAP_PIXREPRO_NOPREP") != "1")
                 // Newer builds take an optional interaction probe: pass its default explicitly.
                 _preparation = PreparationType.GetConstructor(Type.EmptyTypes) is not null
@@ -249,7 +304,7 @@ public sealed class PixelBisectCatalogRepro
         {
             Prepare(document);
             var quiet = 0;
-            var deadline = DateTime.UtcNow.AddMinutes(25);
+            var deadline = DateTime.UtcNow + _settleLimit;
             for (var frame = 1; DateTime.UtcNow < deadline; frame++)
             {
                 _requested = false;
@@ -308,11 +363,11 @@ public sealed class PixelBisectCatalogRepro
         }
     }
 
-    private static MapDocument BuildDocument(AssetRecord[] records)
+    private static MapDocument BuildDocument(AssetRecord[] records, int? objectCount = null)
     {
         var random = new Random(20261114);
-        var objects = new SceneObject[Objects];
-        for (var i = 0; i < Objects; i++)
+        var objects = new SceneObject[objectCount ?? Objects];
+        for (var i = 0; i < objects.Length; i++)
             objects[i] = Stamp(random, records[random.Next(records.Length)].Sha256, random.NextDouble() * Canvas, random.NextDouble() * Canvas, random.Next(4));
         var assets = records.Select(r => new MapAssetReference(r.Sha256, r.DisplayName, r.MediaType, r.Extension,
             ProjectAssetStorage.Linked, DateTimeOffset.UnixEpoch, "owner-fixture", "user-owned", catalogId: r.Sha256)).ToArray();

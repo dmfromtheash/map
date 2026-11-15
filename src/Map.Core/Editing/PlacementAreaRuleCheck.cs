@@ -1,18 +1,19 @@
+using System.Collections.Immutable;
 using Map.Core.Documents;
 
 namespace Map.Core.Editing
 {
     /// <summary>
-    /// The map queries behind <see cref="PlacementAreaRules"/>, prepared once per area command:
-    /// river and road geometry is evaluated a single time, not per slot.
+    /// The map queries behind <see cref="PlacementAreaRules"/>. Prepared feature grids restrict
+    /// each point probe to nearby rivers and roads; exact geometry predicates are unchanged.
     /// </summary>
     public sealed class PlacementAreaRuleCheck
     {
         private readonly MapDocument _document;
         private readonly PlacementAreaRules _rules;
         private readonly bool _hasLand;
-        private readonly RiverGeometrySet[] _rivers;
-        private readonly RoadGeometrySet[] _roads;
+        private readonly FeatureSpatialIndex<River>[] _rivers;
+        private readonly FeatureSpatialIndex<Road>[] _roads;
 
         public PlacementAreaRuleCheck(MapDocument document, PlacementAreaRules rules)
         {
@@ -21,8 +22,8 @@ namespace Map.Core.Editing
             _hasLand = document.Layers.OfType<LandLayer>().Any(l => l.Visible);
             var layers = document.Layers.OfType<ObjectLayer>().Where(l => l.Visible).ToArray();
             _rivers = rules.AvoidWater || rules.OnlyOnWater
-                ? [.. layers.SelectMany(l => l.Rivers).Where(r => r.Visible).Select(r => RiverGeometry.Evaluate(r))] : [];
-            _roads = rules.AvoidRoads ? [.. layers.SelectMany(l => l.Roads).Where(r => r.Visible).Select(r => RoadGeometry.Evaluate(r))] : [];
+                ? [.. layers.Select(l => l.PlacementRivers)] : [];
+            _roads = rules.AvoidRoads ? [.. layers.Select(l => l.PlacementRoads)] : [];
         }
 
         /// <summary>
@@ -49,9 +50,7 @@ namespace Map.Core.Editing
         {
             if (_rules.AvoidWater && IsWater(x, y)) return false;
             if (_rules.AvoidRoads)
-                foreach (var road in _roads)
-                    if (road.Bounds.Intersects(new WorldBounds(x - _rules.RoadMargin, y - _rules.RoadMargin, x + _rules.RoadMargin, y + _rules.RoadMargin))
-                        && RoadGeometry.TryClosest(road, x, y, _rules.RoadMargin, out _, out _, out _, out _, out _)) return false;
+                if (OnRoad(x, y)) return false;
             return true;
         }
 
@@ -70,21 +69,32 @@ namespace Map.Core.Editing
             }
 
             if (_rules.AvoidRoads)
-                foreach (var road in _roads)
-                    if (road.Bounds.Intersects(new WorldBounds(x - _rules.RoadMargin, y - _rules.RoadMargin, x + _rules.RoadMargin, y + _rules.RoadMargin))
-                        && RoadGeometry.TryClosest(road, x, y, _rules.RoadMargin, out _, out _, out _, out _, out _)) return false;
+                if (OnRoad(x, y)) return false;
             return true;
+        }
+
+        private bool OnRoad(double x, double y)
+        {
+            var bounds = new WorldBounds(x - _rules.RoadMargin, y - _rules.RoadMargin, x + _rules.RoadMargin, y + _rules.RoadMargin);
+            foreach (var index in _roads)
+                if (index.Any(bounds, (x, y, _rules.RoadMargin), static (road, point) =>
+                    RoadGeometry.TryClosest(RoadGeometry.Evaluate(road), point.x, point.y, point.RoadMargin,
+                        out _, out _, out _, out _, out _))) return true;
+            return false;
         }
 
         /// <summary>A river, a lake, or the open sea - the page where no land lies (on maps that have land).</summary>
         public bool IsWater(double x, double y)
         {
-            foreach (var river in _rivers)
-            {
-                if (!river.Bounds.Intersects(new WorldBounds(x - 1, y - 1, x + 1, y + 1))) continue;
-                if (RiverGeometry.TryClosest(river, x, y, 0, out _, out _, out _, out _, out _)) return true;
-                if (river.Channels.Values.Any(g => RiverGeometry.InsideLake(g, x, y))) return true;
-            }
+            foreach (var index in _rivers)
+                if (index.Any(new WorldBounds(x - 1, y - 1, x + 1, y + 1), (x, y), static (candidate, point) =>
+                {
+                    var river = RiverGeometry.Evaluate(candidate);
+                    if (RiverGeometry.TryClosest(river, point.x, point.y, 0, out _, out _, out _, out _, out _)) return true;
+                    foreach (var channel in river.Channels.Values)
+                        if (RiverGeometry.InsideLake(channel, point.x, point.y)) return true;
+                    return false;
+                })) return true;
 
             return _hasLand && TerrainOrder.LandAt(_document, x, y) is null;
         }

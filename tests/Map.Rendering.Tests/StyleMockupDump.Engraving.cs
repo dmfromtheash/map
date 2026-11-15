@@ -12,12 +12,12 @@ public sealed partial class StyleMockupDump
 {
     private sealed record Print(int Variant, string Paper, string Ink, string Second, float Plate);
 
-    [Fact]
+    [OptInProbe("MAP_STYLE_ENGRAVING,MAP_LIGHT_ASSETS", "StyleRenderingTests.Reviewed_presets_change_pixels_and_rebuild_after_a_local_edit")]
     public void Dump_engraving_variants_when_asked()
     {
         var output = Environment.GetEnvironmentVariable("MAP_STYLE_ENGRAVING");
         var assets = Environment.GetEnvironmentVariable("MAP_LIGHT_ASSETS");
-        if (string.IsNullOrEmpty(output) || string.IsNullOrEmpty(assets) || !Directory.Exists(assets)) return;
+        Assert.True(Directory.Exists(assets), "opt-in asset directory is missing: " + assets);
         Directory.CreateDirectory(output);
         var images = Directory.GetFiles(assets, "*.png").Take(3)
             .ToDictionary(f => Path.GetFileNameWithoutExtension(f), f => SKImage.FromEncodedData(f)!);

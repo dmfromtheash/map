@@ -46,10 +46,10 @@ public sealed class RiverFeatureRenderingTests
     }
 
     /// <summary>MAP_RIVER_FEATURES_PNG=&lt;folder&gt; writes the three features close up for review.</summary>
-    [Fact]
+    [OptInProbe("MAP_RIVER_FEATURES_PNG", "RiverFeatureRenderingTests.A_feature_changes_the_water_near_its_node_only")]
     public void Feature_sheet_for_review()
     {
-        if (Environment.GetEnvironmentVariable("MAP_RIVER_FEATURES_PNG") is not { Length: > 0 } folder) return;
+        var folder = Environment.GetEnvironmentVariable("MAP_RIVER_FEATURES_PNG")!;
         Directory.CreateDirectory(folder);
         foreach (var feature in new[] { RiverNodeFeature.Waterfall, RiverNodeFeature.Rapids, RiverNodeFeature.Ford })
             foreach (var scale in new[] { 1.0, 2.5 })

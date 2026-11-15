@@ -687,7 +687,14 @@ public sealed class StampDerivedAssetStoreTests : IDisposable
     }
 
     [Fact]
-    public async Task Persistent_missing_source_ignores_file_hints_until_the_slow_retry_confirms_restoration()
+    public async Task Persistent_missing_source_file_hints_retry_without_waking_the_canvas()
+        => await CheckRestoredSource(immediate: false);
+
+    [Fact]
+    public async Task Restored_source_file_hint_retries_immediately_without_sixty_seconds()
+        => await CheckRestoredSource(immediate: true);
+
+    private async Task CheckRestoredSource(bool immediate)
     {
         await using var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));
         var record = ImportOwner(catalog, 1);
@@ -708,11 +715,22 @@ public sealed class StampDerivedAssetStoreTests : IDisposable
             previous = retry;
         }
         Assert.Same(previous, store.Request(record.Sha256));
-        File.WriteAllBytes(path, bytes);
+        var recovered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        store.SourceChanged = () => recovered.TrySetResult();
+        if (immediate) File.WriteAllBytes(path, bytes);
         typeof(StampDerivedAssetStore).GetMethod("FileChanged", System.Reflection.BindingFlags.Instance
             | System.Reflection.BindingFlags.NonPublic)!.Invoke(store, [path]);
+        if (immediate)
+        {
+            await recovered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.NotNull(await store.Request(record.Sha256).WaitAsync(TimeSpan.FromSeconds(10)));
+            Assert.Contains(record.Sha256, store.TakeInvalidated());
+            return;
+        }
         Assert.Null(await store.Request(record.Sha256));
         Assert.Empty(store.TakeInvalidated());
+        Assert.False(recovered.Task.IsCompleted);
+        File.WriteAllBytes(path, bytes);
         clock.Advance(TimeSpan.FromSeconds(60));
         Assert.NotNull(await store.Request(record.Sha256).WaitAsync(TimeSpan.FromSeconds(10)));
     }
@@ -748,6 +766,15 @@ public sealed class StampDerivedAssetStoreTests : IDisposable
     [InlineData(false)]
     [InlineData(true)]
     public async Task Missing_external_folder_is_unwatched_and_slow_retry_recovers_once_without_failure_frames(bool workingImage)
+        => await CheckMissingExternalFolder(workingImage, hint: false);
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Restored_external_source_hint_resumes_pixels_without_advancing_the_retry_clock(bool workingImage)
+        => await CheckMissingExternalFolder(workingImage, hint: true);
+
+    private async Task CheckMissingExternalFolder(bool workingImage, bool hint)
     {
         await using var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));
         var owner = ImportOwner(catalog, 1);
@@ -810,6 +837,24 @@ public sealed class StampDerivedAssetStoreTests : IDisposable
         Assert.Equal(before, Volatile.Read(ref notifications));
         Assert.Equal(0, source.MissingRevision);
         Directory.Move(parked, Path.GetDirectoryName(external)!);
+        if (hint)
+        {
+            typeof(StampDerivedAssetStore).GetMethod("FileChanged", System.Reflection.BindingFlags.Instance
+                | System.Reflection.BindingFlags.NonPublic)!.Invoke(store, [path]);
+            await Eventually(() => Volatile.Read(ref notifications) > before);
+            await Eventually(() => { using (source.BeginFrame()) return Lookup() is not null; });
+            Assert.False(source.IsMissingCacheable(record.Sha256));
+            Assert.Equal(1, source.SourceRevision);
+            using var reference = new CatalogStampImageSource(links, () => document, () => null);
+            using (source.BeginFrame())
+            {
+                using var actual = SKBitmap.FromImage(Lookup()!);
+                using var expected = SKBitmap.FromImage((workingImage ? reference.TryGetImage(record.Sha256)
+                    : reference.TryGetImageForPixelSize(record.Sha256, 16, 16))!);
+                Assert.Equal(expected.Bytes, actual.Bytes);
+            }
+            return;
+        }
         clock.Advance(TimeSpan.FromSeconds(59));
         Assert.Equal(before, Volatile.Read(ref notifications));
         clock.Advance(TimeSpan.FromSeconds(1));

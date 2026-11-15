@@ -1,4 +1,5 @@
 using Map.Core.Documents;
+using System.Runtime.CompilerServices;
 
 namespace Map.Core.Editing;
 
@@ -10,6 +11,7 @@ namespace Map.Core.Editing;
 /// </summary>
 public static class MapDecorations
 {
+    private static readonly ConditionalWeakTable<IReadOnlyList<MapAssetReference>, Dictionary<string, string>> AssetNames = new();
     /// <summary>The document with every decoration refreshed; the same instance when nothing changed.</summary>
     public static MapDocument Refresh(MapDocument document)
     {
@@ -72,17 +74,21 @@ public static class MapDecorations
         foreach (var road in objectLayers.SelectMany(l => l.Roads).Where(r => r.Visible))
             Add(new LegendEntry(LegendEntryKind.Road, RoadLabel(road.Style.Drawing), road.Style.EdgeColor));
 
-        var names = document.Assets.ToDictionary(a => a.Sha256, a => a.DisplayName, StringComparer.OrdinalIgnoreCase);
+        var names = AssetNames.GetValue(document.Assets, static assets =>
+            assets.ToDictionary(a => a.Sha256, a => BaseName(a.DisplayName), StringComparer.OrdinalIgnoreCase));
         void AddAsset(string sha)
         {
             if (!names.TryGetValue(sha, out var name)) return;
-            Add(new LegendEntry(LegendEntryKind.Asset, BaseName(name), "#FF808080", sha));
+            Add(new LegendEntry(LegendEntryKind.Asset, name, "#FF808080", sha));
         }
 
         foreach (var layer in objectLayers)
         {
-            foreach (var item in layer.Objects)
-                if (item.Visible && item.Kind == SceneObjectKind.Stamp && item.Stamp is { } stamp) AddAsset(stamp.AssetSha256);
+            foreach (var hash in layer.ObjectStorage.VisibleLegendAssets(names))
+            {
+                AddAsset(hash);
+                if (entries.Count == DecorationStyle.MaxLegendEntries) return entries;
+            }
             foreach (var area in layer.PlacementAreas)
             foreach (var variant in area.Variants) AddAsset(variant.Sha256);
             foreach (var path in layer.PlacementPaths)
@@ -183,7 +189,8 @@ public sealed class SetMapScaleCommand : IEditCommand
     public MapDocument Apply(MapDocument document) => With(document, _after);
     public MapDocument Revert(MapDocument document) => With(document, _before);
 
+    // Only the canvas changes: the layers stay the same validated list, and the map-wide light,
+    // style, cards and the rest are carried over (the former full constructor dropped them).
     private static MapDocument With(MapDocument document, MapScale? scale) =>
-        new(document.Id, document.Title, document.CreatedUtc, document.Canvas with { Scale = scale }, document.Layers,
-            document.Assets, document.Notes, document.Checkpoints, document.StampForeground, document.Category);
+        document.WithCanvas(document.Canvas with { Scale = scale });
 }

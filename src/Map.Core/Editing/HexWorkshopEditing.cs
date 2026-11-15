@@ -117,9 +117,7 @@ public sealed class HexBoardShapeCommand : IEditCommand
         var rewritten = document.Layers.Select(layer => byId.TryGetValue(layer.Id, out var hex) && layer is HexLayer current
             ? hex with { Name = current.Name, Visible = current.Visible, Locked = current.Locked, Opacity = current.Opacity }
             : layer).ToList();
-        return new MapDocument(document.Id, document.Title, document.CreatedUtc, canvas, rewritten,
-            document.Assets, document.Notes, document.Checkpoints, document.StampForeground, document.Category)
-        { Atlas = document.Atlas, Lighting = document.Lighting, Style = document.Style, Entities = document.Entities, Labels = document.Labels, Fog = document.Fog, Transitions = document.Transitions, Timeline = document.Timeline, Pointcrawl = document.Pointcrawl, Planet = document.Planet, Isometric = document.Isometric, Variants = document.Variants, Handout = document.Handout };
+        return document.WithCanvasAndLayers(canvas, rewritten);
     }
 }
 

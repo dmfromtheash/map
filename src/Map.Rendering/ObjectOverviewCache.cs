@@ -49,6 +49,7 @@ public sealed class ObjectOverviewCache : IDisposable
     private readonly HashSet<Key> _framePins = [];
     /// <summary>Older-zoom chunks drawn in the last frame in place of a current chunk that was not ready.</summary>
     private readonly HashSet<Key> _standIns = [];
+    private readonly Dictionary<LayerId, int> _frameZooms = [];
     private readonly List<SKImage> _retired = [];
     private sealed record DetailView(int Zoom, int Left, int Top, int Right, int Bottom, long Frame);
     private readonly Dictionary<LayerId, DetailView> _refiningViews = [];
@@ -71,8 +72,10 @@ public sealed class ObjectOverviewCache : IDisposable
     /// <summary>Time one pressure pass may take on the owner thread; the first tile of a pass always goes.</summary>
     internal double PressureTrimMilliseconds { get; init; } = 2;
 
-    private void Touch(Entry entry)
+    private void Touch(Key key, Entry entry)
     {
+        if (!entry.Fallback)
+            _frameZooms[key.Logical.Layer] = Math.Min(_frameZooms.GetValueOrDefault(key.Logical.Layer, int.MaxValue), key.Logical.ZoomBucket);
         entry.LastUsed = ++_clock;
         entry.LastFrame = _frame;
         entry.LastTick = Environment.TickCount64;
@@ -214,7 +217,7 @@ public sealed class ObjectOverviewCache : IDisposable
         }
         if (retained is { } key && _entries.TryGetValue(key, out var entry) && entry.Overview is { } previous)
         {
-            Touch(entry);
+            Touch(key, entry);
             if (_frameOpen) _framePins.Add(key);
             if (key.Logical.ZoomBucket != zoom) _standIns.Add(key);
             variant = previous;
@@ -233,6 +236,7 @@ public sealed class ObjectOverviewCache : IDisposable
         if (_gpuContext == context) return;
         foreach (var key in _entries.Keys.ToArray()) Remove(key, eviction: false);
         _refiningViews.Clear();
+        _frameZooms.Clear();
         _gpuContext = context;
     }
 
@@ -249,6 +253,7 @@ public sealed class ObjectOverviewCache : IDisposable
         _adoptionMoving = false;
         _framePins.Clear();
         _standIns.Clear();
+        _frameZooms.Clear();
         // A neighbouring level can serve this frame and be evicted by the new detail it
         // builds. Keep the page fallback available too, even before that frame needs it.
         foreach (var pair in _entries)
@@ -340,7 +345,7 @@ public sealed class ObjectOverviewCache : IDisposable
         var key = new Key(new(layer, x, y, zoom), revision);
         if (_entries.TryGetValue(key, out var entry))
         {
-            Touch(entry);
+            Touch(key, entry);
             if (_frameOpen) _framePins.Add(key);
             result = new(entry.Image, true, false, entry.ObjectCount, entry.CulledCount);
             return true;
@@ -367,8 +372,8 @@ public sealed class ObjectOverviewCache : IDisposable
         if (_entries.TryGetValue(key, out var existing))
         {
             Hits++;
-            Touch(existing);
             existing.Fallback |= fallback;
+            Touch(key, existing);
             if (_frameOpen) _framePins.Add(key);
             return new ObjectOverviewCacheResult(existing.Image, Hit: true, InvalidatedPrevious: false,
                 existing.ObjectCount, existing.CulledCount);
@@ -405,7 +410,7 @@ public sealed class ObjectOverviewCache : IDisposable
             CulledCount = counts.Culled,
             Fallback = fallback
         };
-        Touch(added);
+        Touch(key, added);
         _entries.Add(key, added);
         _latest[logical] = key;
         Bytes += bytes;
@@ -464,14 +469,19 @@ public sealed class ObjectOverviewCache : IDisposable
 
     /// <summary>
     /// Lower ranks go first. 0 - an ordinary entry the last frame did not use; 1 - a stale fallback
-    /// (<see cref="StaleFallbackFrames"/>); 2 - an older overview level the last frame drew in place of a
+    /// or an unused finer seed after zoom-out; 2 - an older overview level the last frame drew in place of a
     /// chunk still on its way; 3 - the other ordinary entries, the view's own tiles and chunks among them;
-    /// 4 - a recent fallback (as before: it covers cold tiles while a view larger than the cache churns, and
+    /// 4 - a current or recent coarser fallback (it covers cold tiles while a view larger than the cache churns, and
     /// a refining view completes only with its seed kept). Without frames nothing is stale or a stand-in.
     /// </summary>
     private int EvictionRank(Key key, Entry entry)
     {
-        if (entry.Fallback) return _frame - entry.LastFrame >= StaleFallbackFrames ? 1 : 4;
+        if (entry.Fallback)
+        {
+            if (_frame == 0 || entry.LastFrame == _frame) return 4;
+            var zoomedOut = _frameZooms.TryGetValue(key.Logical.Layer, out var zoom) && zoom < key.Logical.ZoomBucket;
+            return zoomedOut || _frame - entry.LastFrame >= StaleFallbackFrames ? 1 : 4;
+        }
         if (_frame == 0 || entry.LastFrame != _frame) return 0;
         return _standIns.Contains(key) ? 2 : 3;
     }
@@ -519,6 +529,7 @@ public sealed class ObjectOverviewCache : IDisposable
         _latest.Clear();
         _overviewZooms.Clear();
         _refiningViews.Clear();
+        _frameZooms.Clear();
         Bytes = 0;
         _ownerThread = null;
         _account?.Dispose();

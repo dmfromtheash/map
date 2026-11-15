@@ -20,12 +20,13 @@ public sealed record MapDocument
         IReadOnlyList<MapNote>? revisedNotes = null,
         IReadOnlyList<MapCheckpoint>? revisedCheckpoints = null,
         StampForegroundSurface? revisedStampForeground = null,
-        bool replaceStampForeground = false)
+        bool replaceStampForeground = false,
+        CanvasDefinition? revisedCanvas = null)
     {
         Id = source.Id;
         Title = source.Title;
         CreatedUtc = source.CreatedUtc;
-        Canvas = source.Canvas;
+        Canvas = revisedCanvas ?? source.Canvas;
         Layers = revisedLayers is null
             ? source.Layers
             : new ReadOnlyCollection<MapLayer>([.. LayerOrderPolicy.Normalize(revisedLayers)]);
@@ -53,6 +54,42 @@ public sealed record MapDocument
         Isometric = source.Isometric;
         Variants = source.Variants;
         Handout = source.Handout;
+    }
+
+    /// <summary>
+    /// A checkpoint restored as a live document. The snapshot can only be captured from a
+    /// document, so its layers, assets and notes already passed the whole-document validation
+    /// (and the layer list is that document's own, sharing its derived indexes); only the
+    /// supplied checkpoint catalog is new and is checked here.
+    /// </summary>
+    internal static MapDocument FromSnapshot(MapCheckpointSnapshot snapshot, DocumentId id,
+        IReadOnlyList<MapCheckpoint>? checkpoints) => new(snapshot, id, checkpoints ?? []);
+
+    private MapDocument(MapCheckpointSnapshot snapshot, DocumentId id, IReadOnlyList<MapCheckpoint> checkpoints)
+    {
+        Id = id;
+        Title = snapshot.Title;
+        CreatedUtc = snapshot.CreatedUtc;
+        Canvas = snapshot.Canvas;
+        Layers = snapshot.Layers;
+        Assets = snapshot.Assets;
+        Notes = snapshot.Notes;
+        Checkpoints = new ReadOnlyCollection<MapCheckpoint>([.. checkpoints]);
+        ValidateCheckpoints(Checkpoints);
+        StampForeground = snapshot.StampForeground;
+        Category = snapshot.Category;
+        Lighting = snapshot.Lighting;
+        Style = snapshot.Style;
+        Entities = snapshot.Entities;
+        Labels = snapshot.Labels;
+        Fog = snapshot.Fog;
+        Transitions = snapshot.Transitions;
+        Timeline = snapshot.Timeline;
+        Pointcrawl = snapshot.Pointcrawl;
+        Planet = snapshot.Planet;
+        Isometric = snapshot.Isometric;
+        Variants = snapshot.Variants;
+        Handout = snapshot.Handout;
     }
 
     public MapDocument(
@@ -198,76 +235,8 @@ public sealed record MapDocument
         {
             throw new ArgumentException("Note ids are unique within a document.", nameof(notes));
         }
-        var pathIds = new HashSet<Guid>();
-        var ownedIds = new HashSet<ObjectId>();
-        var areaChecks = CheckAreaMembersInParallel(Layers);
-        foreach (var layer in Layers.OfType<ObjectLayer>().Where(l => !l.PlacementPaths.IsEmpty || !l.PlacementAreas.IsEmpty))
-        {
-            var objectsById = layer.Objects.ToDictionary(o => o.Id);
-            foreach (var path in layer.PlacementPaths)
-            {
-                if (path is null) throw new ArgumentException("Null placement path.");
-                path.ValidateMembers();
-                if (!pathIds.Add(path.Id)) throw new ArgumentException("Duplicate placement path id.");
-                var nodeIdsForPath = path.Nodes.Take(path.Nodes.Length - 1).Select(n => n.Id).ToHashSet();
-                foreach (var member in path.Members)
-                    if (!ownedIds.Add(member.ObjectId) || !nodeIdsForPath.Contains(member.Slot.NodeId)
-                        || Editing.PlacementPathPlanner.ObjectIdFor(path.Id, member.Slot) != member.ObjectId
-                        || !objectsById.TryGetValue(member.ObjectId, out var item) || item.Kind != SceneObjectKind.Stamp)
-                        throw new ArgumentException("Invalid or multiply owned placement path member.");
-                if (path.Variants.Any(v => !Assets.Any(a => a.Sha256 == v.Sha256)
-                    || v.MaskSha256 is { } mask && !Assets.Any(a => a.Sha256 == mask)))
-                    throw new ArgumentException("A saved path must retain every resolved variant and mask.");
-            }
-            foreach (var area in layer.PlacementAreas)
-            {
-                if (area is null || !pathIds.Add(area.Id)) throw new ArgumentException("Null or duplicate placement area id.");
-                if (areaChecks is null || !areaChecks.TryGetValue(area, out var failure)) area.ValidateMembers();
-                else if (failure is InvalidOperationException) area.ValidateMembers();
-                else if (failure is not null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(failure);
-                var composition = area.LayoutVersion >= 4 ? new Editing.PlacementAreaLayout(area) : null;
-                foreach (var member in area.Members)
-                {
-                    if (!ownedIds.Add(member.ObjectId) || !objectsById.TryGetValue(member.ObjectId, out var item)
-                        || item.Kind != SceneObjectKind.Stamp || item.Stamp is null
-                        || !area.Variants.Any(v => v.Sha256 == item.Stamp.AssetSha256)
-                        || item.Stamp.MaskAssetSha256 is { } mask && !Assets.Any(a => a.Sha256 == mask))
-                        throw new ArgumentException("Invalid or multiply owned placement area member.");
-                    var anchor = composition?.At(member.Slot).Point ?? Editing.PlacementAreaPlanner.Anchor(area, member.Slot);
-                    if (Math.Abs(item.X + item.Width / 2 - anchor.X) > .000001
-                        || Math.Abs(item.Y + item.Height / 2 - anchor.Y) > .000001 || item.Sublayer != area.Sublayer)
-                        throw new ArgumentException("A placement area member is outside its saved slot or sublayer.");
-                }
-                if (area.Variants.Any(v => !Assets.Any(a => a.Sha256 == v.Sha256)
-                    || v.MaskSha256 is { } mask && !Assets.Any(a => a.Sha256 == mask)))
-                    throw new ArgumentException("A saved area must retain every resolved variant and mask.");
-                Editing.PlacementAreaDrawOrder.Warm(area, area.Members.Select(m => objectsById[m.ObjectId]));
-            }
-        }
-        var riverIds = new HashSet<Guid>();
-        foreach (var river in Layers.OfType<ObjectLayer>().SelectMany(l => l.Rivers))
-        {
-            if (river is null) throw new ArgumentException("Null river.");
-            river.Validate();
-            if (!riverIds.Add(river.Id)) throw new ArgumentException("Duplicate river id.");
-        }
-        foreach (var road in Layers.OfType<ObjectLayer>().SelectMany(l => l.Roads))
-        {
-            if (road is null) throw new ArgumentException("Null road.");
-            road.Validate();
-            if (!riverIds.Add(road.Id)) throw new ArgumentException("Duplicate road id.");
-        }
-        if (Checkpoints.Count > MapCheckpointLimits.MaxCount)
-        {
-            throw new ArgumentException(
-                $"A document can contain at most {MapCheckpointLimits.MaxCount} checkpoints.",
-                nameof(checkpoints));
-        }
-        if (Checkpoints.Select(checkpoint => checkpoint.Id).Distinct().Count() != Checkpoints.Count)
-        {
-            throw new ArgumentException(
-                "Checkpoint ids are unique within a document.", nameof(checkpoints));
-        }
+        ValidateLayerContents(Layers, Assets, static _ => true);
+        ValidateCheckpoints(Checkpoints);
         // Prepare at load/public construction, before the snapshot becomes editable.
         foreach (var layer in Layers.OfType<ObjectLayer>())
         {
@@ -356,9 +325,9 @@ public sealed record MapDocument
     /// repeats a check refused by the memory budget alone, since parallel reservations can refuse
     /// what one reservation at a time would allow. Returns null when there is nothing to share.
     /// </remarks>
-    private static Dictionary<PlacementArea, Exception?>? CheckAreaMembersInParallel(IReadOnlyList<MapLayer> layers)
+    private static Dictionary<PlacementArea, Exception?>? CheckAreaMembersInParallel(IEnumerable<ObjectLayer> layers)
     {
-        var areas = layers.OfType<ObjectLayer>().SelectMany(layer => layer.PlacementAreas)
+        var areas = layers.SelectMany(layer => layer.PlacementAreas)
             .Where(area => area is not null).Distinct<PlacementArea>(ReferenceEqualityComparer.Instance).ToArray();
         if (areas.Length < 2)
         {
@@ -380,9 +349,146 @@ public sealed record MapDocument
         return results;
     }
 
+    /// <summary>
+    /// Placement path/area, river and road invariants. Ids are collected from every object layer
+    /// (they are unique across the document); the member, slot, asset and geometry checks run
+    /// only on the layers <paramref name="check"/> selects, the others having been proven when
+    /// they entered a snapshot.
+    /// </summary>
+    private static void ValidateLayerContents(IReadOnlyList<MapLayer> layers, IReadOnlyList<MapAssetReference> assets,
+        Func<ObjectLayer, bool> check)
+    {
+        var pathIds = new HashSet<Guid>();
+        var ownedIds = new HashSet<ObjectId>();
+        var riverIds = new HashSet<Guid>();
+        var checkedLayers = new HashSet<ObjectLayer>(layers.OfType<ObjectLayer>().Where(check), ReferenceEqualityComparer.Instance);
+        var areaChecks = CheckAreaMembersInParallel(checkedLayers);
+        foreach (var layer in layers.OfType<ObjectLayer>())
+        {
+            if (!checkedLayers.Contains(layer))
+            {
+                foreach (var path in layer.PlacementPaths)
+                    if (!pathIds.Add(path.Id)) throw new ArgumentException("Duplicate placement path id.");
+                foreach (var area in layer.PlacementAreas)
+                    if (!pathIds.Add(area.Id)) throw new ArgumentException("Null or duplicate placement area id.");
+                foreach (var river in layer.Rivers)
+                    if (!riverIds.Add(river.Id)) throw new ArgumentException("Duplicate river id.");
+                foreach (var road in layer.Roads)
+                    if (!riverIds.Add(road.Id)) throw new ArgumentException("Duplicate road id.");
+                continue;
+            }
+
+            if (!layer.PlacementPaths.IsEmpty || !layer.PlacementAreas.IsEmpty)
+                ValidatePlacements(layer, assets, pathIds, ownedIds, areaChecks);
+            foreach (var river in layer.Rivers)
+            {
+                if (river is null) throw new ArgumentException("Null river.");
+                river.Validate();
+                if (!riverIds.Add(river.Id)) throw new ArgumentException("Duplicate river id.");
+            }
+            foreach (var road in layer.Roads)
+            {
+                if (road is null) throw new ArgumentException("Null road.");
+                road.Validate();
+                if (!riverIds.Add(road.Id)) throw new ArgumentException("Duplicate road id.");
+            }
+        }
+    }
+
+    private static void ValidatePlacements(ObjectLayer layer, IReadOnlyList<MapAssetReference> assets,
+        HashSet<Guid> pathIds, HashSet<ObjectId> ownedIds, Dictionary<PlacementArea, Exception?>? areaChecks)
+    {
+        var objectsById = layer.Objects.ToDictionary(o => o.Id);
+        foreach (var path in layer.PlacementPaths)
+        {
+            if (path is null) throw new ArgumentException("Null placement path.");
+            path.ValidateMembers();
+            if (!pathIds.Add(path.Id)) throw new ArgumentException("Duplicate placement path id.");
+            var nodeIdsForPath = path.Nodes.Take(path.Nodes.Length - 1).Select(n => n.Id).ToHashSet();
+            foreach (var member in path.Members)
+                if (!ownedIds.Add(member.ObjectId) || !nodeIdsForPath.Contains(member.Slot.NodeId)
+                    || Editing.PlacementPathPlanner.ObjectIdFor(path.Id, member.Slot) != member.ObjectId
+                    || !objectsById.TryGetValue(member.ObjectId, out var item) || item.Kind != SceneObjectKind.Stamp)
+                    throw new ArgumentException("Invalid or multiply owned placement path member.");
+            if (path.Variants.Any(v => !assets.Any(a => a.Sha256 == v.Sha256)
+                || v.MaskSha256 is { } mask && !assets.Any(a => a.Sha256 == mask)))
+                throw new ArgumentException("A saved path must retain every resolved variant and mask.");
+        }
+        foreach (var area in layer.PlacementAreas)
+        {
+            if (area is null || !pathIds.Add(area.Id)) throw new ArgumentException("Null or duplicate placement area id.");
+            if (areaChecks is null || !areaChecks.TryGetValue(area, out var failure)) area.ValidateMembers();
+            else if (failure is InvalidOperationException) area.ValidateMembers();
+            else if (failure is not null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(failure);
+            var composition = area.LayoutVersion >= 4 ? new Editing.PlacementAreaLayout(area) : null;
+            foreach (var member in area.Members)
+            {
+                if (!ownedIds.Add(member.ObjectId) || !objectsById.TryGetValue(member.ObjectId, out var item)
+                    || item.Kind != SceneObjectKind.Stamp || item.Stamp is null
+                    || !area.Variants.Any(v => v.Sha256 == item.Stamp.AssetSha256)
+                    || item.Stamp.MaskAssetSha256 is { } mask && !assets.Any(a => a.Sha256 == mask))
+                    throw new ArgumentException("Invalid or multiply owned placement area member.");
+                var anchor = composition?.At(member.Slot).Point ?? Editing.PlacementAreaPlanner.Anchor(area, member.Slot);
+                if (Math.Abs(item.X + item.Width / 2 - anchor.X) > .000001
+                    || Math.Abs(item.Y + item.Height / 2 - anchor.Y) > .000001 || item.Sublayer != area.Sublayer)
+                    throw new ArgumentException("A placement area member is outside its saved slot or sublayer.");
+            }
+            if (area.Variants.Any(v => !assets.Any(a => a.Sha256 == v.Sha256)
+                || v.MaskSha256 is { } mask && !assets.Any(a => a.Sha256 == mask)))
+                throw new ArgumentException("A saved area must retain every resolved variant and mask.");
+            Editing.PlacementAreaDrawOrder.Warm(area, area.Members.Select(m => objectsById[m.ObjectId]));
+        }
+    }
+
+    private static void ValidateCheckpoints(IReadOnlyList<MapCheckpoint> checkpoints)
+    {
+        if (checkpoints.Count > MapCheckpointLimits.MaxCount)
+        {
+            throw new ArgumentException(
+                $"A document can contain at most {MapCheckpointLimits.MaxCount} checkpoints.",
+                nameof(checkpoints));
+        }
+        if (checkpoints.Select(checkpoint => checkpoint.Id).Distinct().Count() != checkpoints.Count)
+        {
+            throw new ArgumentException(
+                "Checkpoint ids are unique within a document.", nameof(checkpoints));
+        }
+    }
+
     /// <summary>New snapshot with another layer list; the map-wide light, style, atlas place and the rest stay.</summary>
-    public MapDocument WithLayers(IReadOnlyList<MapLayer> layers) =>
-        new(Id, Title, CreatedUtc, Canvas, layers, Assets, Notes, Checkpoints, StampForeground, Category)
+    /// <remarks>
+    /// Same invariants as the public constructor, checked in proportion to what changed (the way
+    /// a ProseMirror step checks only the replaced range and Roslyn reuses unchanged green nodes):
+    /// the same immutable list is a trusted copy; otherwise, when the source revision index is
+    /// prepared, only new layers, replaced object storage and changed paths/areas/rivers/roads are
+    /// validated against the source's identity indexes, and the derived indexes follow the delta.
+    /// A cold source keeps the full whole-document validation.
+    /// </remarks>
+    public MapDocument WithLayers(IReadOnlyList<MapLayer> layers) => WithCanvasAndLayers(Canvas, layers);
+
+    /// <summary>New snapshot with another canvas definition; layers and everything else stay.</summary>
+    public MapDocument WithCanvas(CanvasDefinition canvas)
+    {
+        ArgumentNullException.ThrowIfNull(canvas);
+        return new MapDocument(this, revisedCanvas: canvas);
+    }
+
+    /// <summary><see cref="WithLayers"/> that also replaces the canvas definition (hex import, board reshape).</summary>
+    internal MapDocument WithCanvasAndLayers(CanvasDefinition canvas, IReadOnlyList<MapLayer> layers)
+    {
+        ArgumentNullException.ThrowIfNull(canvas);
+        ArgumentNullException.ThrowIfNull(layers);
+        // The document's own list never aliases a caller list and was validated on entry.
+        if (ReferenceEquals(layers, Layers)) return new MapDocument(this, revisedCanvas: canvas);
+        if (DocumentRevisionIndex.TryGetPrepared(this, out var index)) return WithLayerDelta(canvas, layers, index);
+        return WholeDocumentRevision(canvas, layers);
+    }
+
+    /// <summary>Most objects a layer-list revision validates one by one against the source index.</summary>
+    private const int MaxDeltaObjects = 4_096;
+
+    private MapDocument WholeDocumentRevision(CanvasDefinition canvas, IReadOnlyList<MapLayer> layers) =>
+        new(Id, Title, CreatedUtc, canvas, layers, Assets, Notes, Checkpoints, StampForeground, Category)
         {
             Atlas = Atlas,
             Lighting = Lighting,
@@ -398,6 +504,78 @@ public sealed record MapDocument
             Variants = Variants,
             Handout = Handout,
         };
+
+    private MapDocument WithLayerDelta(CanvasDefinition canvas, IReadOnlyList<MapLayer> layers, DocumentRevisionIndex index)
+    {
+        if (layers.Count == 0 || layers[0] is not BaseColorLayer)
+        {
+            throw new ArgumentException(
+                "A document starts with the mandatory base colour layer at index 0.", nameof(layers));
+        }
+
+        if (layers.Skip(1).Any(l => l is BaseColorLayer))
+        {
+            throw new ArgumentException("Only one base colour layer may exist.", nameof(layers));
+        }
+
+        var orderedLayers = LayerOrderPolicy.Normalize(layers);
+        var sourceById = new Dictionary<LayerId, MapLayer>(Layers.Count);
+        foreach (var layer in Layers) sourceById.Add(layer.Id, layer);
+        var layerIds = new HashSet<LayerId>();
+        var gridIds = new HashSet<GridId>();
+        var keptObjects = new HashSet<LayerId>();
+        var revised = new HashSet<ObjectLayer>(ReferenceEqualityComparer.Instance);
+        var entering = new List<SceneObject>();
+        foreach (var layer in orderedLayers)
+        {
+            if (layer is null || !layerIds.Add(layer.Id))
+            {
+                throw new ArgumentException($"Duplicate layer id {layer?.Id}.", nameof(layers));
+            }
+
+            if (layer is GridLayer gridLayer && gridLayer.Grids.Any(grid => !gridIds.Add(grid.Id)))
+            {
+                throw new ArgumentException("Grid ids are unique across the document.", nameof(layers));
+            }
+
+            if (layer is not ObjectLayer objects) continue;
+            var before = sourceById.GetValueOrDefault(layer.Id) as ObjectLayer;
+            if (before is not null && ReferenceEquals(before.Objects, objects.Objects))
+            {
+                keptObjects.Add(layer.Id);
+                if (!ReferenceEquals(before, objects) && !(before.PlacementPaths == objects.PlacementPaths
+                    && before.PlacementAreas == objects.PlacementAreas && before.Rivers == objects.Rivers
+                    && before.Roads == objects.Roads))
+                    revised.Add(objects);
+                continue;
+            }
+
+            revised.Add(objects);
+            entering.AddRange(objects.Objects);
+        }
+
+        // A large replaced payload (a whole rebuilt layer) is cheaper to prove with one plain
+        // whole-document pass than object by object through the revision overlays.
+        if (entering.Count > MaxDeltaObjects) return WholeDocumentRevision(canvas, layers);
+        index.ValidateLayerDelta(keptObjects, entering);
+        ValidateLayerContents(orderedLayers, Assets, revised.Contains);
+        var target = new MapDocument(this, revisedLayers: orderedLayers, revisedCanvas: canvas);
+        foreach (var layer in target.Layers)
+        {
+            if (layer is not ObjectLayer objects || !revised.Contains(objects)) continue;
+            if (!keptObjects.Contains(objects.Id) && sourceById.GetValueOrDefault(objects.Id) is ObjectLayer replaced)
+                ObjectLayerChanges.RegisterReplacement(replaced, objects);
+            _ = AssetUsageIndex.For(objects);
+            _ = PlacementOwnershipIndex.For(objects);
+        }
+
+        var leaving = new List<SceneObject>();
+        foreach (var layer in Layers)
+            if (layer is ObjectLayer objects && !keptObjects.Contains(layer.Id)) leaving.AddRange(objects.Objects);
+        DocumentRevisionIndex.RegisterLayerDelta(this, target, keptObjects);
+        ObjectNameIndex.Register(this, target, leaving, entering);
+        return target;
+    }
 
     public MapDocument WithAssets(IReadOnlyList<MapAssetReference> assets)
     {

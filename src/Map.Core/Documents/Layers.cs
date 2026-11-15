@@ -146,6 +146,17 @@ public sealed record BaseColorLayer : MapLayer
 public sealed record ObjectLayer : MapLayer
 {
     private SceneObjectList _objects = SceneObjectList.Empty;
+    private System.Collections.Immutable.ImmutableArray<River> _rivers = [];
+    private System.Collections.Immutable.ImmutableArray<Road> _roads = [];
+    private FeatureIdentityIndex _riverIds = FeatureIdentityIndex.Create<River>([], static r => r.Id);
+    private FeatureIdentityIndex _roadIds = FeatureIdentityIndex.Create<Road>([], static r => r.Id);
+    private Lazy<FeatureSpatialIndex<River>> _placementRivers = RiverPlacementIndex([]);
+    private Lazy<FeatureSpatialIndex<Road>> _placementRoads = RoadPlacementIndex([]);
+
+    private static Lazy<FeatureSpatialIndex<River>> RiverPlacementIndex(IEnumerable<River> rivers) =>
+        new(() => FeatureSpatialIndex<River>.Build(rivers.Where(r => r.Visible), r => r.Id, r => Editing.RiverGeometry.Evaluate(r).Bounds));
+    private static Lazy<FeatureSpatialIndex<Road>> RoadPlacementIndex(IEnumerable<Road> roads) =>
+        new(() => FeatureSpatialIndex<Road>.Build(roads.Where(r => r.Visible), r => r.Id, r => Editing.RoadGeometry.Evaluate(r).Bounds));
 
     public ObjectLayer(
         LayerId id, string name, bool visible, bool locked, double opacity,
@@ -172,10 +183,90 @@ public sealed record ObjectLayer : MapLayer
     public System.Collections.Immutable.ImmutableArray<PlacementArea> PlacementAreas { get; init; } = [];
 
     /// <summary>Editable rivers of this layer, drawn under its objects (Stage 19).</summary>
-    public System.Collections.Immutable.ImmutableArray<River> Rivers { get; init; } = [];
+    public System.Collections.Immutable.ImmutableArray<River> Rivers
+    {
+        get => _rivers;
+        init
+        {
+            if (_rivers == value) return;
+            _rivers = value;
+            _riverIds = FeatureIdentityIndex.Create(value, static r => r.Id);
+            _placementRivers = RiverPlacementIndex(value);
+        }
+    }
 
     /// <summary>Editable roads of this layer, drawn with the terrain under its objects (Stage 20).</summary>
-    public System.Collections.Immutable.ImmutableArray<Road> Roads { get; init; } = [];
+    public System.Collections.Immutable.ImmutableArray<Road> Roads
+    {
+        get => _roads;
+        init
+        {
+            if (_roads == value) return;
+            _roads = value;
+            _roadIds = FeatureIdentityIndex.Create(value, static r => r.Id);
+            _placementRoads = RoadPlacementIndex(value);
+        }
+    }
+
+    /// <summary>Membership lookups shared across metadata/object edits and derived by feature deltas.</summary>
+    public bool ContainsRiver(Guid id) => _riverIds.Contains(id);
+    public bool ContainsRoad(Guid id) => _roadIds.Contains(id);
+
+    internal FeatureIdentityIndex RiverIds => _riverIds;
+    internal FeatureIdentityIndex RoadIds => _roadIds;
+    internal FeatureSpatialIndex<River> PlacementRivers => _placementRivers.Value;
+    internal FeatureSpatialIndex<Road> PlacementRoads => _placementRoads.Value;
+    internal bool PlacementFeaturesPrepared => _placementRivers.IsValueCreated && _placementRoads.IsValueCreated;
+
+    internal void RegisterRiverDelta(ObjectLayer source, IReadOnlyList<Guid> removed, IReadOnlyList<Guid> added,
+        IReadOnlyList<River>? changed = null)
+    {
+        var ids = source._riverIds.Derive(removed, added);
+        if (ids.Count != Rivers.Length)
+            throw new InvalidOperationException($"River content delta does not explain index version {ids.Version}.");
+        _riverIds = ids;
+        if (changed is not null && source._placementRivers.IsValueCreated)
+        {
+            var derived = source.PlacementRivers.Change(removed, changed.Where(r => r.Visible),
+                r => r.Id, r => Editing.RiverGeometry.Evaluate(r).Bounds);
+            _placementRivers = new(() => derived);
+            _ = _placementRivers.Value;
+        }
+    }
+
+    internal void RegisterRoadDelta(ObjectLayer source, IReadOnlyList<Guid> removed, IReadOnlyList<Guid> added,
+        IReadOnlyList<Road>? changed = null)
+    {
+        var ids = source._roadIds.Derive(removed, added);
+        if (ids.Count != Roads.Length)
+            throw new InvalidOperationException($"Road content delta does not explain index version {ids.Version}.");
+        _roadIds = ids;
+        if (changed is not null && source._placementRoads.IsValueCreated)
+        {
+            var derived = source.PlacementRoads.Change(removed, changed.Where(r => r.Visible),
+                r => r.Id, r => Editing.RoadGeometry.Evaluate(r).Bounds);
+            _placementRoads = new(() => derived);
+            _ = _placementRoads.Value;
+        }
+    }
+
+    // Derived membership is deliberately absent from document equality/hash codes. Preparing an
+    // index, or inheriting it from a known delta, must never turn an unchanged map into an edit.
+    public bool Equals(ObjectLayer? other) => ReferenceEquals(this, other) || other is not null
+        && base.Equals(other) && _objects == other._objects && Effects == other.Effects
+        && PlacementPaths == other.PlacementPaths && PlacementAreas == other.PlacementAreas
+        && Rivers == other.Rivers && Roads == other.Roads && SurfaceOrder == other.SurfaceOrder
+        && EqualityComparer<IReadOnlyList<ObjectSublayerState>>.Default.Equals(SublayerStates, other.SublayerStates)
+        && EqualityComparer<LayerMask?>.Default.Equals(Mask, other.Mask);
+
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(base.GetHashCode()); hash.Add(_objects); hash.Add(Effects);
+        hash.Add(PlacementPaths); hash.Add(PlacementAreas); hash.Add(Rivers); hash.Add(Roads);
+        hash.Add(SurfaceOrder); hash.Add(SublayerStates); hash.Add(Mask);
+        return hash.ToHashCode();
+    }
 
     /// <summary>
     /// Explicit draw order of this layer's roads and water at one level, bottom first, by id.

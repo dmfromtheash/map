@@ -14,7 +14,9 @@ namespace Map.Core.Documents;
 /// </summary>
 internal sealed class ObjectNameIndex
 {
-    private static readonly ConditionalWeakTable<MapDocument, ObjectNameIndex> Cache = [];
+    // Keyed by the immutable layer list: names depend on nothing else, so snapshots that differ
+    // only in map-wide properties share the index without registration.
+    private static readonly ConditionalWeakTable<IReadOnlyList<MapLayer>, ObjectNameIndex> Cache = [];
     private readonly Dictionary<string, int> _root;
     private readonly ImmutableDictionary<string, int> _overlay;
     private readonly ConcurrentDictionary<string, int> _firstFree;
@@ -46,11 +48,11 @@ internal sealed class ObjectNameIndex
     // records its own cursor, so starting the search here never skips a free number.
     private int RootHole(string basis) => _rootHoles.GetValueOrDefault(basis, 1);
 
-    public static ObjectNameIndex For(MapDocument document) => Cache.GetValue(document, static value =>
+    public static ObjectNameIndex For(MapDocument document) => Cache.GetValue(document.Layers, static value =>
     {
         var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         var visited = 0;
-        foreach (var layer in value.Layers)
+        foreach (var layer in value)
             if (layer is ObjectLayer objects)
                 foreach (var item in objects.Objects)
                 {
@@ -114,7 +116,7 @@ internal sealed class ObjectNameIndex
         return digits;
     }
 
-    internal static bool IsPrepared(MapDocument document) => Cache.TryGetValue(document, out _);
+    internal static bool IsPrepared(MapDocument document) => Cache.TryGetValue(document.Layers, out _);
 
     private int CountOf(string name) =>
         _overlay.TryGetValue(name, out var changed) ? changed : _root.GetValueOrDefault(name);
@@ -160,13 +162,13 @@ internal sealed class ObjectNameIndex
 
     internal static void Share(MapDocument source, MapDocument target)
     {
-        if (Cache.TryGetValue(source, out var value)) Cache.Add(target, value);
+        if (Cache.TryGetValue(source.Layers, out var value)) Cache.TryAdd(target.Layers, value);
     }
 
     internal static void Register(MapDocument source, MapDocument target,
         IEnumerable<SceneObject> removed, IEnumerable<SceneObject> added)
     {
-        if (!Cache.TryGetValue(source, out var value)) return;
+        if (!Cache.TryGetValue(source.Layers, out var value)) return;
         var overlay = value._overlay.ToBuilder();
         var cursors = new Dictionary<string, int>(value._firstFree, StringComparer.OrdinalIgnoreCase);
         var holes = value._removedHoles.ToBuilder();
@@ -204,7 +206,7 @@ internal sealed class ObjectNameIndex
             while (cursor < int.MaxValue && Current(basis + " " + cursor.ToString(CultureInfo.InvariantCulture)) > 0) { cursor++; _probes++; }
             cursors[basis] = cursor;
         }
-        Cache.Add(target, new ObjectNameIndex(value._root, overlay.ToImmutable(), value._rootHoles, cursors, holes.ToImmutable()));
+        Cache.TryAdd(target.Layers, new ObjectNameIndex(value._root, overlay.ToImmutable(), value._rootHoles, cursors, holes.ToImmutable()));
     }
 
     /// <summary>«basis N» with N a positive number written without leading zeros.</summary>

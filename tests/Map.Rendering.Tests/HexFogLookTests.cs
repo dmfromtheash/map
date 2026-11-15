@@ -23,11 +23,11 @@ public sealed class HexFogLookTests
     }
 
     /// <summary>MAP_FOG_LOOKS=&lt;folder&gt;: the plain fog and the three painted looks, for players and for the game master.</summary>
-    [Fact]
+    [OptInProbe("MAP_FOG_LOOKS", "HexFogLookTests.A_painted_fog_hides_the_unknown_and_shows_the_explored")]
     public void Looks_for_review()
     {
         var folder = Environment.GetEnvironmentVariable("MAP_FOG_LOOKS");
-        if (string.IsNullOrWhiteSpace(folder)) return;
+
         Directory.CreateDirectory(folder);
         var (document, _, _, _) = Explored();
         foreach (var look in new[] { 0, 3 })
@@ -41,10 +41,10 @@ public sealed class HexFogLookTests
     }
 
     /// <summary>MAP_FOG_TIMING=1: frame time of the plain and the painted fog over a 128² board, half hidden.</summary>
-    [Fact]
+    [OptInProbe("MAP_FOG_TIMING", "HexFogLookTests.A_painted_fog_hides_the_unknown_and_shows_the_explored")]
     public void Timing_for_review()
     {
-        if (Environment.GetEnvironmentVariable("MAP_FOG_TIMING") is null) return;
+
         var document = HexMapFactory.Create("Большая", DateTimeOffset.UnixEpoch, new MapCategoryId("hex"), HexOrientation.Flat, 32, 128, 128, "#FFF2E9DC");
         var layer = document.Layers.OfType<HexLayer>().Single();
         var cells = new Dictionary<HexCoord, HexCell?>();

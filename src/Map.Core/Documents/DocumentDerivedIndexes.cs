@@ -18,10 +18,15 @@ public static class DocumentDerivedIndexes
         if (!DocumentRevisionIndex.IsPrepared(document) || !ObjectNameIndex.IsPrepared(document)) return false;
         if (!Editing.LabelPriority.IsPrepared(document)) return false;
         foreach (var layer in document.Layers)
+        {
+            if (layer is ObjectLayer features && (!features.RiverIds.IsPrepared || !features.RoadIds.IsPrepared
+                || !features.PlacementFeaturesPrepared))
+                return false;
             if (layer is ObjectLayer objects && objects.Objects.Count > 0
                 && (!objects.ObjectStorage.HasIdentityTable || !ObjectSpatialIndex.IsPrepared(objects)
                     || !Editing.BoundObjectIndex.IsPrepared(objects)))
                 return false;
+        }
         return true;
     }
 
@@ -36,7 +41,19 @@ public static class DocumentDerivedIndexes
         // Between lookups a background caller steps aside while a gesture runs (no-op on other threads).
         foreach (var layer in document.Layers)
         {
-            if (layer is not ObjectLayer objects || objects.Objects.Count == 0) continue;
+            if (layer is not ObjectLayer objects) continue;
+            cancellationToken.ThrowIfCancellationRequested();
+            Resources.BackgroundWork.YieldToInteraction(cancellationToken);
+            objects.RiverIds.Prepare();
+            cancellationToken.ThrowIfCancellationRequested();
+            Resources.BackgroundWork.YieldToInteraction(cancellationToken);
+            objects.RoadIds.Prepare();
+            Resources.BackgroundWork.YieldToInteraction(cancellationToken);
+            _ = objects.PlacementRivers;
+            cancellationToken.ThrowIfCancellationRequested();
+            Resources.BackgroundWork.YieldToInteraction(cancellationToken);
+            _ = objects.PlacementRoads;
+            if (objects.Objects.Count == 0) continue;
             cancellationToken.ThrowIfCancellationRequested();
             Resources.BackgroundWork.YieldToInteraction(cancellationToken);
             _ = objects.ObjectStorage.IndexOfId(objects.Objects[0].Id);

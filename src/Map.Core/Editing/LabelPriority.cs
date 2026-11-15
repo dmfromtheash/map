@@ -69,6 +69,6 @@ public static partial class LabelPriority
     public static IReadOnlyList<WorldBounds> LabelBounds(MapDocument document) =>
         !document.Labels.ClearUnderLabels ? []
         : [.. document.Layers.OfType<ObjectLayer>().Where(l => l.Visible)
-            .SelectMany(l => l.Objects).Where(o => o.Kind == SceneObjectKind.Text && o.Visible && o.Text is not null)
+            .SelectMany(l => l.ObjectStorage.TextObjects()).Where(o => o.Visible && o.Text is not null)
             .Select(SceneGeometry.BoundsOf)];
 }

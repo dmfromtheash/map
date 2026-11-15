@@ -7,33 +7,22 @@ public enum ShapeBooleanOperation { Add, Subtract, Merge }
 /// <summary>One vector cut replaces one object with multiple pieces and undoes as one step.</summary>
 public sealed class ReplaceObjectWithManyCommand : IEditCommand
 {
-    private readonly LayerId _layerId;
-    private readonly int _index;
-    private readonly SceneObject _before;
-    private readonly IReadOnlyList<SceneObject> _after;
+    private readonly ObjectReplacement _replacement;
 
     public ReplaceObjectWithManyCommand(
         MapDocument document, LayerId layerId, ObjectId beforeId, IReadOnlyList<SceneObject> after)
     {
         var layer = document.FindLayer(layerId) as ObjectLayer
             ?? throw new InvalidOperationException("Vector cut requires an object layer.");
-        _index = layer.Objects.ToList().FindIndex(item => item.Id == beforeId);
-        if (_index < 0 || after.Count < 2) throw new ArgumentException("A cut replaces one object with at least two pieces.");
-        _layerId = layerId; _before = layer.Objects[_index]; _after = [.. after];
+        if (layer.ObjectStorage.IndexOfId(beforeId) < 0 || after.Count < 2)
+            throw new ArgumentException("A cut replaces one object with at least two pieces.");
+        _replacement = new ObjectReplacement(document, layerId, [beforeId], after);
     }
 
     public string Name => "Cut vector at node";
-    public MapDocument Apply(MapDocument document) => Rewrite(document, [_before.Id], _after);
-    public MapDocument Revert(MapDocument document) => Rewrite(document, [.. _after.Select(item => item.Id)], [_before]);
-
-    private MapDocument Rewrite(
-        MapDocument document, IReadOnlyCollection<ObjectId> removed, IReadOnlyList<SceneObject> inserted) =>
-        document.WithLayer(_layerId, layer =>
-        {
-            var objects = ((ObjectLayer)layer).Objects.Where(item => !removed.Contains(item.Id)).ToList();
-            objects.InsertRange(Math.Min(_index, objects.Count), inserted);
-            return ((ObjectLayer)layer) with { Objects = objects };
-        });
+    public long? MeasuredWorkingBytes => _replacement.WorkingBytes;
+    public MapDocument Apply(MapDocument document) => _replacement.Apply(document);
+    public MapDocument Revert(MapDocument document) => _replacement.Revert(document);
 }
 
 /// <summary>Attaches a content-addressed asset to a vector style in the same undo transaction.</summary>
@@ -274,12 +263,10 @@ public static class VectorObjectEditor
 /// </summary>
 public sealed class ShapeBooleanCommand : IEditCommand
 {
-    private readonly LayerId _layerId;
     private readonly SceneObject _first;
     private readonly SceneObject _second;
     private readonly SceneObject _result;
-    private readonly int _firstIndex;
-    private readonly int _secondIndex;
+    private readonly ObjectReplacement _replacement;
 
     public ShapeBooleanCommand(
         MapDocument document, LayerId layerId, ObjectId firstId, ObjectId secondId,
@@ -287,38 +274,23 @@ public sealed class ShapeBooleanCommand : IEditCommand
     {
         var layer = document.FindLayer(layerId) as ObjectLayer
             ?? throw new InvalidOperationException("Boolean operands must share an object layer.");
-        _layerId = layerId;
-        _firstIndex = IndexOf(layer, firstId); _secondIndex = IndexOf(layer, secondId);
-        _first = layer.Objects[_firstIndex]; _second = layer.Objects[_secondIndex];
+        _first = layer.Objects[IndexOf(layer, firstId)]; _second = layer.Objects[IndexOf(layer, secondId)];
         if (_first.Shape is null || _second.Shape is null || firstId == secondId)
         {
             throw new ArgumentException("Boolean operands are two distinct shapes.");
         }
 
         _result = Combine(_first, _second, operation);
+        _replacement = new ObjectReplacement(document, layerId, [firstId, secondId], [_result]);
     }
 
     public string Name => "Shape boolean";
     public ObjectId ResultId => _result.Id;
     public SceneObject Result => _result;
 
-    public MapDocument Apply(MapDocument document) => document.WithLayer(_layerId, layer =>
-    {
-        var objects = ((ObjectLayer)layer).Objects
-            .Where(item => item.Id != _first.Id && item.Id != _second.Id).ToList();
-        objects.Insert(Math.Min(Math.Min(_firstIndex, _secondIndex), objects.Count), _result);
-        return ((ObjectLayer)layer) with { Objects = objects };
-    });
-
-    public MapDocument Revert(MapDocument document) => document.WithLayer(_layerId, layer =>
-    {
-        var objects = ((ObjectLayer)layer).Objects.Where(item => item.Id != _result.Id).ToList();
-        foreach (var item in new[] { (_firstIndex, _first), (_secondIndex, _second) }.OrderBy(item => item.Item1))
-        {
-            Insert(objects, item.Item1, item.Item2);
-        }
-        return ((ObjectLayer)layer) with { Objects = objects };
-    });
+    public long? MeasuredWorkingBytes => _replacement.WorkingBytes;
+    public MapDocument Apply(MapDocument document) => _replacement.Apply(document);
+    public MapDocument Revert(MapDocument document) => _replacement.Revert(document);
 
     private static SceneObject Combine(
         SceneObject first, SceneObject second, ShapeBooleanOperation operation)
@@ -411,10 +383,9 @@ public sealed class ShapeBooleanCommand : IEditCommand
 
     private static int IndexOf(ObjectLayer layer, ObjectId id)
     {
-        for (var i = 0; i < layer.Objects.Count; i++) if (layer.Objects[i].Id == id) return i;
+        var index = layer.ObjectStorage.IndexOfId(id);
+        if (index >= 0) return index;
         throw new InvalidOperationException($"Object {id} is not on the layer.");
     }
 
-    private static void Insert(List<SceneObject> list, int index, SceneObject item) =>
-        list.Insert(Math.Min(index, list.Count), item);
 }

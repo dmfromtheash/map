@@ -289,10 +289,10 @@ public sealed class LandCliffRenderingTests
     /// MAP_CLIFF_PNG=&lt;folder&gt; writes one sheet per ready look - islands, plateaus, a pit and
     /// scattered rocks on parchment, like the owner's tier sheets - for side-by-side comparison.
     /// </summary>
-    [Fact]
+    [OptInProbe("MAP_CLIFF_PNG", "LandCliffRenderingTests.A_raised_island_drops_to_the_sea_and_the_wall_steps_with_the_levels")]
     public void Look_sheets_for_review()
     {
-        if (Environment.GetEnvironmentVariable("MAP_CLIFF_PNG") is not { Length: > 0 } folder) return;
+        var folder = Environment.GetEnvironmentVariable("MAP_CLIFF_PNG")!;
         Directory.CreateDirectory(folder);
         foreach (var look in LandCliffStyle.Looks)
         {

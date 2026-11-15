@@ -4,11 +4,11 @@ using System.Runtime.CompilerServices;
 namespace Map.Core.Documents;
 
 /// <summary>
-/// Immutable object-order storage. A point replacement copies one bounded chunk and the small
-/// chunk directory; insert/remove rebuild only boundary chunks and share every untouched chunk.
+/// Immutable object-order storage. A point replacement copies bounded chunks and persistent
+/// directory paths; insert/remove rebuild only boundary chunks and share every untouched chunk.
 /// Enumeration and the public index contract preserve the exact serialized/draw order.
 /// </summary>
-public sealed class SceneObjectList : IReadOnlyList<SceneObject>
+public sealed partial class SceneObjectList : IReadOnlyList<SceneObject>
 {
     private IdentityTable? _identitySlots;
     private IdentityTable? _textIdentitySlots;
@@ -17,13 +17,14 @@ public sealed class SceneObjectList : IReadOnlyList<SceneObject>
     private sealed record TextChunk(int[] Offsets, int[] Counts);
     private static readonly TextChunk NoText = new([], new int[LabelSettings.MaxImportance + 1]);
     private static readonly ConditionalWeakTable<SceneObject[], TextChunk> TextChunks = new();
-    private readonly (SceneObject[] Objects, TextChunk Text)[] _textChunks;
-    private readonly int[] _labelCounts = new int[LabelSettings.MaxImportance + 1];
-    private readonly Dictionary<SceneObject[], int> _chunkStarts;
 
     /// <summary>Number of full identity tables built (every object visited). Diagnostics and tests only.</summary>
     internal static long IdentityRootBuilds => System.Threading.Interlocked.Read(ref _identityRootBuilds);
     private static long _identityRootBuilds;
+
+    /// <summary>Objects visited by those identity table builds. Diagnostics and tests only.</summary>
+    internal static long IdentityRootObjects => System.Threading.Interlocked.Read(ref _identityRootObjects);
+    private static long _identityRootObjects;
 
     /// <summary>
     /// Object id → position. The root is one plain hash table built once per loaded list (about
@@ -72,50 +73,40 @@ public sealed class SceneObjectList : IReadOnlyList<SceneObject>
     private static readonly ImmutableDictionary<SceneObject[], Piece[]> NoHoldings =
         ImmutableDictionary.Create<SceneObject[], Piece[]>(ReferenceEqualityComparer.Instance);
 
+    private static readonly IdentityTable EmptyIdentities = new([], NoOverlay, NoForward, NoHoldings);
+
     public const int ChunkSize = 256;
 
     // Persistence keys derived bytes by immutable chunk identity, never by layer id or position.
     // Friend assemblies must treat these arrays as read-only, just like the storage itself.
     internal IReadOnlyList<SceneObject[]> StorageChunks => _chunks;
+    internal void ValidateDirectory() => _chunks.Validate();
 
-    private static readonly SceneObjectList EmptyInstance = new([], 0);
-    private readonly SceneObject[][] _chunks;
-    private readonly int[] _starts;
+    private static readonly Lazy<SceneObjectList> EmptyInstance = new(() => new([], 0));
+    private readonly ChunkDirectory _chunks;
 
-    private SceneObjectList(SceneObject[][] chunks, int count, SceneObjectList? source = null, Rewrite? rewrite = null)
+    private SceneObjectList(SceneObject[][] chunks, int count)
+    {
+        _chunks = ChunkDirectory.From(chunks);
+        Count = count;
+        if (_chunks.ObjectCount != count)
+            throw new ArgumentException("Scene object chunks do not match their declared count.", nameof(chunks));
+        _legendOrder = new(this, null, null);
+        (_visibleLegend, _namedLegend) = DeriveLegend(null, null);
+    }
+
+    private SceneObjectList(ChunkDirectory chunks, SceneObjectList source, Rewrite rewrite)
     {
         _chunks = chunks;
-        Count = count;
-        _starts = new int[chunks.Length];
-        _chunkStarts = new(chunks.Length, ReferenceEqualityComparer.Instance);
-        var start = 0;
-        var textChunks = new List<(SceneObject[] Objects, TextChunk Text)>(source?._textChunks.Length ?? 0);
-        for (var index = 0; index < chunks.Length; index++)
-        {
-            _starts[index] = start;
-            _chunkStarts[chunks[index]] = start;
-            start += chunks[index].Length;
-        }
-        if (source is null)
-        {
-            foreach (var chunk in chunks) AddTextChunk(chunk);
-        }
-        else
-        {
-            foreach (var entry in source._textChunks)
-                if (_chunkStarts.ContainsKey(entry.Objects)) textChunks.Add(entry);
-            if (rewrite is not null)
-                foreach (var (chunk, _) in rewrite.Created) AddTextChunk(chunk);
-            textChunks.Sort((a, b) => _chunkStarts[a.Objects].CompareTo(_chunkStarts[b.Objects]));
-        }
-        foreach (var (_, text) in textChunks)
-            for (var i = LabelSettings.MinImportance; i <= LabelSettings.MaxImportance; i++)
-                _labelCounts[i] += text.Counts[i];
-        _textChunks = [.. textChunks];
+        Count = chunks.ObjectCount;
+        _legendOrder = new(this, source, rewrite);
+        (_visibleLegend, _namedLegend) = DeriveLegend(source, rewrite);
+        if ((source._identitySlots ?? (source.Count == 0 ? EmptyIdentities : null)) is { } slots) _identitySlots = Derive(slots, rewrite);
+        else if (source._textIdentitySlots is { } textSlots) _textIdentitySlots = Derive(textSlots, rewrite, textOnly: true);
+    }
 
-        void AddTextChunk(SceneObject[] objects)
-        {
-            var text = TextChunks.GetValue(objects, static chunk =>
+    private static TextChunk TextOf(SceneObject[] objects) =>
+        TextChunks.GetValue(objects, static chunk =>
             {
                 var textCount = 0;
                 foreach (var item in chunk)
@@ -133,25 +124,11 @@ public sealed class SceneObjectList : IReadOnlyList<SceneObject>
                     }
                 return new TextChunk(offsets, counts);
             });
-            if (text.Offsets.Length != 0) textChunks.Add((objects, text));
-        }
-
-        if (start != count)
-        {
-            throw new ArgumentException("Scene object chunks do not match their declared count.", nameof(chunks));
-        }
-        if (source?._identitySlots is { } slots && rewrite is not null)
-        {
-            _identitySlots = Derive(slots, rewrite);
-        }
-        if (_identitySlots is null && source?._textIdentitySlots is { } textSlots && rewrite is not null)
-            _textIdentitySlots = Derive(textSlots, rewrite, textOnly: true);
-    }
 
     /// <summary>True when id lookups of this list no longer visit every object.</summary>
     internal bool HasIdentityTable => _identitySlots is not null;
 
-    public static SceneObjectList Empty => EmptyInstance;
+    public static SceneObjectList Empty => EmptyInstance.Value;
 
     /// <summary>An immutable input may be shared; every other caller list is copied.</summary>
     public static SceneObjectList From(IReadOnlyList<SceneObject> objects)
@@ -195,6 +172,7 @@ public sealed class SceneObjectList : IReadOnlyList<SceneObject>
             foreach (var chunk in _chunks)
                 for (var i = 0; i < chunk.Length; i++) root.Add(chunk[i].Id, new Slot(chunk, i));
             System.Threading.Interlocked.Increment(ref _identityRootBuilds);
+            System.Threading.Interlocked.Add(ref _identityRootObjects, Count);
             System.Threading.Interlocked.CompareExchange(ref _identitySlots,
                 new IdentityTable(root, NoOverlay, NoForward, NoHoldings), null);
             table = _identitySlots;
@@ -207,14 +185,15 @@ public sealed class SceneObjectList : IReadOnlyList<SceneObject>
     {
         var count = 0;
         for (var i = LabelSettings.MinImportance; i <= LabelSettings.MaxImportance; i++)
-            if ((shown & (1 << i)) != 0) count += _labelCounts[i];
+            if ((shown & (1 << i)) != 0) count += _chunks.Labels[i];
         return count;
     }
 
     internal IEnumerable<SceneObject> TextObjects(int shown = -1)
     {
-        foreach (var (chunk, text) in _textChunks)
+        foreach (var chunk in _chunks.TextChunksOnly())
         {
+            var text = TextOf(chunk);
             var relevant = false;
             for (var i = LabelSettings.MinImportance; i <= LabelSettings.MaxImportance; i++)
                 if ((shown & (1 << i)) != 0 && text.Counts[i] > 0) { relevant = true; break; }
@@ -237,9 +216,9 @@ public sealed class SceneObjectList : IReadOnlyList<SceneObject>
         var table = _textIdentitySlots;
         if (table is null)
         {
-            var root = new Dictionary<ObjectId, Slot>(_textChunks.Sum(c => c.Text.Offsets.Length));
-            foreach (var (chunk, text) in _textChunks)
-                foreach (var offset in text.Offsets) root.Add(chunk[offset].Id, new Slot(chunk, offset));
+            var root = new Dictionary<ObjectId, Slot>();
+            foreach (var chunk in _chunks.TextChunksOnly())
+                foreach (var offset in TextOf(chunk).Offsets) root.Add(chunk[offset].Id, new Slot(chunk, offset));
             Interlocked.CompareExchange(ref _textIdentitySlots,
                 new IdentityTable(root, NoOverlay, NoForward, NoHoldings), null);
             table = _textIdentitySlots;
@@ -251,13 +230,15 @@ public sealed class SceneObjectList : IReadOnlyList<SceneObject>
     {
         // An overlay slot is newer than any root slot of the same id.
         if (!table.Overlay.TryGetValue(id, out var slot) && !table.Root.TryGetValue(id, out slot)) return -1;
-        if (_chunkStarts.TryGetValue(slot.Chunk, out var start)) return start + slot.Offset;
+        if (TryChunkStart(slot.Chunk, out var start)) return start + slot.Offset;
         if (!table.Forward.TryGetValue(slot.Chunk, out var runs)) return -1;
         var run = FindRun(runs, slot.Offset);
-        return run >= 0 && _chunkStarts.TryGetValue(runs[run].Chunk, out start)
+        return run >= 0 && TryChunkStart(runs[run].Chunk, out start)
             ? start + runs[run].ChunkOffset + slot.Offset - runs[run].OriginStart
             : -1;
     }
+
+    private bool TryChunkStart(SceneObject[] chunk, out int start) => _chunks.TryStart(chunk, out start);
 
     private static int FindRun(Run[] runs, int originOffset)
     {
@@ -376,69 +357,10 @@ public sealed class SceneObjectList : IReadOnlyList<SceneObject>
     /// Removes the objects at the given ascending, distinct positions. Untouched chunks are shared;
     /// only the chunks holding a removed object are rebuilt, so the cost follows the removal.
     /// </summary>
-    internal SceneObjectList RemovePositions(IReadOnlyList<int> ascending)
-    {
-        ArgumentNullException.ThrowIfNull(ascending);
-        if (ascending.Count == 0) return this;
-        var chunks = new List<SceneObject[]>(_chunks.Length);
-        var rewrite = new Rewrite();
-        var segments = new List<Segment>();
-        var next = 0;
-        var previousChunk = -1;
-        while (next < ascending.Count)
-        {
-            var (chunkIndex, _) = Locate(ascending[next]);
-            for (var c = previousChunk + 1; c < chunkIndex; c++) chunks.Add(_chunks[c]);
-            var chunk = _chunks[chunkIndex];
-            var start = _starts[chunkIndex];
-            var first = next;
-            while (next < ascending.Count && ascending[next] < start + chunk.Length)
-            {
-                if (next > 0 && ascending[next] <= ascending[next - 1]) throw new ArgumentException("Positions must ascend.", nameof(ascending));
-                next++;
-            }
+    internal SceneObjectList RemovePositions(IReadOnlyList<int> ascending) =>
+        SplicePositions(ascending, ImmutableDictionary<int, IReadOnlyList<SceneObject>>.Empty);
 
-            rewrite.Dropped.Add(chunk);
-            var rebuilt = new SceneObject[chunk.Length - (next - first)];
-            segments.Clear();
-            var from = 0;
-            var to = 0;
-            for (var r = first; r <= next; r++)
-            {
-                // The kept run before each removed offset, then the run after the last one.
-                var offset = r < next ? ascending[r] - start : chunk.Length;
-                if (offset > from)
-                {
-                    Array.Copy(chunk, from, rebuilt, to, offset - from);
-                    segments.Add(new Segment(chunk, from, offset - from, to));
-                    to += offset - from;
-                }
-
-                if (r < next) rewrite.Left.Add(chunk[offset].Id);
-                from = offset + 1;
-            }
-
-            if (rebuilt.Length > 0)
-            {
-                chunks.Add(rebuilt);
-                rewrite.Created.Add((rebuilt, [.. segments]));
-            }
-
-            previousChunk = chunkIndex;
-        }
-
-        for (var c = previousChunk + 1; c < _chunks.Length; c++) chunks.Add(_chunks[c]);
-        return new SceneObjectList([.. chunks], Count - ascending.Count, this, rewrite);
-    }
-
-    public SceneObject this[int index]
-    {
-        get
-        {
-            var (chunk, offset) = Locate(index);
-            return _chunks[chunk][offset];
-        }
-    }
+    public SceneObject this[int index] => _chunks.ObjectAt(index);
 
     public SceneObjectList ReplaceAt(int index, SceneObject replacement)
     {
@@ -461,7 +383,6 @@ public sealed class SceneObjectList : IReadOnlyList<SceneObject>
             return this;
         }
 
-        var chunks = (SceneObject[][])_chunks.Clone();
         var copied = new Dictionary<int, SceneObject[]>();
         var reidentified = new Dictionary<int, List<int>>();
         var rewrite = new Rewrite();
@@ -474,7 +395,6 @@ public sealed class SceneObjectList : IReadOnlyList<SceneObject>
             {
                 copy = (SceneObject[])original.Clone();
                 copied.Add(chunkIndex, copy);
-                chunks[chunkIndex] = copy;
                 rewrite.Dropped.Add(original);
             }
 
@@ -513,59 +433,138 @@ public sealed class SceneObjectList : IReadOnlyList<SceneObject>
             rewrite.Created.Add((copy, [.. segments]));
         }
 
-        return new SceneObjectList(chunks, Count, this, rewrite);
+        return new SceneObjectList(_chunks.Replace(copied), this, rewrite);
     }
 
     public SceneObjectList InsertRange(int index, IReadOnlyList<SceneObject> inserted) =>
         Splice(index, removeCount: 0, inserted);
 
-    /// <summary>Batch insertions at original indices; only intersected chunks are rebuilt.</summary>
-    internal SceneObjectList InsertMany(IReadOnlyDictionary<int, IReadOnlyList<SceneObject>> insertions)
+    /// <summary>
+    /// One removal/insertion transaction. Keys refer to the reduced list, before any insertions.
+    /// Only affected chunks and their small neighbours enter the edit buffer; all other directory
+    /// subtrees and identity runs stay shared with the source snapshot.
+    /// </summary>
+    internal SceneObjectList SplicePositions(IReadOnlyList<int> removed,
+        IReadOnlyDictionary<int, IReadOnlyList<SceneObject>> insertions)
     {
-        if (insertions.Count == 0) return this;
-        var ordered = insertions.OrderBy(kv => kv.Key).ToArray();
-        if (ordered[0].Key < 0 || ordered[^1].Key > Count) throw new ArgumentOutOfRangeException(nameof(insertions));
-        var chunks = new List<SceneObject[]>(_chunks.Length + 2);
+        ArgumentNullException.ThrowIfNull(removed);
+        ArgumentNullException.ThrowIfNull(insertions);
+        for (var i = 0; i < removed.Count; i++)
+        {
+            if ((uint)removed[i] >= (uint)Count) throw new ArgumentOutOfRangeException(nameof(removed));
+            if (i > 0 && removed[i] <= removed[i - 1])
+                throw new ArgumentException("Positions must ascend.", nameof(removed));
+        }
+        var ordered = insertions.OrderBy(p => p.Key).ToArray();
+        var sourceKeys = new int[ordered.Length];
+        var passed = 0;
+        for (var i = 0; i < ordered.Length; i++)
+        {
+            var key = ordered[i].Key;
+            if (key < 0 || key > Count - removed.Count) throw new ArgumentOutOfRangeException(nameof(insertions));
+            ArgumentNullException.ThrowIfNull(ordered[i].Value);
+            while (passed < removed.Count && removed[passed] - passed <= key) passed++;
+            sourceKeys[i] = key + passed;
+        }
+        if (removed.Count == 0 && ordered.All(p => p.Value.Count == 0)) return this;
+        if (Count == 0)
+        {
+            var items = ordered.SelectMany(p => p.Value).ToArray();
+            var initialChunks = new List<SceneObject[]>();
+            var initialRewrite = new Rewrite();
+            AddChunks(initialChunks, initialRewrite, items, [new Segment(null, 0, items.Length, 0)]);
+            return new SceneObjectList(ChunkDirectory.From([.. initialChunks]), this, initialRewrite);
+        }
+
+        var touched = new SortedSet<int>();
+        for (var i = 0; i < removed.Count;)
+        {
+            var (chunk, _) = Locate(removed[i]);
+            touched.Add(chunk);
+            var end = _chunks.Start(chunk) + _chunks[chunk].Length;
+            do { i++; } while (i < removed.Count && removed[i] < end);
+        }
+        for (var i = 0; i < ordered.Length; i++)
+            if (ordered[i].Value.Count > 0) touched.Add(LocateBoundary(sourceKeys[i]).Chunk);
+
+        // At most one small neighbour on each side is needed. Buffers are evenly split,
+        // so no edit creates a pair of adjacent chunks smaller than half a full chunk.
+        var expanded = new SortedSet<int>(touched);
+        foreach (var chunk in touched)
+        {
+            if (chunk > 0 && _chunks[chunk - 1].Length < ChunkSize / 2) expanded.Add(chunk - 1);
+            if (chunk + 1 < _chunks.Count && _chunks[chunk + 1].Length < ChunkSize / 2) expanded.Add(chunk + 1);
+        }
+        var groups = new List<(int Start, int End)>();
+        foreach (var chunk in expanded)
+        {
+            if (groups.Count > 0 && groups[^1].End + 1 == chunk)
+                groups[^1] = (groups[^1].Start, chunk);
+            else groups.Add((chunk, chunk));
+        }
+
+        var directory = _chunks.Edit();
         var rewrite = new Rewrite();
-        var at = 0; var added = 0;
-        for (var c = 0; c < _chunks.Length; c++)
+        var nextRemoval = 0;
+        var nextInsertion = 0;
+        var delta = 0;
+        foreach (var (first, last) in groups)
         {
-            var chunk = _chunks[c];
-            var start = _starts[c];
-            var end = start + chunk.Length;
-            if (at == ordered.Length || ordered[at].Key >= end) { chunks.Add(chunk); continue; }
-            var buffer = new List<SceneObject>(chunk.Length + 16);
+            var buffer = new List<SceneObject>();
             var segments = new List<Segment>();
-            var offset = 0;
-            while (at < ordered.Length && ordered[at].Key < end)
+            var start = _chunks.Start(first);
+            foreach (var chunk in _chunks.Range(first, last - first + 1))
             {
-                var insertion = ordered[at++];
-                var kept = insertion.Key - start - offset;
-                if (kept > 0)
+                var end = start + chunk.Length;
+                var offset = 0;
+                rewrite.Dropped.Add(chunk);
+                while (offset < chunk.Length)
                 {
-                    segments.Add(new Segment(chunk, offset, kept, buffer.Count));
-                    for (var i = 0; i < kept; i++) buffer.Add(chunk[offset++]);
+                    // Empty batches still consume their original key, including in untouched gaps.
+                    while (nextInsertion < ordered.Length && ordered[nextInsertion].Value.Count == 0) nextInsertion++;
+                    var removal = nextRemoval < removed.Count ? removed[nextRemoval] : Count;
+                    var insertion = nextInsertion < ordered.Length ? sourceKeys[nextInsertion] : Count;
+                    var stop = Math.Min(end, Math.Min(removal, insertion));
+                    var kept = stop - start - offset;
+                    if (kept > 0)
+                    {
+                        segments.Add(new Segment(chunk, offset, kept, buffer.Count));
+                        for (var i = 0; i < kept; i++) buffer.Add(chunk[offset++]);
+                    }
+                    if (stop == end) break;
+                    if (stop == insertion)
+                    {
+                        var batch = ordered[nextInsertion++].Value;
+                        segments.Add(new Segment(null, 0, batch.Count, buffer.Count));
+                        buffer.AddRange(batch);
+                    }
+                    if (stop == removal)
+                    {
+                        rewrite.Left.Add(chunk[offset++].Id);
+                        nextRemoval++;
+                    }
                 }
-                if (insertion.Value.Count > 0) segments.Add(new Segment(null, 0, insertion.Value.Count, buffer.Count));
-                buffer.AddRange(insertion.Value);
-                added = checked(added + insertion.Value.Count);
+                start = end;
             }
-            if (offset < chunk.Length)
-            {
-                segments.Add(new Segment(chunk, offset, chunk.Length - offset, buffer.Count));
-                while (offset < chunk.Length) buffer.Add(chunk[offset++]);
-            }
-            rewrite.Dropped.Add(chunk);
+            if (last == _chunks.Count - 1)
+                while (nextInsertion < ordered.Length)
+                {
+                    var tail = ordered[nextInsertion++].Value;
+                    if (tail.Count > 0) segments.Add(new Segment(null, 0, tail.Count, buffer.Count));
+                    buffer.AddRange(tail);
+                }
+            var chunks = new List<SceneObject[]>();
             AddChunks(chunks, rewrite, buffer, segments);
+            directory.Replace(first + delta, last - first + 1, chunks);
+            delta += chunks.Count - (last - first + 1);
         }
-        if (at < ordered.Length)
-        {
-            var tail = ordered[at].Value;
-            added = checked(added + tail.Count);
-            AddChunks(chunks, rewrite, tail, [new Segment(null, 0, tail.Count, 0)]);
-        }
-        return new SceneObjectList([.. chunks], checked(Count + added), this, rewrite);
+        var result = directory.Finish();
+        return result.ObjectCount == 0 ? Empty : new SceneObjectList(result, this, rewrite);
     }
+
+    /// <summary>Batch insertions at original indices; only intersected chunks are rebuilt.</summary>
+    internal SceneObjectList InsertMany(IReadOnlyDictionary<int, IReadOnlyList<SceneObject>> insertions) =>
+        SplicePositions(Array.Empty<int>(), insertions);
 
     /// <summary>Splits an edit buffer into chunks, clipping its runs to each chunk.</summary>
     private static void AddChunks(List<SceneObject[]> chunks, Rewrite rewrite,
@@ -573,9 +572,11 @@ public sealed class SceneObjectList : IReadOnlyList<SceneObject>
     {
         var next = 0;
         var parts = new List<Segment>();
-        for (var start = 0; start < buffer.Count; start += ChunkSize)
+        var chunkCount = (buffer.Count + ChunkSize - 1) / ChunkSize;
+        var start = 0;
+        for (var c = 0; c < chunkCount; c++)
         {
-            var part = new SceneObject[Math.Min(ChunkSize, buffer.Count - start)];
+            var part = new SceneObject[buffer.Count / chunkCount + (c < buffer.Count % chunkCount ? 1 : 0)];
             for (var i = 0; i < part.Length; i++) part[i] = buffer[start + i];
             var end = start + part.Length;
             parts.Clear();
@@ -592,12 +593,13 @@ public sealed class SceneObjectList : IReadOnlyList<SceneObject>
 
             chunks.Add(part);
             rewrite.Created.Add((part, [.. parts]));
+            start = end;
         }
     }
 
     /// <summary>
     /// Appends a placement/paste batch without flattening the already stored prefix. Only the
-    /// last partial chunk, the new chunks and the small chunk directory are copied.
+    /// last boundary chunk, the new chunks and their directory paths are copied.
     /// </summary>
     public SceneObjectList AppendRange(IReadOnlyList<SceneObject> appended) =>
         Splice(Count, removeCount: 0, appended);
@@ -613,92 +615,20 @@ public sealed class SceneObjectList : IReadOnlyList<SceneObject>
         int index, int removeCount, IReadOnlyList<SceneObject> inserted)
     {
         ArgumentNullException.ThrowIfNull(inserted);
-        if (index < 0 || index > Count)
-        {
-            throw new ArgumentOutOfRangeException(nameof(index));
-        }
-        if (removeCount < 0 || removeCount > Count - index)
-        {
-            throw new ArgumentOutOfRangeException(nameof(removeCount));
-        }
-        if (removeCount == 0 && inserted.Count == 0)
-        {
-            return this;
-        }
-        if (Count == 0)
-        {
-            return From(inserted);
-        }
-
-        var (startChunk, startOffset) = LocateBoundary(index);
-        var (endChunk, endOffset) = LocateBoundary(index + removeCount);
-        var chunks = new List<SceneObject[]>(_chunks.Length + (inserted.Count / ChunkSize) + 2);
-        var rewrite = new Rewrite();
-        for (var chunkIndex = 0; chunkIndex < startChunk; chunkIndex++)
-        {
-            chunks.Add(_chunks[chunkIndex]);
-        }
-
-        for (var chunkIndex = startChunk; chunkIndex <= endChunk; chunkIndex++)
-        {
-            var dropped = _chunks[chunkIndex];
-            rewrite.Dropped.Add(dropped);
-            var from = chunkIndex == startChunk ? startOffset : 0;
-            var to = chunkIndex == endChunk ? endOffset : dropped.Length;
-            for (var offset = from; offset < to; offset++) rewrite.Left.Add(dropped[offset].Id);
-        }
-
-        var first = _chunks[startChunk];
-        var last = _chunks[endChunk];
-        var boundaryCount = startOffset + inserted.Count + (last.Length - endOffset);
-        if (boundaryCount > 0)
-        {
-            var boundary = new SceneObject[boundaryCount];
-            var segments = new List<Segment>(3);
-            Array.Copy(first, 0, boundary, 0, startOffset);
-            if (startOffset > 0) segments.Add(new Segment(first, 0, startOffset, 0));
-            for (var offset = 0; offset < inserted.Count; offset++)
-            {
-                boundary[startOffset + offset] = inserted[offset];
-            }
-            if (inserted.Count > 0) segments.Add(new Segment(null, 0, inserted.Count, startOffset));
-            Array.Copy(last, endOffset, boundary, startOffset + inserted.Count, last.Length - endOffset);
-            if (last.Length > endOffset)
-                segments.Add(new Segment(last, endOffset, last.Length - endOffset, startOffset + inserted.Count));
-
-            AddChunks(chunks, rewrite, boundary, segments);
-        }
-
-        for (var chunkIndex = endChunk + 1; chunkIndex < _chunks.Length; chunkIndex++)
-        {
-            chunks.Add(_chunks[chunkIndex]);
-        }
-
-        var nextCount = checked(Count - removeCount + inserted.Count);
-        return nextCount == 0 ? Empty : new SceneObjectList([.. chunks], nextCount, this, rewrite);
+        if (index < 0 || index > Count) throw new ArgumentOutOfRangeException(nameof(index));
+        if (removeCount < 0 || removeCount > Count - index) throw new ArgumentOutOfRangeException(nameof(removeCount));
+        if (removeCount == 0 && inserted.Count == 0) return this;
+        return SplicePositions(Enumerable.Range(index, removeCount).ToArray(),
+            new Dictionary<int, IReadOnlyList<SceneObject>> { [index] = inserted });
     }
 
-    private (int Chunk, int Offset) Locate(int index)
-    {
-        if ((uint)index >= (uint)Count)
-        {
-            throw new ArgumentOutOfRangeException(nameof(index));
-        }
-
-        var chunk = Array.BinarySearch(_starts, index);
-        if (chunk < 0)
-        {
-            chunk = ~chunk - 1;
-        }
-
-        return (chunk, index - _starts[chunk]);
-    }
+    private (int Chunk, int Offset) Locate(int index) => _chunks.Locate(index);
 
     private (int Chunk, int Offset) LocateBoundary(int index)
     {
         if (index == Count)
         {
-            return (_chunks.Length - 1, _chunks[^1].Length);
+            return (_chunks.Count - 1, _chunks[^1].Length);
         }
 
         return Locate(index);
