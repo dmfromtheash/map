@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Map.Assets;
 using Map.Core.Documents;
 using SkiaSharp;
 using Xunit.Abstractions;
@@ -36,6 +37,21 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
         Assert.True(result.Settled, result.ToString());
         Assert.True(result.PixelsEqual, "The settled frame must equal the synchronous frame.");
         Assert.True(result.RequestedBytes > result.ResidentBudget, "The view must sample more than the shelf holds.");
+    }
+
+    [Fact]
+    public void A_128_MiB_shelf_at_400_percent_settles_without_evicting_needed_images()
+    {
+        // Same owner-art scene as the empty-tile guard, but with the PC's thrashing shelf size.
+        // Use the production admission policy: a second LRU implementation cannot guard B.1.
+        var result = Run(objects: 24_000, assets: 300, canvas: 4096, simulatedSeconds: 90,
+            residentBytes: 128L << 20, viewScale: 4, realShelf: true);
+        output.WriteLine(result.ToString());
+        Assert.True(result.RequestedBytes > result.ResidentBudget, "The view must exceed the 128 MiB shelf.");
+        Assert.True(result.Settled, result.ToString());
+        Assert.True(result.PixelsEqual, "The settled 400 % view differs from the synchronous frame.");
+        Assert.Equal(0, result.NeededEvictions);
+        Assert.True(result.AdmissionRefused > 0, "The prior view must force a protected admission refusal.");
     }
 
     [Fact]
@@ -92,7 +108,7 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
     internal sealed record Result(int Objects, bool Settled, double SettleSimulatedSeconds, int Frames, double FrameP99, double FrameMax,
         double FrameMedian, long RequestedKeys, long RequestedBytes, long ResidentBudget, long NeededEvictions, long Evictions,
         long Adopted, int TilesExact, bool PixelsEqual, double PanP99, double PanMax, double PreflightMsTotal, long PreflightItems,
-        double ReferenceSeconds, long Refetched, string Diagnostics = "")
+        double ReferenceSeconds, long Refetched, string Diagnostics = "", long AdmissionRefused = 0)
     {
         public override string ToString() =>
             $"objects={Objects} settled={Settled} settle={SettleSimulatedSeconds:F1}s frames={Frames} frame p50/p99/max={FrameMedian:F1}/{FrameP99:F1}/{FrameMax:F1} ms "
@@ -101,13 +117,14 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
             + $"pan p99/max={PanP99:F1}/{PanMax:F1} ms preflight={PreflightMsTotal:F0} ms/{PreflightItems} items reference={ReferenceSeconds:F1}s refetched={Refetched} {Diagnostics}";
     }
 
-    internal static Result Run(int objects, int assets, int canvas, double simulatedSeconds, long residentBytes, bool pan = false, bool clustered = false)
+    internal static Result Run(int objects, int assets, int canvas, double simulatedSeconds, long residentBytes, bool pan = false, bool clustered = false,
+        double? viewScale = null, bool realShelf = false)
     {
         var disk = new MipDisk();
         try
         {
             var (records, document) = Scene(objects, assets, canvas, clustered);
-            var scale = Math.Min((double)Width / canvas, (double)Height / canvas);
+            var scale = viewScale ?? Math.Min((double)Width / canvas, (double)Height / canvas);
             var offsetX = -(Width / scale - canvas) / 2;
 
             using var progressiveTiles = new ObjectOverviewCache();
@@ -115,8 +132,9 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
             // As the editor: overview chunks of cold areas are prepared off the frame.
             using var overviewPreparation = new SceneRenderer.OverviewPreparation();
             var oldStore = Environment.GetEnvironmentVariable("MAP_DENSE_STORE") == "old";
-            var source = new BoundedDerivedSource(records, disk, residentBytes) { LargeByOutput = !oldStore, SmallWaiting = oldStore ? 8 : 64,
+            using var source = new BoundedDerivedSource(records, disk, residentBytes) { UseRealShelf = realShelf, LargeByOutput = !oldStore, SmallWaiting = oldStore ? 8 : 64,
                 Background = Environment.GetEnvironmentVariable("MAP_DENSE_BACKGROUND") != "0" };
+            if (realShelf) source.PrimePreviousView();
             var wall = Stopwatch.StartNew();
             var lastStart = 0.0;
             var frames = new List<double>();
@@ -131,9 +149,12 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
             byte[]? settled = null;
             var exactTiles = 0;
             var lastFrame = 16.7;
+            var lastStats = new RenderStats();
+            var quiet = 0;
             for (var frame = 0; simulated < simulatedSeconds * 1000; frame++)
             {
                 var stats = new RenderStats();
+                lastStats = stats;
                 var preflightBefore = source.PreflightMilliseconds;
                 var pauseBefore = GC.GetTotalPauseDuration().TotalMilliseconds;
                 var pixels = Draw(source, progressiveTiles, progressiveAtlas, stats, refine: true, offsetX, scale, document, lastFrame, out var elapsed,
@@ -148,6 +169,9 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
                 worst.Add((elapsed, build, pause, stats.OverviewPlanMilliseconds + stats.OverviewPaletteMilliseconds
                     + stats.OverviewVariantMilliseconds + stats.OverviewRasterMilliseconds, frame));
                 exactTiles = Math.Max(exactTiles, stats.ObjectTilesDrawn);
+                // Let real workers run between canvas frames. Advancing a simulated 16.7 ms
+                // in a tight loop otherwise times out while only a few wall seconds elapsed.
+                if (realShelf) Thread.Sleep(16);
                 // Background rasters run in real time: a frame advances the clock by what the wall clock saw.
                 var now = wall.Elapsed.TotalMilliseconds;
                 lastFrame = Math.Max(16.7, Math.Max(elapsed, now - lastStart));
@@ -155,10 +179,12 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
                 simulated += lastFrame;
                 if (stats.DetailTilesPending == 0 && stats.UnresolvedImages == 0 && !source.ImageRequestsPending)
                 {
+                    if (realShelf && ++quiet < 8) continue;
                     settledAt = simulated / 1000;
                     settled = pixels;
                     break;
                 }
+                quiet = 0;
             }
             var panFrames = new List<double>();
             if (pan && settled is not null)
@@ -176,7 +202,7 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
             {
                 using var referenceTiles = new ObjectOverviewCache();
                 using var referenceAtlas = new ObjectOverviewCache();
-                var synchronous = new BoundedDerivedSource(records, disk, long.MaxValue) { Synchronous = true };
+                using var synchronous = new BoundedDerivedSource(records, disk, long.MaxValue) { Synchronous = true };
                 var expectedPixels = Draw(synchronous, referenceTiles, referenceAtlas, new RenderStats(), refine: false,
                     offsetX, scale, document, 16.7, out _);
                 equal = settled.AsSpan().SequenceEqual(expectedPixels);
@@ -199,9 +225,10 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
                 Percentile(frames, .99), frames.Max(), Percentile(frames, .5), source.RequestedKeys, source.RequestedBytes, residentBytes,
                 source.NeededEvictions, source.Evictions, source.Adopted, exactTiles, equal, Percentile(panFrames, .99),
                 panFrames.Count == 0 ? 0 : panFrames.Max(), source.PreflightMilliseconds, source.PreflightItems, reference, source.Refetched,
-                difference + $" rasters started={started} adopted={adoptedTiles} onFrame={onFrame} waitingFrames={waitingFrames} background={source.BackgroundRasters} working={source.WorkingLookups} lateMisses={source.LateMisses} maxPlan={source.MaxPlanBytes} prepares={source.PlanPrepares} "
+                difference + $" pending={lastStats.DetailTilesPending} unresolved={lastStats.UnresolvedImages} {source.ShelfDiagnostics} rasters started={started} adopted={adoptedTiles} onFrame={onFrame} waitingFrames={waitingFrames} background={source.BackgroundRasters} working={source.WorkingLookups} lateMisses={source.LateMisses} maxPlan={source.MaxPlanBytes} prepares={source.PlanPrepares} "
                 + $"first={first:F0} ms nonBuild p50/p99/max={Percentile(other, .5):F1}/{Percentile(other, .99):F1}/{(other.Count == 0 ? 0 : other.Max()):F1} ms worst=["
-                + string.Join("; ", worst.OrderByDescending(w => w.Total).Take(5).Select(w => $"#{w.Frame} {w.Total:F0} build {w.Build:F0} gc {w.Gc:F0} overview {w.Overview:F0} {phases[w.Frame]}")) + "] median nonBuild parts: preflight " + $"{Median(breakdown.Select(b => b.Preflight)):F1} begin {Median(breakdown.Select(b => b.Begin)):F1} overview {Median(breakdown.Select(b => b.Overview)):F1}");
+                + string.Join("; ", worst.OrderByDescending(w => w.Total).Take(5).Select(w => $"#{w.Frame} {w.Total:F0} build {w.Build:F0} gc {w.Gc:F0} overview {w.Overview:F0} {phases[w.Frame]}")) + "] median nonBuild parts: preflight " + $"{Median(breakdown.Select(b => b.Preflight)):F1} begin {Median(breakdown.Select(b => b.Begin)):F1} overview {Median(breakdown.Select(b => b.Overview)):F1}",
+                source.AdmissionRefused);
             static double Median(IEnumerable<double> values) => values.Order().ElementAtOrDefault(values.Count() / 2);
         }
         finally { disk.Dispose(); }
@@ -378,7 +405,7 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
     /// for the frame, adoption in BeginFrame under a 2 ms budget and a byte-bounded resident LRU.
     /// </summary>
     internal sealed class BoundedDerivedSource(IReadOnlyDictionary<string, AssetShape> records, MipDisk disk, long residentBytes)
-        : IStampImageSource
+        : IStampImageSource, IDisposable
     {
         public readonly record struct Key(string Sha, int Step, int Level);
         private readonly IReadOnlyDictionary<string, AssetShape> _records = records;
@@ -388,6 +415,36 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
         public int InFlightCapacity { get; init; } = 4096;
         public double SmallMipMilliseconds { get; init; } = .3;
         public double LargeMipMilliseconds { get; init; } = 3;
+        public bool UseRealShelf { get; init; }
+        private AssetImageCache? _shelf;
+        private readonly Dictionary<Key, long> _usedAt = [];
+        private readonly Dictionary<Key, long> _wantedAt = [];
+        private long _frame;
+        public string ShelfDiagnostics => $"refused={_shelf?.AdmissionRefused ?? 0} queued={_queue.Count} finished={_finished.Count} late={_late.Count}";
+        public long AdmissionRefused => _shelf?.AdmissionRefused ?? 0;
+        private void CreateShelf() => _shelf ??= new AssetImageCache(capacity: 4096, decodedByteCapacity: residentBytes)
+        {
+            ProtectedFrames = Environment.GetEnvironmentVariable("MAP_PROTECT_NEEDED_MIPS") == "0" ? 0 : 2,
+            DeferDisposal = true,
+        };
+
+        public void PrimePreviousView()
+        {
+            CreateShelf();
+            // A camera change with a full, just-used shelf and one already finished result.
+            // This makes the protected-admission boundary deterministic on fast and slow CPUs.
+            for (var i = 0; i < residentBytes / (512 * 512 * 4); i++)
+            {
+                using var bitmap = SKBitmap.FromImage(disk.Read(i % MipDisk.Fixtures, 512, 512));
+                Adopt(new Key($"previous-view-{i}", 0, 0), SKImage.FromBitmap(bitmap));
+            }
+            var record = _records.Values.First();
+            var key = PixelKey(record, 64, 64);
+            var (width, height) = Size(key);
+            _inFlight.Add(key);
+            _finished.Add((key, false, Task.FromResult(disk.Read(record.Fixture, width, height))));
+        }
+        private static string Name(Key key) => $"{key.Sha}@{key.Step}:{key.Level}";
         private readonly LinkedList<(Key Key, SKImage Image, long Bytes)> _lru = new();
         private readonly Dictionary<Key, LinkedListNode<(Key Key, SKImage Image, long Bytes)>> _resident = [];
         private long _residentBytes;
@@ -422,6 +479,12 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
         public IDisposable BeginFrame(double sinceLastFrame)
         {
             var begun = Stopwatch.GetTimestamp();
+            _frame++;
+            if (UseRealShelf)
+            {
+                CreateShelf();
+                _shelf!.Frame = _frame;
+            }
             _inFrame = true;
             (_previousWanted, _wanted) = (_wanted, _previousWanted);
             _wanted.Clear();
@@ -473,22 +536,49 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
             {
                 source._inFrame = false;
                 // CancelUnwantedPixels: requests nobody asked for in this frame are dropped before they start.
-                source._queue.RemoveAll(key => !source._wanted.Contains(key) && source._inFlight.Remove(key));
+                if (source.UseRealShelf)
+                {
+                    foreach (var key in source._wanted) source._wantedAt[key] = source._frame;
+                    foreach (var key in source._wantedAt.Keys.Where(k => source._frame - source._wantedAt[k] > 8).ToArray())
+                        source._wantedAt.Remove(key);
+                }
+                source._queue.RemoveAll(key => !(source.UseRealShelf ? source._wantedAt.ContainsKey(key) : source._wanted.Contains(key))
+                    && source._inFlight.Remove(key));
                 source._late.RemoveWhere(key => !source._wanted.Contains(key));
                 foreach (var image in source._retired) image.Dispose();
                 source._retired.Clear();
+                lock (source._pins) source._shelf?.DisposeRetired();
             }
         }
 
         private void Adopt(Key key, SKImage image)
         {
             if (_resident.ContainsKey(key)) { image.Dispose(); return; }
+            if (_shelf is { } shelf)
+            {
+                lock (_pins)
+                {
+                    if (shelf.TryAdoptPixels(Name(key), image, out _) is not AssetImageCache.AdoptResult.Adopted) return;
+                    // Mirror only identities for the harness's plan and eviction counters; admission,
+                    // recency, protection and lifetime are owned by the production cache.
+                    foreach (var removed in _resident.Keys.Where(k => !shelf.Contains(Name(k))).ToArray())
+                    {
+                        var node = _resident[removed];
+                        _lru.Remove(node);
+                        _resident.Remove(removed);
+                        _residentBytes -= node.Value.Bytes;
+                        Evictions++;
+                        if (_usedAt.TryGetValue(removed, out var used) && _frame - used < 2) NeededEvictions++;
+                    }
+                }
+            }
             if (!_everAdopted.Add(key)) Refetched++;
             var bytes = (long)image.Width * image.Height * 4;
             _resident[key] = _lru.AddFirst((key, image, bytes));
             _residentBytes += bytes;
             Adopted++;
-            while (_residentBytes > residentBytes && _lru.Count > 1)
+            if (_shelf is not null) _usedAt[key] = _frame;
+            while (_shelf is null && _residentBytes > residentBytes && _lru.Count > 1)
             {
                 var oldest = _lru.Last!.Value;
                 _lru.RemoveLast();
@@ -541,6 +631,11 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
         private SKImage? Resident(Key key)
         {
             if (!_resident.TryGetValue(key, out var node)) return null;
+            if (_shelf is { } shelf)
+            {
+                lock (_pins) shelf.Get(Name(key), null);
+                _usedAt[key] = _frame;
+            }
             _lru.Remove(node); _lru.AddFirst(node);
             return node.Value.Image;
         }
@@ -606,7 +701,8 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
             SKImage? At(int level)
             {
                 var step = Math.Min(depth, level);
-                return _resident.TryGetValue(new Key(record.Sha, step, level - step), out var node) ? node.Value.Image : null;
+                var key = new Key(record.Sha, step, level - step);
+                return _shelf is null ? (_resident.TryGetValue(key, out var node) ? node.Value.Image : null) : Resident(key);
             }
             for (var level = desired; level <= 15; level++) if (At(level) is { } smaller) return smaller;
             for (var level = desired - 1; level >= 0; level--) if (At(level) is { } larger) return larger;
@@ -644,16 +740,18 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
             public bool Prepare(Action ready)
             {
                 source.MaxPlanBytes = Math.Max(source.MaxPlanBytes, Bytes); source.PlanPrepares++;
-                if (_readyAt == source.Evictions) return true;
+                if (source._shelf?.ProtectedFrames is not > 0 && _readyAt == source.Evictions) return true;
                 var started = Stopwatch.GetTimestamp();
-                // As the real source: without an eviction only the keys missing last time can change.
-                var keys = _checkedAt == source.Evictions && _missing is { } missing ? missing : _array ??= [.. _keys];
+                // As the real source: keep a waiting plan's resident subset protected while
+                // its remaining decodes finish. Plain LRU needs only the last missing subset.
+                var keys = source._shelf?.ProtectedFrames is not > 0 && _checkedAt == source.Evictions && _missing is { } missing
+                    ? missing : _array ??= [.. _keys];
                 var still = new List<Key>();
                 var asked = 0;
                 foreach (var key in keys)
                 {
                     source.PreflightItems++;
-                    if (source._resident.ContainsKey(key)) continue;
+                    if (source._shelf is null ? source._resident.ContainsKey(key) : source.Resident(key) is not null) continue;
                     source._wanted.Add(key);
                     // As the real source: at most 512 new requests per check.
                     if (asked++ < 512) source.Request(key);
@@ -692,7 +790,11 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
                 if (!_resident.TryGetValue(key, out var node)) return null;
                 images[key] = node.Value.Image;
             }
-            lock (_pins) foreach (var image in images.Values.Distinct()) _pinned[image] = _pinned.GetValueOrDefault(image) + 1;
+            lock (_pins) foreach (var image in images.Values.Distinct())
+            {
+                _pinned[image] = _pinned.GetValueOrDefault(image) + 1;
+                _shelf?.Pin(image);
+            }
             var sizes = images.Keys.Select(k => k.Sha).Distinct().ToDictionary(sha => sha, sha => TryGetImageSize(sha)!.Value);
             BackgroundRasters++;
             return new Pinned(this, images, sizes);
@@ -701,13 +803,27 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
         private void Unpin(IEnumerable<SKImage> images)
         {
             lock (_pins)
+            {
                 foreach (var image in images.Distinct())
                 {
+                    _shelf?.Unpin(image);
                     var left = _pinned[image] - 1;
                     if (left > 0) { _pinned[image] = left; continue; }
                     _pinned.Remove(image);
                     if (_evictedWhilePinned.Remove(image)) image.Dispose();
                 }
+                if (_disposeRequested && _pinned.Count == 0) _shelf?.Dispose();
+            }
+        }
+
+        private bool _disposeRequested;
+        public void Dispose()
+        {
+            lock (_pins)
+            {
+                _disposeRequested = true;
+                if (_pinned.Count == 0) _shelf?.Dispose();
+            }
         }
 
         /// <summary>What a background tile draws from: a fixed snapshot, never a request.</summary>

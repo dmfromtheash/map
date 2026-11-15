@@ -1065,6 +1065,8 @@ public sealed partial class ZoomAssetsApplication : Application
             ["derivedMetadataEntries"] = derived.MetadataEntries, ["derivedPendingMips"] = derived.PendingMips,
             ["derivedDiscardedMips"] = derived.DiscardedMips,
             ["sampleEntries"] = samples.Entries, ["sampleBytes"] = samples.Bytes, ["sampleEvictions"] = samples.Evictions,
+            ["admissionRefused"] = images.AdmissionRefused, ["protectNeededMips"] = images.ProtectNeededMips ? 1 : 0,
+            ["cancelledStillWanted"] = images.CancelledStillWanted, ["keepRecentMips"] = images.KeepRecentMips ? 1 : 0,
         };
     }
 

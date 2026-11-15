@@ -61,6 +61,26 @@ public sealed class CatalogStampImageSource(
     }
     private readonly HashSet<StampDerivedAssetStore.PixelKey> _wantedMips = [];
     private readonly HashSet<StampDerivedAssetStore.PixelKey> _latePixels = [];
+    /// <summary>Keys the last canvas frame kept from cancellation (diagnostics and tests).</summary>
+    internal int LastWantedMipCount { get; private set; }
+    internal static readonly MipRequestRetentionTuning RecentMipTuning = new();
+    internal static int UnaskedFramesBeforeCancel => RecentMipTuning.Frames;
+    private const int LegacyUnaskedFramesBeforeCancel = 30;
+    private readonly RecentMipRequests<StampDerivedAssetStore.PixelKey> _recentMips = new(RecentMipTuning);
+    private bool _keepRecentMips = Environment.GetEnvironmentVariable("MAP_KEEP_RECENT_MIPS") != "0";
+
+    /// <summary>Rule 5: keep requests for eight canvas frames, including empty/check-budget frames.
+    /// MAP_KEEP_RECENT_MIPS=0 restores the previous 30-asking-frame policy for a live A/B.</summary>
+    public bool KeepRecentMips
+    {
+        get { lock (_gate) return _keepRecentMips; }
+        set { lock (_gate) _keepRecentMips = value; }
+    }
+    public long CancelledStillWanted { get { lock (_gate) return _recentMips.CancelledStillWanted; } }
+    private readonly Dictionary<StampDerivedAssetStore.PixelKey, long> _wantedAt = [];
+    private readonly HashSet<StampDerivedAssetStore.PixelKey> _retainedMips = [];
+    private readonly List<StampDerivedAssetStore.PixelKey> _staleMips = [];
+    private long _askingFrames;
     private readonly Dictionary<string, long> _pixelRetryAt = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, int> _pixelFailures = new(StringComparer.OrdinalIgnoreCase);
     private long _sourceRevision;
@@ -152,8 +172,11 @@ public sealed class CatalogStampImageSource(
     private static AssetImageCache Tracked(AssetImageCache cache, string name, Map.Core.Resources.CacheRebuildCost cost)
     {
         cache.TrackMemory(Map.Core.Resources.WorkingMemoryBudget.Shared, name, cost);
+        cache.ProtectedFrames = ProtectNeededMipsByDefault ? 2 : 0;
         return cache;
     }
+    private static readonly bool ProtectNeededMipsByDefault =
+        Environment.GetEnvironmentVariable("MAP_PROTECT_NEEDED_MIPS") != "0";
     // The total remains 512 MiB. Copies of the exact sampled pixels survive source churn;
     // neither the resampling algorithm nor the chosen detail level changes.
     // One SHA can need several exact mips in the current view plus the fallback view.
@@ -616,6 +639,29 @@ public sealed class CatalogStampImageSource(
     /// <summary>Whether the canvas's last frame moved the camera.</summary>
     public bool FrameMoving { get; set; }
     private long _byteLimitedFrames;
+    private long _shelfFrame;
+
+    /// <summary>
+    /// DEC-113 p.3, step 1: an adopted mip never evicts one the view used in the last two frames (the images its tiles
+    /// and exact objects still draw or wait for); such an adoption is refused and asked again later. Off with
+    /// MAP_PROTECT_NEEDED_MIPS=0 for a live A/B in one build.
+    /// </summary>
+    public bool ProtectNeededMips
+    {
+        get { lock (_gate) return _cache.ProtectedFrames > 0; }
+        set
+        {
+            lock (_gate)
+            {
+                var frames = value ? 2 : 0;
+                _cache.ProtectedFrames = frames;
+                _samples.ProtectedFrames = frames;
+            }
+        }
+    }
+
+    /// <summary>Mip adoptions refused because the shelf held only images the view still needs.</summary>
+    public long AdmissionRefused { get { lock (_gate) return _cache.AdmissionRefused + _samples.AdmissionRefused; } }
     /// <summary>Frames whose mip adoption stopped at the byte limit.</summary>
     public long ByteLimitedFrames => Interlocked.Read(ref _byteLimitedFrames);
 
@@ -629,6 +675,10 @@ public sealed class CatalogStampImageSource(
             _derived?.ObserveCanvasThread();
             _validatedThisFrame.Clear();
             _wantedMips.Clear();
+            _shelfFrame++;
+            _recentMips.BeginFrame(_shelfFrame);
+            _cache.Frame = _shelfFrame;
+            _samples.Frame = _shelfFrame;
             if (CaptureMipSelections) _diagnosticFrame++;
             if (_derived is not null)
                 foreach (var sha in _derived.TakeInvalidated()) InvalidateDerived(sha);
@@ -671,10 +721,29 @@ public sealed class CatalogStampImageSource(
             // A late request can still be waiting for metadata when the camera leaves it;
             // then no pixel task exists to deliver a cancellation back to BeginFrame.
             _latePixels.RemoveWhere(key => !_wantedMips.Contains(key));
-            _wantedMips.UnionWith(_cacheableMissing);
-            // Kept overview rasters wait for these exact keys: a frame that did not draw them must not cancel them.
-            _wantedMips.UnionWith(_leaseWanted.Keys);
-            _derived?.CancelUnwantedPixels(_wantedMips);
+            // Preserve the old asking-frame history as well, so the switch can change live without losing demand.
+            foreach (var key in _wantedMips) _recentMips.Submit(key);
+            foreach (var key in _leaseWanted.Keys) _recentMips.Submit(key);
+            foreach (var key in _cacheableMissing) _recentMips.Submit(key);
+            if (_wantedMips.Count > 0)
+            {
+                _askingFrames++;
+                foreach (var key in _wantedMips) _wantedAt[key] = _askingFrames;
+                _staleMips.Clear();
+                foreach (var (key, at) in _wantedAt)
+                    if (_askingFrames - at >= LegacyUnaskedFramesBeforeCancel) _staleMips.Add(key);
+                foreach (var key in _staleMips) _wantedAt.Remove(key);
+            }
+            if (_keepRecentMips || _wantedMips.Count > 0)
+            {
+                _retainedMips.Clear();
+                _retainedMips.UnionWith(_keepRecentMips ? _recentMips.Wanted : _wantedAt.Keys);
+                _retainedMips.UnionWith(_cacheableMissing);
+                // Kept overview rasters wait for these exact keys: a frame that did not draw them must not cancel them.
+                _retainedMips.UnionWith(_leaseWanted.Keys);
+                _derived?.CancelUnwantedPixels(_retainedMips, _recentMips.Cancelled);
+                LastWantedMipCount = _retainedMips.Count;
+            }
             if (_disposed) { DisposeIfUnused(); return; }
             _cache.DeferDisposal = false;
             _samples.DeferDisposal = false;
@@ -775,6 +844,11 @@ public sealed class CatalogStampImageSource(
             if (lease.Closed) return;
             lease.Closed = true;
             _leases--;
+            if (lease is ExactImageLease exact)
+            {
+                foreach (var image in exact.Owned.Values) image.Dispose();
+                exact.Owned.Clear();
+            }
             if (_disposed) { DisposeIfUnused(); return; }
             foreach (var image in lease.Held) { _cache.Unpin(image); _samples.Unpin(image); }
             lease.Held.Clear();
@@ -823,11 +897,10 @@ public sealed class CatalogStampImageSource(
                     Enter();
                     var key = requested ?? WorkingKey(record);
                     var name = PixelName(key);
-                    var ready = ReadyPixels(name); // also ends an expired retry backoff
+                    var ready = lease.Owned.GetValueOrDefault(key) ?? ReadyPixels(name); // also ends an expired retry backoff
                     if (ready is null && _derived!.TryTakePixels(key, out var mip))
                     {
-                        AdoptDerivedMip(key, mip);
-                        ready = ReadyPixels(name);
+                        ready = AdoptDerivedMip(key, mip, lease) ?? ReadyPixels(name);
                     }
                     if (ready is not null)
                     {
@@ -899,6 +972,9 @@ public sealed class CatalogStampImageSource(
     {
         private readonly CatalogStampImageSource _source = source;
         internal readonly CancellationToken Cancellation = cancellation;
+        // Refused shelf admissions belong only to this raster. Never evict the canvas's needed images,
+        // never wait for canvas frames to age them, and never keep these pixels beyond the lease.
+        internal readonly Dictionary<StampDerivedAssetStore.PixelKey, SKImage> Owned = [];
         internal readonly long Deadline = Environment.TickCount64 + (long)ExactWaitLimit.TotalMilliseconds;
         internal int Preparing;
         public int PreparingLookups { get { lock (_source._gate) return Preparing; } }
@@ -1153,9 +1229,11 @@ public sealed class CatalogStampImageSource(
             AdoptDecoded();
             // Resident keys stay resident until the shelf evicts something or a source changes.
             var epoch = _cache.Evictions + _samples.Evictions;
-            if (plan.ReadyAt == epoch && plan.SourceRevision == SourceRevision) return true;
-            // Nothing left the shelf since the last check: only the keys that were missing then can have changed.
-            var keys = plan.CheckedAt == epoch && plan.Missing is { } missing ? missing
+            if (_cache.ProtectedFrames == 0 && plan.ReadyAt == epoch && plan.SourceRevision == SourceRevision) return true;
+            // A waiting plan still needs its resident subset. Touch it on protected shelves even
+            // when no eviction occurred, or slow remaining decodes outlive the two-frame protection
+            // and evict that subset before the tile can be pinned. The renderer bounds plan checks.
+            var keys = _cache.ProtectedFrames == 0 && plan.CheckedAt == epoch && plan.Missing is { } missing ? missing
                 : plan.Names ??= [.. plan.Keys.Select(key => (key, PixelName(key)))];
             var stillMissing = new List<(StampDerivedAssetStore.PixelKey Key, string Name)>();
             // At most 512 new requests per check: a cold tile asks for thousands, spread over a few frames.
@@ -1302,29 +1380,51 @@ public sealed class CatalogStampImageSource(
         return true;
     }
 
-    private void AdoptDerivedMip(StampDerivedAssetStore.PixelKey pixel, StampDerivedAssetStore.Mip? mip)
+    private void Adopted(AssetImageCache target, StampDerivedAssetStore.PixelKey pixel, AssetImageCache.AdoptResult result)
+    {
+        switch (result)
+        {
+            // The shelf holds only images the view still uses: not a failure of this key, which stays wanted and is
+            // asked again (from the warm derived disk) once a finished tile lets some of them go.
+            case AssetImageCache.AdoptResult.Refused: return;
+            case AssetImageCache.AdoptResult.TooLarge when !target.Contains(PixelName(pixel)):
+                FailedPixels(pixel, permanent: true); return;
+            default: RecoveredPixels(pixel); return;
+        }
+    }
+
+    private SKImage? AdoptDerivedMip(StampDerivedAssetStore.PixelKey pixel, StampDerivedAssetStore.Mip? mip,
+        ExactImageLease? lease = null)
     {
         var key = PixelName(pixel);
         if (catalog.Find(pixel.Sha) is { } record)
             _sampleDimensions[SourceName(pixel)] = (Math.Max(1, record.Width >> pixel.Step), Math.Max(1, record.Height >> pixel.Step));
-        if (mip?.Image is { } image)
-        {
-            var target = Math.Max(image.Width, image.Height) <= 256 ? _samples : _cache;
-            if (target.AdoptPixels(key, image) is null && !target.Contains(key)) FailedPixels(pixel, permanent: true);
-            else RecoveredPixels(pixel);
-        }
-        else if (mip?.Pixels is { } pixels)
+        var image = mip?.Image;
+        if (image is null && mip?.Pixels is { } pixels)
         {
             using var bitmap = new SKBitmap(new SKImageInfo(mip.Width, mip.Height, SKColorType.Rgba8888, SKAlphaType.Premul));
             System.Runtime.InteropServices.Marshal.Copy(pixels, 0, bitmap.GetPixels(), pixels.Length);
             bitmap.SetImmutable();
-            if (_samples.AdoptPixels(key, SKImage.FromBitmap(bitmap)) is null && !_samples.Contains(key)) FailedPixels(pixel, permanent: true);
-            else RecoveredPixels(pixel);
+            image = SKImage.FromBitmap(bitmap);
+        }
+        SKImage? exact = null;
+        var refused = false;
+        if (image is not null)
+        {
+            var target = Math.Max(image.Width, image.Height) <= 256 ? _samples : _cache;
+            var result = target.TryAdoptPixels(key, image, out _, retainOnRefusal: lease is not null);
+            refused = result == AssetImageCache.AdoptResult.Refused;
+            Adopted(target, pixel, result);
+            if (refused && lease is not null)
+                lease.Owned[pixel] = exact = image;
         }
         else if (mip is not { Cancelled: true }) FailedPixels(pixel);
         // Ordinary mip arrivals leave SourceRevision and MissingRevision unchanged.
-        _latePixels.Remove(pixel);
+        // A refused completion did not resolve the canvas's late request. Keep its redraw/pending
+        // signal until admission succeeds (or EndFrame determines the view no longer wants it).
+        if (!refused) _latePixels.Remove(pixel);
         _derivedNotifications.Remove(key);
+        return exact;
     }
 
     private void StartDecode(string key, string path, string? sha256, string? mediaType, string? extension, Action ready)

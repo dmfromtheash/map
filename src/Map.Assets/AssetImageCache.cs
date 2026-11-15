@@ -16,6 +16,7 @@ public sealed class AssetImageCache : IDisposable
         public SKImage? FallbackImage { get; set; }
         public long MipBytes { get; set; }
         public long LastTick { get; set; }
+        public long LastFrame { get; set; } = long.MinValue / 2;
         public void Dispose()
         {
             FallbackImage?.Dispose();
@@ -84,9 +85,27 @@ public sealed class AssetImageCache : IDisposable
         return before - ResidentBytes;
     }
 
+    /// <summary>The owner's frame number (set once per canvas frame). Entries record the frame they were last used in.</summary>
+    public long Frame { get; set; }
+
+    /// <summary>
+    /// When above zero, <see cref="TryAdoptPixels"/> never evicts an entry used within this many frames of
+    /// <see cref="Frame"/>: those are the images the current view still draws or waits to raster with. Like Chromium's
+    /// decode cache, which evicts only entries no one references, an adoption that would need such an eviction is
+    /// refused instead, so a needed set larger than the shelf no longer evicts itself in a circle. Zero (the default)
+    /// keeps plain LRU.
+    /// </summary>
+    public int ProtectedFrames { get; set; }
+
+    /// <summary>Adoptions refused because only recently used (protected) entries could have made room.</summary>
+    public long AdmissionRefused { get; private set; }
+
+    private bool IsProtected(Entry entry) => ProtectedFrames > 0 && Frame - entry.LastFrame < ProtectedFrames;
+
     private void Touch(string key, Entry entry)
     {
         entry.LastTick = Environment.TickCount64;
+        entry.LastFrame = Frame;
         if (entry.Recency is { } node)
         {
             _recency.Remove(node);
@@ -306,23 +325,43 @@ public sealed class AssetImageCache : IDisposable
     /// <summary>Takes ownership of already verified, derived raster pixels. They have their own
     /// LRU lifetime, so evicting a large decoded source need not discard a small sampled image.</summary>
     public SKImage? AdoptPixels(string key, SKImage image)
+        => TryAdoptPixels(key, image, out var adopted) == AdoptResult.Refused ? null : adopted;
+
+    public enum AdoptResult { Adopted, AlreadyResident, TooLarge, Refused }
+
+    /// <summary>
+    /// <see cref="AdoptPixels"/> that tells why nothing was adopted. <see cref="AdoptResult.Refused"/> means the shelf is
+    /// full of protected entries (<see cref="ProtectedFrames"/>): the image is disposed, nothing was evicted for it, and
+    /// the caller may ask again once the view has finished with some of them. With
+    /// <paramref name="retainOnRefusal"/> the caller instead retains ownership of the refused image
+    /// (the out value is still null), for a temporary exact raster that must finish without canvas frames.
+    /// </summary>
+    public AdoptResult TryAdoptPixels(string key, SKImage image, out SKImage? adopted, bool retainOnRefusal = false)
     {
         if (_entries.TryGetValue(key, out var existing))
         {
             image.Dispose();
             Touch(key, existing);
             Hits++;
-            return existing.Image;
+            adopted = existing.Image;
+            return AdoptResult.AlreadyResident;
         }
         var bytes = checked((long)image.Width * image.Height * 4);
-        if (bytes > _decodedByteCapacity) { image.Dispose(); return null; }
-        TrimForIncoming(bytes);
+        if (bytes > _decodedByteCapacity) { image.Dispose(); adopted = null; return AdoptResult.TooLarge; }
+        if (!TrimForIncoming(bytes, ProtectedFrames > 0))
+        {
+            if (!retainOnRefusal) image.Dispose();
+            AdmissionRefused++;
+            adopted = null;
+            return AdoptResult.Refused;
+        }
         _entries[key] = new Entry { Image = image, DecodedBytes = bytes, ResidentBytes = bytes };
         Touch(key, _entries[key]);
         DecodedBytes += bytes;
         ResidentBytes += bytes;
         Misses++;
-        return image;
+        adopted = image;
+        return AdoptResult.Adopted;
     }
 
     /// <summary>
@@ -377,24 +416,56 @@ public sealed class AssetImageCache : IDisposable
     /// Make room before native decode so the configured aggregate is also a peak gate. Pinned entries stay; when only
     /// they are left the cache holds more than its budget until they are released.
     /// </summary>
-    private void TrimForIncoming(long incomingResidentBytes)
+    private void TrimForIncoming(long incomingResidentBytes) => TrimForIncoming(incomingResidentBytes, false);
+
+    /// <summary>
+    /// Evicts least recently used entries until the incoming bytes fit. With <paramref name="protect"/> recently used
+    /// entries are not candidates; returns false when room could not be made (over-budget with only pinned entries
+    /// left is still allowed without <paramref name="protect"/>, as before).
+    /// </summary>
+    private bool TrimForIncoming(long incomingResidentBytes, bool protect)
     {
-        while (_entries.Count >= _capacity
-            || ResidentBytes > ByteLimit - incomingResidentBytes)
+        // The shared budget can rebalance on another thread without the owner's cache gate.
+        // Preflight and eviction must use the same limit or a refusal could follow partial eviction.
+        var byteLimit = ByteLimit;
+        // Refusal must be atomic: do not evict an old prefix only to discover that the remaining
+        // protected/pinned entries still prevent admission. Scan just the eviction candidates first.
+        if (protect)
         {
-            if (OldestUnpinned(null) is not { } oldest) return;
+            var count = _entries.Count;
+            var resident = ResidentBytes;
+            for (var node = _recency.First;
+                (count >= _capacity || resident > byteLimit - incomingResidentBytes) && node is not null;
+                node = node.Next)
+            {
+                var entry = _entries[node.Value];
+                if (IsProtected(entry)) break;
+                if (IsPinned(entry)) continue;
+                count--;
+                resident -= entry.ResidentBytes + entry.MipBytes;
+            }
+            if (count >= _capacity || resident > byteLimit - incomingResidentBytes) return false;
+        }
+        while (_entries.Count >= _capacity
+            || ResidentBytes > byteLimit - incomingResidentBytes)
+        {
+            if (OldestUnpinned(null, protect) is not { } oldest) return !protect;
             Remove(oldest);
             Evictions++;
         }
+        return true;
     }
 
-    private string? OldestUnpinned(string? except)
+    private string? OldestUnpinned(string? except, bool protect = false)
     {
         for (var node = _recency.First; node is not null; node = node.Next)
         {
             var candidate = node.Value;
+            var entry = _entries[candidate];
+            // Recency order is use order: the first protected entry means every later one is protected too.
+            if (protect && IsProtected(entry)) return null;
             if (except is not null && string.Equals(candidate, except, StringComparison.OrdinalIgnoreCase)
-                || IsPinned(_entries[candidate])) continue;
+                || IsPinned(entry)) continue;
             return candidate;
         }
         return null;

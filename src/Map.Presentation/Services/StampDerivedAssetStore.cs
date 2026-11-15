@@ -106,7 +106,8 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
     // Large rasters: several lanes prepare them at once (a lane is free again as soon as its raster is ready,
     // not when the canvas takes it), and finished ones waiting for the canvas share one byte budget. One raster
     // always passes, so a master larger than the budget cannot wait for ever. Small results keep their slots.
-    internal static readonly int LargeLaneCount = Math.Clamp(Environment.ProcessorCount - 2, 1, 4);
+    // Settable only so tests can reproduce a 4-core machine (2 lanes); read once per store.
+    internal static int LargeLaneCount { get; set; } = Math.Clamp(Environment.ProcessorCount - 2, 1, 4);
     internal const long LargeWaitingByteBudget = 128L * 1024 * 1024;
     private readonly SemaphoreSlim _largeLanes = new(LargeLaneCount);
     // Under memory pressure only one large raster is prepared at a time.
@@ -314,12 +315,12 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
     public void CancelUnwantedMips(IReadOnlySet<(string Sha, int Level)> wanted)
         => CancelUnwantedPixels(wanted.Select(key => new PixelKey(key.Sha, 0, key.Level)).ToHashSet());
 
-    public void CancelUnwantedPixels(IReadOnlySet<PixelKey> wanted)
+    public void CancelUnwantedPixels(IReadOnlySet<PixelKey> wanted, Action<PixelKey>? cancelled = null)
     {
         lock (_requestsGate)
             foreach (var pair in _mips)
                 if (!pair.Value.Started && !pair.Value.Stop.IsCancellationRequested && !wanted.Contains(pair.Key))
-                { pair.Value.Stop.Cancel(); Interlocked.Increment(ref _discardedMips); }
+                { pair.Value.Stop.Cancel(); Interlocked.Increment(ref _discardedMips); cancelled?.Invoke(pair.Key); }
     }
 
     private async Task<Mip> ReadRequestedMip(Header header, PixelKey key, MipRequest request)

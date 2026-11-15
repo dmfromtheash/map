@@ -123,6 +123,9 @@ public sealed class StampImageLeaseTests : IDisposable
         Assert.NotEqual(IntPtr.Zero, held.Handle);
         Assert.True(Drawn(held));
         lease.Dispose();
+        // A released pin is still protected for two canvas frames under DEC-113 step 1.
+        using (images.BeginFrame()) { }
+        using (images.BeginFrame()) { }
         foreach (var sha in shas.Skip(1)) images.TryGetImageForPixelSize(sha, 48, 48);
         Assert.Equal(IntPtr.Zero, held.Handle);
     }

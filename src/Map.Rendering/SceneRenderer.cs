@@ -3668,7 +3668,8 @@ public static partial class SceneRenderer
     }
 
     private static bool DrawDetailedStampTiles(SKCanvas canvas, MapDocument document, ObjectLayer layer, WorldBounds view,
-        RenderOptions options, int? prepareBucket = null, DetailPreparation? preparation = null)
+        RenderOptions options, int? prepareBucket = null, DetailPreparation? preparation = null,
+        IReadOnlyDictionary<(int X, int Y), bool>? preparedTiles = null)
     {
         options.ObjectCache!.BindGpuContext(options.GpuContext?.Handle ?? IntPtr.Zero);
         options.AtlasCache?.BindGpuContext(options.GpuContext?.Handle ?? IntPtr.Zero);
@@ -3737,7 +3738,9 @@ public static partial class SceneRenderer
             var exactKept = cache.TryGet(layer.Id, x, y, DetailZoomKey(layer, bucket), revision, out _);
             var budgetSpent = budgetTiles && frame.Built > 0
                 && System.Diagnostics.Stopwatch.GetElapsedTime(frame.Started).TotalMilliseconds >= options.DetailTileBudgetMilliseconds;
-            if (!exactKept && prepareBucket is not null && budgetSpent)
+            // A seed tile whose images are not ready yet waits; the ready ones are built meanwhile.
+            if (!exactKept && preparedTiles is not null && !preparedTiles.GetValueOrDefault((x, y), true)
+                || !exactKept && prepareBucket is not null && budgetSpent)
             {
                 deferredTiles++;
                 continue;
@@ -3870,16 +3873,23 @@ public static partial class SceneRenderer
                 var preparationScale = Math.Pow(2, overviewBucket / 4d);
                 var preparationSize = 512 / preparationScale;
                 var seedReady = true;
+                var seedTiles = new Dictionary<(int X, int Y), bool>();
                 foreach (var (x, y) in DetailTiles(preparationView, preparationSize))
                 {
                     var bounds = new WorldBounds(x * preparationSize, y * preparationSize, (x + 1) * preparationSize, (y + 1) * preparationSize);
                     if (cache.TryGet(layer.Id, x, y, DetailZoomKey(layer, overviewBucket),
                         revisions.Version(x, y, overviewBucket, Expand(bounds, 1 / preparationScale), missingRevision), out _)) continue;
-                    seedReady &= TileImagesReady(layer, revisions, x, y, overviewBucket, bounds, preparationScale, options, frame);
+                    var seedTileReady = TileImagesReady(layer, revisions, x, y, overviewBucket, bounds, preparationScale, options, frame);
+                    seedTiles[(x, y)] = seedTileReady;
+                    seedReady &= seedTileReady;
                 }
                 // The seed is what a later pan shows while its own detail arrives: the view counts as refining until
                 // it is kept too, although the exact tiles are drawn as soon as they are ready.
-                if (!seedReady || !DrawDetailedStampTiles(canvas, document, layer, preparationView, options, overviewBucket, frame))
+                // Its tiles are built one by one as their images are ready, like the view's: waiting for all of them
+                // deadlocked a seed whose images exceed the shelf — the ready tiles are never kept, so their bytes
+                // fill the shelf every frame and the rest are never asked (live 14.11, 8192 px / 1800 images: one
+                // tile pending for ever with an empty queue).
+                if (!DrawDetailedStampTiles(canvas, document, layer, preparationView, options, overviewBucket, frame, seedTiles) || !seedReady)
                 {
                     if (options.Stats is { } pending) pending.DetailTilesPending++;
                     options.RequestRefinedFrame?.Invoke();
