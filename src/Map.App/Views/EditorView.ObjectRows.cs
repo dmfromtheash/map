@@ -39,7 +39,8 @@ public sealed partial class EditorView
                 CollectionChanged?.Invoke(this, new(NotifyCollectionChangedAction.Remove, oldItems, index));
             if (added > 0)
                 CollectionChanged?.Invoke(this, new(NotifyCollectionChangedAction.Add, newItems, index));
-            CollectionChanged?.Invoke(this, new(NotifyCollectionChangedAction.Replace, rows[0], oldHeader, 0));
+            if (rows[0] != oldHeader)
+                CollectionChanged?.Invoke(this, new(NotifyCollectionChangedAction.Replace, rows[0], oldHeader, 0));
             return true;
         }
 

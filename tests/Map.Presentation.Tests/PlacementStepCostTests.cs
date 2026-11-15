@@ -21,7 +21,8 @@ public sealed class PlacementStepCostTests
     [Theory]
     [InlineData(10_000)]
     [InlineData(200_000)]
-    public Task Native_place_and_undo_steps_with_owner_stamps(int count) => EditorUiThread.Run(() =>
+    [InlineData(10_000, true)]
+    public Task Native_place_and_undo_steps_with_owner_stamps(int count, bool differentKind = false) => EditorUiThread.Run(() =>
     {
         using var services = (IDisposable)typeof(AvaloniaLocator).GetMethod("EnterScope", BindingFlags.Public | BindingFlags.Static)!.Invoke(null, null)!;
         var context = SynchronizationContext.Current;
@@ -36,6 +37,13 @@ public sealed class PlacementStepCostTests
             var resolver = new CatalogAssetContentResolver(catalog);
             var resolution = resolver.Resolve(record);
             Assert.NotNull(resolution.Reference);
+            var documentReference = resolution.Reference!;
+            if (differentKind)
+            {
+                var other = catalog.Import(Path.Combine(Path.GetDirectoryName(fixture)!, "owner-mountain-02.png"), new(), DateTimeOffset.UnixEpoch);
+                documentReference = resolver.Resolve(other).Reference!;
+                Assert.NotNull(documentReference);
+            }
             var theme = new Map.App.App();
             theme.Initialize();
             var resources = theme.Resources;
@@ -48,7 +56,7 @@ public sealed class PlacementStepCostTests
             void Run(int size, bool measured)
             {
                 var random = new Random(12345);
-                var style = new StampStyle(record.Sha256);
+                var style = new StampStyle(documentReference.Sha256);
                 var items = Enumerable.Range(0, size).Select(i => new SceneObject(ObjectId.New(), SceneObjectKind.Stamp,
                     "mountain " + i, random.NextDouble() * 130000, random.NextDouble() * 130000,
                     64, 48, 0, "#FFFFFFFF", "#00000000", 0, true, false) { Stamp = style }).ToArray();
@@ -56,7 +64,7 @@ public sealed class PlacementStepCostTests
                 var document = new MapDocument(DocumentId.New(), "placement CPU probe", DateTimeOffset.UnixEpoch,
                     new(131072, 131072, "px", "#FFFFFFFF"),
                     [new BaseColorLayer(LayerId.New(), "base", true, false, 1, "#FFFFFFFF"),
-                     new ObjectLayer(layerId, "objects", true, false, 1, items)], [resolution.Reference!]);
+                     new ObjectLayer(layerId, "objects", true, false, 1, items)], [documentReference]);
                 var editor = new EditorViewModel(document, null, false, new FakeProjectStore(), new FakeRecentMaps(),
                     new FakeFilePicker(), new FakePrompts(), new FakeLog(), assetCatalog: catalog,
                     assetResolver: resolver, availableFontFamilies: ["Arial"]);
@@ -85,7 +93,7 @@ public sealed class PlacementStepCostTests
                     Assert.True(editor.ChooseGalleryVariant(catalog.Sets[0].Id, null));
                     UiProbe.Drain(view);
                     Layout();
-                    if (measured) Console.WriteLine(FormattableString.Invariant($"ARM count={size} ms={Stopwatch.GetElapsedTime(armStart).TotalMilliseconds:F4}"));
+                    if (measured) Console.WriteLine(FormattableString.Invariant($"ARM count={size} differentKind={differentKind} ms={Stopwatch.GetElapsedTime(armStart).TotalMilliseconds:F4}"));
                     for (var step = 0; step < 10; step++)
                     {
                         var index = step;
@@ -119,7 +127,8 @@ public sealed class PlacementStepCostTests
                     UiProbe.Drain(view);
                     Layout();
                     Assert.Equal(placed, Objects().Skip(size));
-                    Assert.Same(resolution.Reference, editor.Session.Document.Assets.Single());
+                    Assert.Same(documentReference, editor.Session.Document.Assets.Single(a => a.Sha256 == documentReference.Sha256));
+                    Assert.Equal(differentKind ? 2 : 1, editor.Session.Document.Assets.Count);
                     if (measured) Assert.All(visitedPerStep, visited => Assert.InRange(visited, 0, 256));
                     if (measured) Assert.All(sources, pair => Assert.Same(pair.Before, pair.After));
                     if (measured) Assert.All(layerRows, pair => Assert.Same(pair.Before, pair.After));
@@ -141,10 +150,11 @@ public sealed class PlacementStepCostTests
                 Control LayerRow() => ((StackPanel)typeof(Map.App.Views.EditorView).GetField("_layerList", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(view)!).Children[0];
                 void AssertRows(int expected)
                 {
+                    var visibleCount = differentKind ? size : expected;
                     var shown = Assert.IsAssignableFrom<IReadOnlyList<ObjectTreeRow>>(ObjectList().ItemsSource);
-                    Assert.Equal(expected + 1, shown.Count);
-                    Assert.Equal(expected, shown[0].ChildCount);
-                    Assert.Equal(Objects()[^1].Id, shown[1].Object!.Id);
+                    Assert.Equal(visibleCount + 1, shown.Count);
+                    Assert.Equal(visibleCount, shown[0].ChildCount);
+                    Assert.Equal(differentKind ? items[^1].Id : Objects()[^1].Id, shown[1].Object!.Id);
                     // The Layers tab is retained but detached while the Assets tab is open.
                     var layerRow = Assert.IsType<Border>(LayerRow());
                     var panel = Assert.IsType<DockPanel>(layerRow.Child);
@@ -189,7 +199,7 @@ public sealed class PlacementStepCostTests
                         {
                             sources.Add((beforeSource, list.ItemsSource));
                         }
-                        Console.WriteLine(FormattableString.Invariant($"PLACE count={size} route={route} step={step} pointerMs={pointerMs:F4} vmMs={vmMs:F4} panelsMs={panelsMs:F4} totalMs={totalMs:F4} bytes={bytes} enumerated={enumerated} removalChecks={ObjectTreeRows.KindRemovalChecksOnThisThread - checks} rebuilt={view.ObjectListRebuildCount - rebuilds}"));
+                        Console.WriteLine(FormattableString.Invariant($"PLACE count={size} differentKind={differentKind} route={route} step={step} pointerMs={pointerMs:F4} vmMs={vmMs:F4} panelsMs={panelsMs:F4} totalMs={totalMs:F4} bytes={bytes} enumerated={enumerated} removalChecks={ObjectTreeRows.KindRemovalChecksOnThisThread - checks} rebuilt={view.ObjectListRebuildCount - rebuilds}"));
                         foreach (var timing in editor.LastEditTimings)
                             Console.WriteLine("SECTION count=" + size + " route=" + route + " step=" + step + " name=" + timing.Step
                                 + " ms=" + timing.Ms.ToString("F4", CultureInfo.InvariantCulture));
