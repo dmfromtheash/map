@@ -219,7 +219,7 @@ public sealed class StampImageLeaseTests : IDisposable
         using var _ = images;
         foreach (var sha in shas) images.TryGetImage(sha);
         using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-        var freed = 0; var draws = 0;
+        var freed = 0; var draws = 0; var frameDraws = 0;
         var workers = Enumerable.Range(0, 4).Select(seed => Task.Run(() =>
         {
             var random = new Random(seed);
@@ -241,7 +241,11 @@ public sealed class StampImageLeaseTests : IDisposable
                 foreach (var sha in shas.OrderBy(_ => Random.Shared.Next()).Take(40))
                 {
                     var image = images.TryGetImage(sha);
-                    if (image is not null && !Drawn(image)) Interlocked.Increment(ref freed);
+                    if (image is not null)
+                    {
+                        if (!Drawn(image)) Interlocked.Increment(ref freed);
+                        else frameDraws++;
+                    }
                     if (image is null) Assert.True(images.LastImageRequestPending);
                 }
             frames++;
@@ -250,6 +254,7 @@ public sealed class StampImageLeaseTests : IDisposable
 
         Assert.Equal(0, freed);
         Assert.True(draws > 100 && frames > 10, $"draws {draws}, frames {frames}");
+        Assert.True(frameDraws > 100, $"frame draws {frameDraws}");
     }
 
     private static void LoadOnWorker(CatalogStampImageSource images, IEnumerable<string> shas)
