@@ -190,10 +190,12 @@ public sealed partial class EditorView
         if (changed.Overlaps([nameof(EditorViewModel.XText), nameof(EditorViewModel.YText),
             nameof(EditorViewModel.WidthText), nameof(EditorViewModel.HeightText),
             nameof(EditorViewModel.RotationText), nameof(EditorViewModel.HasEditableSelection)])) Timed("inspector", SyncInspector);
-        // The structure comparison above already covers tool, selection and active-layer
-        // changes. A coalesced deselect/select of the same object must not rebuild the
-        // unchanged context panel just because those properties were notified again.
-        if (changed.Contains(nameof(EditorViewModel.PlacementAutoSelect)))
+        // The structure comparison covers selection and active-layer changes. Coalesced
+        // deselect/select notifications alone must not rebuild an unchanged context.
+        // Keep explicit tool/placement refreshes: their settings can change without changing
+        // the structure key's flags.
+        if (changed.Overlaps([nameof(EditorViewModel.ActiveTool), nameof(EditorViewModel.HasPendingPlacement),
+            nameof(EditorViewModel.PlacementAutoSelect), nameof(EditorViewModel.StampPlacementMode)]))
         {
             DeferPanels(DeferredPanel.Context);
         }

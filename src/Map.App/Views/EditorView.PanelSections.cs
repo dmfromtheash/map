@@ -194,12 +194,17 @@ public sealed partial class EditorView
     /// here the body, the footer and the switcher are brought in line. Nothing on the canvas
     /// changes: no layer, no document, no history entry.
     /// </summary>
-    public void ShowPanelSection(PanelSection section)
+    public void ShowPanelSection(PanelSection section) => ShowPanelSection(section, revealSelection: false);
+
+    private void ShowPanelSection(PanelSection section, bool revealSelection)
     {
         // Свет and Стили open their tab of the ribbon; the right panel stays on its object section.
         if (section is PanelSection.Light or PanelSection.Styles) { ShowAppearanceRibbon(section == PanelSection.Styles); return; }
         var searchChanged = section != _editor.PanelSection && !string.IsNullOrEmpty(_objectSearch.Text);
         _editor.ShowPanelSection(section);
+        // Switching sections clears the open kind. Reveal it before building any rows, so
+        // selection never builds an intermediate list of every unrelated asset kind.
+        if (revealSelection && section == PanelSection.Assets) _editor.RevealSelectionInAssetKinds();
         // The search box follows the view model without a second rebuild through TextChanged.
         if (searchChanged) _objectSearch.Text = "";
         SyncPanelSection();
@@ -258,11 +263,12 @@ public sealed partial class EditorView
         if (signature == _followedSelection) return;
         _followedSelection = signature;
         _scrollListToSelection = true;
-        if (_editor.SectionForSelection() is { } section && section != _editor.PanelSection)
+        var section = _editor.SectionForSelection() ?? _editor.PanelSection;
+        if (section != _editor.PanelSection)
         {
-            ShowPanelSection(section);
+            ShowPanelSection(section, revealSelection: true);
+            return;
         }
-        // In Assets the selection opens the asset it belongs to, then the list scrolls to it.
         var openBefore = _editor.OpenAssetKey;
         if (_editor.PanelSection == PanelSection.Assets) _editor.RevealSelectionInAssetKinds();
         if (_editor.OpenAssetKey != openBefore) SyncObjectList();

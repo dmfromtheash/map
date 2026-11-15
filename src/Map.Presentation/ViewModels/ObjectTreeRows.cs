@@ -307,9 +307,26 @@ public static class ObjectTreeRows
     private static IReadOnlyList<ObjectTreeRow> AssetKindRows(
         MapDocument document, IReadOnlyCollection<ObjectId> selectedIds, string? openAssetKey, Func<string, string?>? assetTitle)
     {
+        var layers = document.Layers.OfType<ObjectLayer>().ToArray();
+        if (openAssetKey is { } open)
+        {
+            // Only the open kind is needed. Reuse its immutable per-layer stacks instead of
+            // merging every kind and copying every member into a new row-entry array.
+            var stacks = new List<IReadOnlyList<SceneObject>>();
+            for (var l = layers.Length - 1; l >= 0; l--)
+                if (KindIndex.For(layers[l]).Kinds.TryGetValue(open, out var members)) stacks.Add(members);
+            if (stacks.Count > 0)
+            {
+                var count = stacks.Sum(stack => stack.Count);
+                var representative = stacks[0][0];
+                var crumb = new ObjectTreeRow(ObjectTreeRowKind.AssetKindBreadcrumb, "AssetKindBreadcrumb",
+                    KindTitle(open, representative, assetTitle), EditorLabels.Objects(count), representative,
+                    GroupId: null, ChildCount: count, Selected: false) { AssetKey = open };
+                return new PrefixedRowList([crumb], new VirtualRowList(new AssetKindEntries(stacks), selectedIds));
+            }
+        }
         var kinds = new Dictionary<string, (int Count, SceneObject Representative)>(StringComparer.Ordinal);
         var order = new List<string>();
-        var layers = document.Layers.OfType<ObjectLayer>().ToArray();
         for (var l = layers.Length - 1; l >= 0; l--)
         {
             var index = KindIndex.For(layers[l]);
@@ -321,14 +338,6 @@ public static class ObjectTreeRows
             }
         }
         var selected = SelectedAssetKeys(document, selectedIds);
-        if (openAssetKey is { } open && kinds.TryGetValue(open, out var openMembers))
-        {
-            var crumb = new ObjectTreeRow(ObjectTreeRowKind.AssetKindBreadcrumb, "AssetKindBreadcrumb",
-                KindTitle(open, openMembers.Representative, assetTitle), EditorLabels.Objects(openMembers.Count), openMembers.Representative,
-                GroupId: null, ChildCount: openMembers.Count, Selected: false) { AssetKey = open };
-            var copies = new VirtualRowList([.. AssetMembers(document, open).Select(VirtualRowEntry.ForObject)], selectedIds);
-            return new PrefixedRowList([crumb], copies);
-        }
         return [.. order.Select(key =>
         {
             var members = kinds[key];
@@ -339,7 +348,7 @@ public static class ObjectTreeRows
         })];
     }
 
-    /// <summary>Only expanded kinds and explicit bulk selection enumerate their copies.</summary>
+    /// <summary>Bulk actions enumerate copies; opened kind rows share the indexed stacks.</summary>
     public static IEnumerable<SceneObject> AssetMembers(MapDocument document, string key)
     {
         foreach (var layer in document.Layers.OfType<ObjectLayer>().Reverse())
@@ -727,6 +736,30 @@ public static class ObjectTreeRows
         {
             foreach (var stack in _stacks)
                 for (var i = stack.Count - 1; i >= 0; i--) yield return VirtualRowEntry.ForObject(stack[i]);
+        }
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    /// <summary>Top-first members of one kind, sharing the prepared immutable stacks.</summary>
+    private sealed class AssetKindEntries(IReadOnlyList<IReadOnlyList<SceneObject>> stacks) : IReadOnlyList<VirtualRowEntry>
+    {
+        public int Count { get; } = stacks.Sum(stack => stack.Count);
+        public VirtualRowEntry this[int index]
+        {
+            get
+            {
+                foreach (var stack in stacks)
+                {
+                    if (index < stack.Count) return VirtualRowEntry.ForObject(stack[index]);
+                    index -= stack.Count;
+                }
+                throw new ArgumentOutOfRangeException(nameof(index));
+            }
+        }
+        public IEnumerator<VirtualRowEntry> GetEnumerator()
+        {
+            foreach (var stack in stacks)
+                foreach (var member in stack) yield return VirtualRowEntry.ForObject(member);
         }
         System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
     }
