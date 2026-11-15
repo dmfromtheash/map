@@ -62,10 +62,19 @@ internal sealed class GpuFrameTimer
     public long Dropped { get; private set; }
     public bool Available => _state == State.On;
 
+    /// <summary>
+    /// One frame in this many is measured. The sensor feeds only the performance journal, yet measuring every frame
+    /// cost its own flush and two platform-API leases per frame: USER bisect 2026-11-15 found this commit as the
+    /// first bad FrameWorkP95 (wheel 0.20 -> 1.76-2.88 ms, A-B-B-A against its parent).
+    /// </summary>
+    internal const int SampleEvery = 32;
+    private long _frames;
+
     /// <summary>Opens the time-elapsed query for this frame. Call before the frame's drawing.</summary>
     public void Begin(ISkiaSharpApiLease lease)
     {
         if (_state == State.Off) return;
+        if (!Span && _frames++ % SampleEvery != 0) return; // End returns at once: no query is open
         try
         {
             using var api = lease.TryLeasePlatformGraphicsApi();
