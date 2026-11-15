@@ -16,12 +16,12 @@ public sealed partial class StyleMockupDump
 {
     private const int W = 2560, H = 1440;
 
-    [Fact]
+    [OptInProbe("MAP_STYLE_MOCKUPS,MAP_LIGHT_ASSETS", "StyleRenderingTests.Reviewed_presets_change_pixels_and_rebuild_after_a_local_edit")]
     public void Dump_style_mockups_when_asked()
     {
         var output = Environment.GetEnvironmentVariable("MAP_STYLE_MOCKUPS");
         var assets = Environment.GetEnvironmentVariable("MAP_LIGHT_ASSETS");
-        if (string.IsNullOrEmpty(output) || string.IsNullOrEmpty(assets) || !Directory.Exists(assets)) return;
+        Assert.True(Directory.Exists(assets), "opt-in asset directory is missing: " + assets);
         Directory.CreateDirectory(output);
         var images = Directory.GetFiles(assets, "*.png").Take(3)
             .ToDictionary(f => Path.GetFileNameWithoutExtension(f), f => SKImage.FromEncodedData(f)!);
