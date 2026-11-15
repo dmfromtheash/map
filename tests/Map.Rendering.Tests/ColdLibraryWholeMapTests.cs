@@ -180,14 +180,16 @@ public sealed class ColdLibraryWholeMapTests
         {
             FrameResult? result = null;
             var watch = Stopwatch.StartNew();
+            var frames = 0;
             for (var i = 0; i < 250 && watch.Elapsed < TimeSpan.FromSeconds(10); i++)
             {
                 result = Frame(phase, log: false);
+                frames++;
                 if (complete(result)) break;
                 Thread.Sleep(5);
             }
             Assert.NotNull(result);
-            Console.WriteLine($"OVGUARD {Count} {phase} frames <=250 wall={watch.Elapsed.TotalMilliseconds:F1} ms; layer={result.Stats.OverviewExactLayer} drawn={result.Stats.ObjectsDrawn} pending={result.Stats.DetailTilesPending}");
+            Console.WriteLine($"OVGUARD {Count} {phase} frames={frames}/250 wall={watch.Elapsed.TotalMilliseconds:F1} ms; layer={result.Stats.OverviewExactLayer} drawn={result.Stats.ObjectsDrawn} pending={result.Stats.DetailTilesPending}");
             Assert.True(complete(result), $"{phase} did not finish in 250 frames / 10 seconds");
             return result;
         }
