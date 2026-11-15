@@ -41,10 +41,10 @@ public sealed class HexFogLookTests
     }
 
     /// <summary>MAP_FOG_TIMING=1: frame time of the plain and the painted fog over a 128² board, half hidden.</summary>
-    [Fact]
+    [OptInProbe("MAP_FOG_TIMING", "HexFogLookTests.A_painted_fog_hides_the_unknown_and_shows_the_explored")]
     public void Timing_for_review()
     {
-        if (Environment.GetEnvironmentVariable("MAP_FOG_TIMING") is null) return;
+
         var document = HexMapFactory.Create("Большая", DateTimeOffset.UnixEpoch, new MapCategoryId("hex"), HexOrientation.Flat, 32, 128, 128, "#FFF2E9DC");
         var layer = document.Layers.OfType<HexLayer>().Single();
         var cells = new Dictionary<HexCoord, HexCell?>();
