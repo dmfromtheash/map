@@ -39,12 +39,38 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
 
     public static TheoryData<int> DenseSizes => new() { 250_000, 1_000_000 };
 
-    [Theory]
+    [Fact]
+    public void Small_detail_work_finishes_while_other_threads_consume_CPU()
+    {
+        using var stop = new CancellationTokenSource();
+        var competitors = Enumerable.Range(0, Math.Min(2, Math.Max(1, Environment.ProcessorCount - 1)))
+            .Select(_ => new Thread(() =>
+            {
+                while (!stop.IsCancellationRequested) Thread.SpinWait(4096);
+            }) { IsBackground = true, Priority = ThreadPriority.Normal }).ToArray();
+        foreach (var thread in competitors) thread.Start();
+        try
+        {
+            var result = Run(objects: 6_000, assets: 32, canvas: 4096, simulatedSeconds: 30,
+                residentBytes: 3L << 20, clustered: true);
+            output.WriteLine(result.ToString());
+            Assert.True(result.Settled, result.ToString());
+            Assert.True(result.PixelsEqual, "detail under CPU load differs from synchronous pixels");
+            Assert.True(result.Adopted > 0, "background work never delivered a raster");
+        }
+        finally
+        {
+            stop.Cancel();
+            foreach (var thread in competitors) thread.Join();
+        }
+    }
+
+    [OptInProbeTheory("MAP_DENSE_BENCH", "DenseDetailTilesTests.A_working_set_larger_than_the_shelf_still_makes_progress_tile_by_tile")]
     [MemberData(nameof(DenseSizes))]
     [Trait("Category", "Benchmark")]
     public void Benchmark_dense_8192(int objects)
     {
-        if (Environment.GetEnvironmentVariable("MAP_DENSE_BENCH") != "1") return;
+
         var result = Run(objects, assets: 1804, canvas: 8192, simulatedSeconds: 180, residentBytes: 128L << 20, pan: true);
         output.WriteLine(result.ToString());
         File.AppendAllText(Path.Combine(Path.GetTempPath(), "map-dense-bench.txt"), result + Environment.NewLine);
