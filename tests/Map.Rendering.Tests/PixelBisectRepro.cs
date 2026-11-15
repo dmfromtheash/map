@@ -100,16 +100,18 @@ public sealed class PixelBisectRepro
         File.WriteAllLines(Path.Combine(outDir, $"{Label}.txt"), log);
     }
 
-    [Fact]
+    [OptInProbe("MAP_PIXREPRO_OUT,MAP_PIXREPRO_BASE", "PixelBisectRepro.Small_fit_and_edit_pixels_match_the_synchronous_overview")]
     public void Compare_to_base()
     {
-        if (Out is not { } outDir || Environment.GetEnvironmentVariable("MAP_PIXREPRO_BASE") is not { } baseLabel) return;
+        var outDir = Out!;
+        var baseLabel = Environment.GetEnvironmentVariable("MAP_PIXREPRO_BASE")!;
         var lines = new List<string>();
         foreach (var name in new[] { "fit", "fit-ref", "edit", "edit-ref" })
         {
             var a = Path.Combine(outDir, $"{baseLabel}-{name}.png");
             var b = Path.Combine(outDir, $"{Label}-{name}.png");
-            if (!File.Exists(a) || !File.Exists(b)) { lines.Add($"{name}: missing"); continue; }
+            Assert.True(File.Exists(a), "comparison fixture missing: " + a);
+            Assert.True(File.Exists(b), "comparison fixture missing: " + b);
             using var ba = SKBitmap.Decode(a);
             using var bb = SKBitmap.Decode(b);
             int max = 0, over2 = 0, differ = 0;
