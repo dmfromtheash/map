@@ -67,6 +67,21 @@ public sealed class CameraFrameCache : IDisposable
         return true;
     }
 
+    /// <summary>
+    /// How far a kept frame may be stretched before the scene is drawn instead. The wheel zoomed into the widest
+    /// kept frame stretched many times: a fast frame counter with a blurred picture, and a sharp detail rectangle
+    /// over it on the way out (owner and USER, 2026-11-15). Map engines show a kept tile only near its own scale
+    /// and draw the new level otherwise (MapLibre, Chromium cc tilings).
+    /// </summary>
+    public double MaxMagnification { get; set; } =
+        double.TryParse(Environment.GetEnvironmentVariable("MAP_CAMERA_FRAME_MAX_ZOOM"), System.Globalization.CultureInfo.InvariantCulture, out var limit) && limit >= 1 ? limit : 1.25;
+
+    /// <summary>Frames refused because they would be stretched beyond <see cref="MaxMagnification"/>.</summary>
+    public long RefusedStretched { get; private set; }
+
+    private bool Sharp(Frame frame, SKCanvas canvas) =>
+        canvas.TotalMatrix.ScaleX <= frame.Image.Width / Math.Max(1e-6, frame.World.Width) * MaxMagnification;
+
     /// <summary>False means nothing was drawn; normal rendering must cover this view.</summary>
     public bool TryDraw(SKCanvas canvas, SKRect visible, SKRect page)
     {
@@ -74,10 +89,11 @@ public sealed class CameraFrameCache : IDisposable
         if (target.IsEmpty) return true;
         var cover = _detail is { } detail && Contains(detail.World, target) ? detail : _wide;
         if (cover is null || !Contains(cover.World, target)) return false;
+        if (!Sharp(cover, canvas)) { RefusedStretched++; return false; }
         canvas.Save();
         canvas.ClipRect(target);
         // Clip the broad view around the detail. Even translucent pages are composited once.
-        if (_detail is { } top && !ReferenceEquals(top, cover))
+        if (_detail is { } top && !ReferenceEquals(top, cover) && Sharp(top, canvas))
         {
             canvas.Save();
             canvas.ClipRect(top.World);

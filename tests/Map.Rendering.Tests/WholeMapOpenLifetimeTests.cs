@@ -26,8 +26,9 @@ public sealed class WholeMapOpenLifetimeTests
         }
 
         Console.WriteLine($"OVGUARD plateau open3 -> open20: {bytes[2]} -> {bytes[19]} bytes; delta={bytes[19] - bytes[2]}; tolerance={tolerance}");
-        Assert.InRange(bytes[19] - bytes[2], -tolerance, tolerance);
-        Assert.InRange(bytes.Skip(3).Max() - bytes[2], -tolerance, tolerance);
+        // Growth is the leak; memory that falls after open 3 (the JIT/GC settling, -14.9 MB on the PC) is not.
+        Assert.True(bytes[19] - bytes[2] <= tolerance, $"retained grew {bytes[19] - bytes[2]} bytes from open 3 to 20");
+        Assert.True(bytes.Skip(3).Max() - bytes[2] <= tolerance, $"retained peaked {bytes.Skip(3).Max() - bytes[2]} bytes above open 3");
         Assert.InRange(entries[19], 1, entries[2] + 2);
         Assert.All(closedViews, reference => Assert.False(reference.IsAlive, "a closed renderer/cache owner is still rooted"));
         GC.KeepAlive(document);

@@ -525,11 +525,15 @@ public sealed class CatalogStampImageSource(
     {
         var depth = AssetCatalog.DetailLadderDepth(record.Width, record.Height);
         var desired = wanted.Step + wanted.Level;
-        // Prefer a smaller resident level, then a larger one. In particular, a missing
-        // 16 px sample must not enqueue the multi-megabyte working original as fallback.
-        for (var level = desired; level <= 15; level++)
-            if (At(level) is { } smaller) return smaller;
-        for (var level = desired - 1; level >= 0; level--)
+        // Only resident levels are looked at here (nothing is enqueued). The exact level, then up to two sharper ones
+        // (a sharp picture scaled down beats a soft one stretched: the wheel blur, 2026-11-15), then the softer ones,
+        // then any sharper one left. Beyond two levels a sharper texture costs more GPU than it is worth here.
+        if (At(desired) is { } exact) return exact;
+        for (var level = desired - 1; level >= Math.Max(0, desired - 2); level--)
+            if (At(level) is { } sharper) return sharper;
+        for (var level = desired + 1; level <= 15; level++)
+            if (At(level) is { } softer) return softer;
+        for (var level = desired - 3; level >= 0; level--)
             if (At(level) is { } larger) return larger;
         return null;
 
@@ -686,13 +690,20 @@ public sealed class CatalogStampImageSource(
         lock (_gate)
         {
             _frameThread = 0;
-            // A late request can still be waiting for metadata when the camera leaves it;
-            // then no pixel task exists to deliver a cancellation back to BeginFrame.
-            _latePixels.RemoveWhere(key => !_wantedMips.Contains(key));
-            _wantedMips.UnionWith(_cacheableMissing);
-            // Kept overview rasters wait for these exact keys: a frame that did not draw them must not cancel them.
-            _wantedMips.UnionWith(_leaseWanted.Keys);
-            _derived?.CancelUnwantedPixels(_wantedMips);
+            // A frame that asked for no stamp pixels at all (a moving camera shown from its kept frame, a scene
+            // drawn from kept layer images) says nothing about what the view needs: cancelling then dropped every
+            // sharp request of the gesture, and the sharp level started only ~135 ms after the camera stopped
+            // (the blur the owner saw on wheel, 2026-11-15).
+            if (_wantedMips.Count > 0)
+            {
+                // A late request can still be waiting for metadata when the camera leaves it;
+                // then no pixel task exists to deliver a cancellation back to BeginFrame.
+                _latePixels.RemoveWhere(key => !_wantedMips.Contains(key));
+                _wantedMips.UnionWith(_cacheableMissing);
+                // Kept overview rasters wait for these exact keys: a frame that did not draw them must not cancel them.
+                _wantedMips.UnionWith(_leaseWanted.Keys);
+                _derived?.CancelUnwantedPixels(_wantedMips);
+            }
             if (_disposed) { DisposeIfUnused(); return; }
             _cache.DeferDisposal = false;
             _samples.DeferDisposal = false;

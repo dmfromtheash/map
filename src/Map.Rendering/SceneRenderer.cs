@@ -6532,6 +6532,11 @@ public static partial class SceneRenderer
                 + Math.Pow(item.Y + item.Height / 2 - viewCentreY, 2))
                 .ThenBy(item => item.Id.Value).Take(OverviewExactDirectBudget)
                 .ToDictionary(item => item.Id);
+            // What the user holds or edits is never cut by the budget.
+            foreach (var extra in extras) exact[extra.Id] = extra;
+            if (options.ObjectOverrides is { Count: > 0 } kept)
+                foreach (var replacement in kept)
+                    if (SceneGeometry.BoundsOf(replacement).Intersects(view)) exact[replacement.Id] = replacement;
             options.RequestRefinedFrame!.Invoke();
         }
         if (!layered && options.RequestRefinedFrame is { } refine && options.Stamps is { } exactSource)
