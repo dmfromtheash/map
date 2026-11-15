@@ -8,7 +8,8 @@
 ## Где работать
 - Папка `C:\Projects\Map` (DEC-071); ветка `codex/stage-18-editable-areas` = `main` (код `ab848a7`). Push:
   `git push origin codex/stage-18-editable-areas:main`. Версия 0.5.0; `CHANGELOG.md` → `[Unreleased]`.
-- Временные копии — только `C:\Projects\Map-wt-<имя>`; агентам — только абсолютные пути. Схема `.mapproj` v55.
+- Временные копии — только `C:\Projects\Map\.worktrees\<имя>` (в `C:\Projects` ничего не создавать); агентам — только
+  абсолютные пути. Схема `.mapproj` v55.
 - Устройства: **ПК** (RTX 3070 Laptop, 16 потоков, 15 ГБ RAM — свободно 4–6 ГБ: один перф-хост за раз; прогоны отдельным
   процессом), **USER** (HD 630, 4 ядра; **Sol 6.1** вместо Astra с 15.11), **Mac** `user@192.168.31.78`
   (`-o HostKeyAlias=192.168.31.25`, Sol в `~/MapWork/agents/<имя>`). Скрипты: `tools/ai/remote/`.

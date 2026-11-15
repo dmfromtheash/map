@@ -36,3 +36,6 @@ repomix-output.*
 Thumbs.db
 Desktop.ini
 __pycache__/
+
+# Temporary git worktrees (owner 2026-11-15: nothing is created in C:\Projects)
+/.worktrees/
