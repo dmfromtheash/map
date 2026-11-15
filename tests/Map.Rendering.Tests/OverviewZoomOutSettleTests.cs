@@ -28,6 +28,7 @@ public sealed class OverviewZoomOutSettleTests(ITestOutputHelper output)
         output.WriteLine(result.ToString());
         Assert.True(result.DetailSettled, "the zoomed-in dense view did not settle: " + result);
         Assert.True(result.Settled, result.ToString());
+        Assert.True(result.VisibleChunks > 0, "the zoom-out view did not exercise any overview chunks");
         Assert.Equal(result.VisibleChunks, result.ChunksDrawn);
     }
 
@@ -68,11 +69,11 @@ public sealed class OverviewZoomOutSettleTests(ITestOutputHelper output)
         }
     }
 
-    [Fact]
+    [OptInProbe("MAP_ZOOMOUT_BENCH", "OverviewZoomOutSettleTests.Zooming_out_to_fit_after_dense_detail_settles_with_the_whole_view_in_the_cache", "1")]
     [Trait("Category", "Benchmark")]
     public void Benchmark_zoom_out_to_fit_with_and_without_camera_frames()
     {
-        if (Environment.GetEnvironmentVariable("MAP_ZOOMOUT_BENCH") != "1") return;
+
         foreach (var camera in new[] { true, false })
         foreach (var megabytes in new[] { 32L, 64L })
             output.WriteLine($"camera={camera} cache={megabytes} MiB " + Run(objects: 400_000, canvas: 131_072, cameraFrames: camera, cacheBytes: megabytes << 20));
