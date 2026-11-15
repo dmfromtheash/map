@@ -49,6 +49,7 @@ public static partial class SceneRenderer
         public SceneObject[]? Objects;
         public volatile bool Added;
         public volatile bool Failed;
+        public volatile bool Cancelled;
         /// <summary>A final raster of this key started (or a stand-in for an older key): the next change replans.</summary>
         public bool Rastered;
     }
@@ -161,6 +162,22 @@ public static partial class SceneRenderer
         if (state is null) context.Layers[layer.Id] = state = new ExactLayerState();
         state.Touched = cache.FrameNumber;
         var key = new ExactLayerKey(content, matrix, extent, document.StampForeground, stamps.SourceRevision, stamps.MissingRevision);
+
+        // A stopped camera needs this exact screen matrix. Do not finish another pan/zoom raster first,
+        // or replace the kept image with that obsolete scale while the final view is waiting.
+        if (!options.CameraMoving)
+        {
+            if (state.Job is { } obsolete && obsolete.Key != key)
+            {
+                lock (obsolete) { obsolete.Cancelled = true; obsolete.Image?.Dispose(); obsolete.Image = null; }
+                state.Job = null;
+            }
+            if (state.Work is { } oldWork && oldWork.Key != key)
+            {
+                oldWork.Cancelled = true;
+                state.Work = null;
+            }
+        }
 
         // A finished raster replaces the layer shown so far.
         if (state.Job is { } finished)
@@ -301,13 +318,18 @@ public static partial class SceneRenderer
             {
                 try
                 {
+                    if (work.Cancelled) return;
                     var objects = GatherExactObjects(overview, zoomBucket, area, selected);
                     // The image keys are those the raster will ask for: the same draw calls with the same matrix,
                     // on a canvas that draws nothing, answered by a source that only records the requests.
                     var recorder = (ExactRequestRecorder)recordOptions.Stamps!;
                     using var dry = new SKNoDrawCanvas(Math.Max(1, key.Extent.Width), Math.Max(1, key.Extent.Height));
                     dry.SetMatrix(LayerMatrix(key));
-                    foreach (var sceneObject in objects) DrawObject(dry, sceneObject, foreground, recordOptions, prepareGpuEffect: false);
+                    foreach (var sceneObject in objects)
+                    {
+                        if (work.Cancelled) return;
+                        DrawObject(dry, sceneObject, foreground, recordOptions, prepareGpuEffect: false);
+                    }
                     work.Plan.Add(recorder.Requests);
                     Volatile.Write(ref work.Objects, objects);
                     work.Added = true;
@@ -386,10 +408,17 @@ public static partial class SceneRenderer
                 var target = surface.Canvas;
                 target.Clear(SKColors.Transparent);
                 target.SetMatrix(LayerMatrix(job.Key));
-                foreach (var sceneObject in job.Objects) DrawObject(target, sceneObject, job.Foreground, job.Options, prepareGpuEffect: false);
-                target.Flush();
-                image = surface.Snapshot();
-                complete = job.Final && job.Images.UnresolvedRequestVersion == 0 && job.Options.Stats!.UnresolvedImages == 0;
+                foreach (var sceneObject in job.Objects)
+                {
+                    if (Volatile.Read(ref job.Cancelled)) { cancelled = true; break; }
+                    DrawObject(target, sceneObject, job.Foreground, job.Options, prepareGpuEffect: false);
+                }
+                if (!cancelled)
+                {
+                    target.Flush();
+                    image = surface.Snapshot();
+                    complete = job.Final && job.Images.UnresolvedRequestVersion == 0 && job.Options.Stats!.UnresolvedImages == 0;
+                }
             }
         }
         catch (Exception ex) when (ex is not OutOfMemoryException) { image?.Dispose(); image = null; }
