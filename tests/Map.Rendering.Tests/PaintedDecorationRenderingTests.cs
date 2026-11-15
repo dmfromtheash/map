@@ -35,11 +35,11 @@ public sealed class PaintedDecorationRenderingTests
     }
 
     /// <summary>Frames for the comparison sheet with the owner's mountains (MAP_DECOR_FRAMES = output folder).</summary>
-    [Fact]
+    [OptInProbe("MAP_DECOR_FRAMES", "PaintedDecorationRenderingTests.A_cartouche_casts_its_shadow_to_the_south_east_and_its_paper_is_lit_from_the_north_west")]
     public void Frames_for_review()
     {
         var folder = Environment.GetEnvironmentVariable("MAP_DECOR_FRAMES");
-        if (string.IsNullOrWhiteSpace(folder)) return;
+
         Directory.CreateDirectory(folder);
         var items = new List<(DecorationStyle, SKRectI)>
         {
