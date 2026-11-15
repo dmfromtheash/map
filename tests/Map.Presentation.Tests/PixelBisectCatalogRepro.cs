@@ -27,7 +27,7 @@ public sealed class PixelBisectCatalogRepro
     private static string? Out => Environment.GetEnvironmentVariable("MAP_PIXREPRO_OUT");
     private static string Label => Environment.GetEnvironmentVariable("MAP_PIXREPRO_LABEL") ?? "run";
 
-    [Fact(Skip = "defect: cold exact derived pixels never complete within 20 s on macOS; same mip preparation failures in d732644")]
+    [Fact]
     public async Task Small_catalog_fit_and_edit_pixels_match_the_exact_reference()
     {
         var root = Directory.CreateTempSubdirectory("map-pixel-ci-").FullName;
@@ -44,8 +44,10 @@ public sealed class PixelBisectCatalogRepro
             var original = SceneObjectClone.At(layer.Objects[0], 8000, 8000, 512, 512);
             document = DocumentEditor.ReplaceObject(document, original);
             var session = new EditingSession(document);
+            // This pixel reference does not test OS file notifications. Inject no watcher:
+            // macOS sandbox EventStream startup errors otherwise repeatedly invalidate cold work.
             await using var source = new CatalogStampImageSource(catalog, () => session.Document, () => null,
-                derivedRoot: Path.Combine(root, "derived"));
+                derivedRoot: Path.Combine(root, "derived"), startWatcher: _ => { });
             const double scale = 1d / 32;
             using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(20));
             // Make the reference cold and on a worker: no warmed resident mip can hide a wrong lease.

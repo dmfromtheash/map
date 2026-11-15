@@ -906,6 +906,24 @@ public sealed class CatalogStampImageSource(
         internal int Preparing;
         public int PreparingLookups { get { lock (_source._gate) return Preparing; } }
 
+        public override SKColor? TryGetOverviewColor(string sha256)
+        {
+            // A cold exact raster must not keep a thumbnail/transparent placeholder as its
+            // final tint. Metadata shares the pixels' deadline; wait outside the source gate.
+            if (_source._derived is not { } derived || _source.FindRecord(sha256) is null)
+                return base.TryGetOverviewColor(sha256);
+            var header = derived.Request(sha256);
+            try
+            {
+                var left = Deadline - Environment.TickCount64;
+                if (left > 0 && header.Wait(TimeSpan.FromMilliseconds(left), Cancellation))
+                    return header.Result is { } ready ? new SKColor(ready.Color) : null;
+            }
+            catch (OperationCanceledException) { }
+            lock (_source._gate) Preparing++;
+            return null;
+        }
+
         public override SKImage? TryGetImage(string sha256) =>
             _source.TryExactPixels(this, sha256, null, out var image) ? image : base.TryGetImage(sha256);
 
@@ -935,7 +953,7 @@ public sealed class CatalogStampImageSource(
         public virtual SKImage? TryGetImage(string sha256) => source.LeaseGet(this, () => source.WorkingImage(sha256));
         // Derived tints are cheap metadata. Legacy/embedded images decode through the lease,
         // outside the shared source gate, so background overview work cannot hold up a frame.
-        public SKColor? TryGetOverviewColor(string sha256) => source.HasDerivedOverview(sha256)
+        public virtual SKColor? TryGetOverviewColor(string sha256) => source.HasDerivedOverview(sha256)
             ? source.TryGetOverviewColor(sha256)
             : TryGetImage(sha256) is { } image ? SceneRenderer.StampOverviewColor(image) : null;
         public virtual SKImage? TryGetImageForPixelSize(string sha256, double width, double height) =>
