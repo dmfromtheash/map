@@ -14,12 +14,12 @@ namespace Map.Rendering.Tests;
 /// </summary>
 public sealed partial class StyleMockupDump
 {
-    [Fact]
+    [OptInProbe("MAP_STYLE_PRINT,MAP_LIGHT_ASSETS", "StyleRenderingTests.Reviewed_presets_change_pixels_and_rebuild_after_a_local_edit")]
     public void Dump_print_variants_when_asked()
     {
         var output = Environment.GetEnvironmentVariable("MAP_STYLE_PRINT");
         var assets = Environment.GetEnvironmentVariable("MAP_LIGHT_ASSETS");
-        if (string.IsNullOrEmpty(output) || string.IsNullOrEmpty(assets) || !Directory.Exists(assets)) return;
+        Assert.True(Directory.Exists(assets), "opt-in asset directory is missing: " + assets);
         Directory.CreateDirectory(output);
         var only = Environment.GetEnvironmentVariable("MAP_STYLE_WATERCOLOR2_ONLY");
         var sceneOnly = Environment.GetEnvironmentVariable("MAP_STYLE_WATERCOLOR2_SCENE");
