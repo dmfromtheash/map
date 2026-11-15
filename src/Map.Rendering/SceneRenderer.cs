@@ -6521,7 +6521,10 @@ public static partial class SceneRenderer
         }
         // The layer carries the chunks' exact objects; the dictionary then holds the selection only.
         var exactCount = layered ? exactCandidates + extras.Count : exact.Count;
-        if (!layered && exactLayerPending && exact.Count > OverviewExactDirectBudget)
+        // Also every moving frame: the wheel between fit and 100 % (fast path, no layer) drew ~9 660 exact stamps
+        // one by one at 31-55 ms per frame (PC ladder 10 000 objects, 2026-11-15). The settled frame completes them.
+        if (!layered && (exactLayerPending || options.CameraMoving || fallbackScale is not null)
+            && !options.IsExport && options.RequestRefinedFrame is not null && exact.Count > OverviewExactDirectBudget)
         {
             // Until the first layer lands, refine a bounded centre-first subset. Keep the
             // synchronous reference/export path and unsupported layers fully exact.
