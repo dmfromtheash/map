@@ -102,7 +102,11 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
     // under its 2 ms budget, about a hundred per frame; eight slots let a dense view take only eight per frame.
     private const int CompactMipSide = 256;
     private readonly SemaphoreSlim _mipSlots = new(64);
-    private readonly SemaphoreSlim _mipReader = new(1);
+    // Reading/checking independent compressed mips can overlap without growing the 64-result handoff.
+    private readonly SemaphoreSlim _mipReader = new(Math.Clamp(Environment.ProcessorCount - 2, 2, 4));
+    // A compact result can still require a full source decode (missing ladder/portable entry or repair).
+    // Keep that native working memory at its former single-source bound.
+    private readonly SemaphoreSlim _compactSourceReader = new(1);
     // Large rasters: several lanes prepare them at once (a lane is free again as soon as its raster is ready,
     // not when the canvas takes it), and finished ones waiting for the canvas share one byte budget. One raster
     // always passes, so a master larger than the budget cannot wait for ever. Small results keep their slots.
@@ -360,18 +364,26 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
                     bitmap.SetImmutable();
                     return new Mip(null, portable.Width, portable.Height, reserved, Image: SKImage.FromBitmap(bitmap), LargeReserved: largeReserved);
                 }
-                if (header.PortablePath is not null && IsRejectedPortable(header.Sha, header.PortablePath))
-                {
-                    var repaired = record is null ? null : TryReadHeader(header.Sha, record) ?? LoadOrBuild(header.Sha);
-                    if (repaired is null) return new Mip(null, 0, 0, reserved, LargeReserved: largeReserved);
-                    header = repaired;
-                }
                 // A valid portable asset may omit a large raster; prepare that raster only.
                 if (!small || header.PortablePath is not null)
                 {
-                    var image = PrepareRaster(header, key, request.Stop.Token);
-                    return new Mip(null, image?.Width ?? 0, image?.Height ?? 0, reserved,
-                        Image: image, LargeReserved: largeReserved);
+                    // A lane waiting for source memory has not begun its decode yet: a new zoom can cancel it.
+                    lock (_requestsGate) request.Started = false;
+                    await _compactSourceReader.WaitAsync(request.Stop.Token).ConfigureAwait(false);
+                    try
+                    {
+                        lock (_requestsGate) { request.Stop.Token.ThrowIfCancellationRequested(); request.Started = true; }
+                        if (header.PortablePath is not null && IsRejectedPortable(header.Sha, header.PortablePath))
+                        {
+                            var repaired = record is null ? null : TryReadHeader(header.Sha, record) ?? LoadOrBuild(header.Sha);
+                            if (repaired is null) return new Mip(null, 0, 0, reserved, LargeReserved: largeReserved);
+                            header = repaired;
+                        }
+                        var image = PrepareRaster(header, key, request.Stop.Token);
+                        return new Mip(null, image?.Width ?? 0, image?.Height ?? 0, reserved,
+                            Image: image, LargeReserved: largeReserved);
+                    }
+                    finally { _compactSourceReader.Release(); }
                 }
                 byte[]? pixels; int width, height;
                 try { pixels = ReadMip(header, key.Level, out width, out height); }
@@ -380,9 +392,16 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
                     ReportFailure("read/rebuild " + header.Sha, ex);
                     // A crash, interrupted write or eviction loses only derived data. Rebuild
                     // from verified owner bytes here, never fall back to frame-thread decoding.
-                    var repaired = LoadOrBuild(header.Sha);
-                    if (repaired is null) return new Mip(null, 0, 0, reserved);
-                    pixels = ReadMip(repaired, key.Level, out width, out height);
+                    lock (_requestsGate) request.Started = false;
+                    await _compactSourceReader.WaitAsync(request.Stop.Token).ConfigureAwait(false);
+                    try
+                    {
+                        lock (_requestsGate) { request.Stop.Token.ThrowIfCancellationRequested(); request.Started = true; }
+                        var repaired = LoadOrBuild(header.Sha);
+                        if (repaired is null) return new Mip(null, 0, 0, reserved);
+                        pixels = ReadMip(repaired, key.Level, out width, out height);
+                    }
+                    finally { _compactSourceReader.Release(); }
                 }
                 return new Mip(pixels, width, height, reserved);
             }
@@ -960,7 +979,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
                 SaveKnownColors();
                 ClearPreparedSource();
                 lock (_memoryGate) { _memoryPixels.Clear(); _memoryBytes = 0; }
-                _mipReader.Dispose(); _mipSlots.Dispose(); _largeLanes.Dispose(); _pressureLane.Dispose(); _stop.Dispose();
+                _mipReader.Dispose(); _compactSourceReader.Dispose(); _mipSlots.Dispose(); _largeLanes.Dispose(); _pressureLane.Dispose(); _stop.Dispose();
             });
         }
     }
