@@ -2,6 +2,11 @@
 using Map.Performance;
 
 var options = PerformanceOptions.Parse(args);
+// The routes submit one input every 16 ms by Task.Delay deadlines. With Windows' default 15.6 ms timer the
+// delays round to 15.6/31.2 ms and the input arrives at ~47 Hz, so every route reported ~44-47 FPS while frames
+// took 0-0.2 ms (PC 2026-11-15; 15.11 another program happened to hold 1 ms and the same routes gave 57-60).
+// Hold 1 ms for the whole run so the input clock is the same on every run and machine.
+if (OperatingSystem.IsWindows()) TimerResolution.Begin();
 // Native hosts bypass Map.App.Program; explicitly opt their editor instances into the
 // same profile-owned derived cache when a run supplies it. Never infer a library write path.
 Map.Presentation.ViewModels.EditorViewModel.DerivedAssetCacheRoot = Environment.GetEnvironmentVariable("MAP_PERF_DERIVED_ROOT");
