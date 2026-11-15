@@ -1072,8 +1072,7 @@ public sealed partial class EditorViewModel
         references = [];
         refusal = "";
 
-        var existing = Session.Document.Assets.ToDictionary(
-            asset => asset.Sha256, StringComparer.OrdinalIgnoreCase);
+        var existing = AssetReferenceIndex.For(Session.Document);
         var neededHashes = plan.SelectMany(item => item.MaskSha256 is { } mask
                 ? new[] { item.Sha256, mask }
                 : new[] { item.Sha256 })

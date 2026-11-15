@@ -230,11 +230,12 @@ public sealed class PlaceAssetObjectsCommand : IEditCommand
     public MapDocument Apply(MapDocument document)
     {
         _introduced.Clear();
-        var known = document.Assets.Select(asset => asset.Sha256).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        // The shared per-list index: hashing every reference of a large map again on each click was O(assets).
+        var known = AssetReferenceIndex.For(document);
         var added = new List<MapAssetReference>();
         foreach (var asset in _assets)
         {
-            if (known.Add(asset.Sha256))
+            if (!known.ContainsKey(asset.Sha256) && !_introduced.Contains(asset.Sha256))
             {
                 _introduced.Add(asset.Sha256);
                 added.Add(asset);
@@ -309,11 +310,12 @@ public sealed class PasteObjectsCommand : IEditCommand
     public MapDocument Apply(MapDocument document)
     {
         _introduced.Clear();
-        var known = document.Assets.Select(asset => asset.Sha256).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        // The shared per-list index: hashing every reference of a large map again on each click was O(assets).
+        var known = AssetReferenceIndex.For(document);
         var added = new List<MapAssetReference>();
         foreach (var asset in _assets)
         {
-            if (known.Add(asset.Sha256))
+            if (!known.ContainsKey(asset.Sha256) && !_introduced.Contains(asset.Sha256))
             {
                 _introduced.Add(asset.Sha256);
                 added.Add(asset);

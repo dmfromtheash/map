@@ -43,9 +43,9 @@ public static class FillTextureAssets
     public static IReadOnlyList<string> MissingHashes(MapDocument document)
     {
         ArgumentNullException.ThrowIfNull(document);
-        var carried = document.Assets.Select(asset => asset.Sha256).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var carried = AssetReferenceIndex.For(document);
         return [.. UsedIds(document.Layers).Select(MapFillTextures.AssetSha256).OfType<string>()
-            .Where(sha => !carried.Contains(sha)).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)];
+            .Where(sha => !carried.ContainsKey(sha)).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)];
     }
 
     /// <summary>
@@ -93,8 +93,8 @@ public sealed class FillTextureEmbedCommand : IEditCommand
     public MapDocument Apply(MapDocument document)
     {
         var edited = _inner.Apply(document);
-        var carried = edited.Assets.Select(asset => asset.Sha256).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var add = _assets.Where(asset => !carried.Contains(asset.Sha256)).ToArray();
+        var carried = AssetReferenceIndex.For(edited);
+        var add = _assets.Where(asset => !carried.ContainsKey(asset.Sha256)).ToArray();
         return add.Length == 0 ? edited : edited.WithAssets([.. edited.Assets, .. add]);
     }
 

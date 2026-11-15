@@ -71,6 +71,48 @@ public sealed class DerivedIndexScalingTests
     }
 
     [Fact]
+    public void Placing_and_undoing_on_a_map_with_many_assets_hashes_its_asset_list_once()
+    {
+        // Live 2026-11-15 (PC, 2M objects): each click rebuilt three sets over all asset references
+        // (PlaceAssetObjectsCommand, FillTextureAssets, ResolvePlan) - one 382-431 ms frame in place-10.
+        var references = Enumerable.Range(0, 100_000).Select(i => new MapAssetReference(i.ToString("x64"), "Ассет " + i,
+            "image/png", ".png", ProjectAssetStorage.Linked, DateTimeOffset.UnixEpoch, "test", "user-owned", catalogId: i.ToString("x64"))).ToArray();
+        var document = Map(2_000).WithAssets([.. Map(1).Assets, .. references]);
+        var layer = document.Layers.OfType<ObjectLayer>().Single();
+        var session = new EditingSession(document);
+        var before = AssetReferenceIndex.Builds;
+        for (var k = 0; k < 10; k++)
+        {
+            var placed = Stamp(5_000 + k, 1000 + k * 64, 1000);
+            session.Execute(new FillTextureEmbedCommand(new PlaceAssetObjectsCommand(layer.Id, session.Document.Assets[0], [placed]), []));
+            Assert.Empty(FillTextureAssets.MissingHashes(session.Document));
+        }
+        for (var k = 0; k < 10; k++) Assert.True(session.Undo());
+        Assert.Same(document.Assets, session.Document.Assets);
+        Assert.InRange(AssetReferenceIndex.Builds - before, 0, 1);
+
+        // The cost of a click does not follow the number of asset references (O(assets) before: ~100x here).
+        double PlaceMilliseconds(int assets)
+        {
+            var many = Map(2_000).WithAssets([.. Map(1).Assets, .. references.Take(assets)]);
+            var target = new EditingSession(many);
+            var id = many.Layers.OfType<ObjectLayer>().Single().Id;
+            target.Execute(new PlaceAssetObjectsCommand(id, target.Document.Assets[0], [Stamp(9_000, 10, 10)])); // first index build
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            for (var k = 0; k < 20; k++)
+            {
+                target.Execute(new FillTextureEmbedCommand(new PlaceAssetObjectsCommand(id, target.Document.Assets[0], [Stamp(9_001 + k, 20 + k, 10)]), []));
+                _ = FillTextureAssets.MissingHashes(target.Document);
+            }
+            return watch.Elapsed.TotalMilliseconds;
+        }
+        PlaceMilliseconds(200); // JIT
+        var small = PlaceMilliseconds(200);
+        var large = PlaceMilliseconds(references.Length);
+        Assert.True(large <= small * 5 + 10, $"20 placements: {small:F1} ms with 200 assets, {large:F1} ms with {references.Length}");
+    }
+
+    [Fact]
     public void Placed_names_follow_occupancy_exactly_as_a_fresh_index()
     {
         var document = Map(500);
