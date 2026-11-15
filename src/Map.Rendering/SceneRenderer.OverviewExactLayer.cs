@@ -416,12 +416,17 @@ public static partial class SceneRenderer
                     ?? throw new InvalidOperationException("Could not allocate an overview exact layer.");
                 var target = surface.Canvas;
                 target.Clear(SKColors.Transparent);
-                target.SetMatrix(LayerMatrix(job.Key));
-                foreach (var sceneObject in job.Objects)
+                var strips = ExactLayerStrips(job);
+                if (strips <= 1)
                 {
-                    if (Volatile.Read(ref job.Cancelled)) { cancelled = true; break; }
-                    DrawObject(target, sceneObject, job.Foreground, job.Options, prepareGpuEffect: false);
+                    target.SetMatrix(LayerMatrix(job.Key));
+                    foreach (var sceneObject in job.Objects)
+                    {
+                        if (Volatile.Read(ref job.Cancelled)) { cancelled = true; break; }
+                        DrawObject(target, sceneObject, job.Foreground, job.Options, prepareGpuEffect: false);
+                    }
                 }
+                else cancelled = !RasterExactStrips(job, target, strips);
                 if (!cancelled)
                 {
                     target.Flush();
@@ -440,6 +445,69 @@ public static partial class SceneRenderer
             job.Done = true;
         }
         job.Ready();
+    }
+
+    /// <summary>
+    /// The exact layer was rastered by one worker in one pass over the whole view: objects outside the first few
+    /// hundred drawn directly appeared only when that pass ended - 4 to 44 s for the whole map on the PC ladder
+    /// (owner, 2026-11-15: "objects behind the priority ones take very long, on every step"). Large layers are cut
+    /// into horizontal strips rastered at once, each with the objects that reach it, in the same order; the strips
+    /// are copied into the layer 1:1. A strip's translated matrix rounds a few filtered samples differently: at most two
+    /// channel steps in 0.03 % of the bytes, never a missing or moved object (ColdLibraryWholeMapTests).
+    /// </summary>
+    internal static int ExactLayerStripWorkers = Math.Clamp(Environment.ProcessorCount / 2, 1, 4);
+    private const int ExactLayerStripMinimumObjects = 2_000;
+
+    private static int ExactLayerStrips(ExactLayerJob job) =>
+        job.Objects.Length < ExactLayerStripMinimumObjects || job.Key.Extent.Height < 256 ? 1 : ExactLayerStripWorkers;
+
+    /// <summary>Layers rastered in strips (tests).</summary>
+    internal static long ExactLayerStripRasters;
+
+    private static bool RasterExactStrips(ExactLayerJob job, SKCanvas target, int strips)
+    {
+        Interlocked.Increment(ref ExactLayerStripRasters);
+        var width = job.Key.Extent.Width;
+        var height = job.Key.Extent.Height;
+        var layerMatrix = LayerMatrix(job.Key);
+        var step = (height + strips - 1) / strips;
+        var images = new SKImage?[strips];
+        var unresolved = new int[strips];
+        try
+        {
+            Parallel.For(0, strips, new ParallelOptions { MaxDegreeOfParallelism = strips }, strip =>
+            {
+                var top = strip * step;
+                var bottom = Math.Min(height, top + step);
+                if (bottom <= top) return;
+                using var surface = SKSurface.Create(new SKImageInfo(width, bottom - top));
+                if (surface is null) return;
+                var canvas = surface.Canvas;
+                canvas.Clear(SKColors.Transparent);
+                var matrix = SKMatrix.CreateTranslation(0, -top).PreConcat(layerMatrix);
+                canvas.SetMatrix(matrix);
+                var stats = new RenderStats();
+                var options = job.Options.ForBackgroundTile(job.Images, stats);
+                // Antialiased edges reach a pixel past an object's bounds.
+                var band = new SKRect(-2, -2, width + 2, bottom - top + 2);
+                foreach (var sceneObject in job.Objects)
+                {
+                    if (Volatile.Read(ref job.Cancelled)) return;
+                    var reach = matrix.MapRect(ToRect(SceneGeometry.BoundsOf(sceneObject)));
+                    if (!reach.IntersectsWith(band)) continue;
+                    DrawObject(canvas, sceneObject, job.Foreground, options, prepareGpuEffect: false);
+                }
+                canvas.Flush();
+                images[strip] = surface.Snapshot();
+                unresolved[strip] = stats.UnresolvedImages;
+            });
+            if (Volatile.Read(ref job.Cancelled) || images.Any(image => image is null)) return false;
+            target.ResetMatrix();
+            for (var strip = 0; strip < strips; strip++) target.DrawImage(images[strip]!, 0, strip * step);
+            job.Options.Stats!.UnresolvedImages += unresolved.Sum();
+            return true;
+        }
+        finally { foreach (var image in images) image?.Dispose(); }
     }
 
     /// <summary>The layer copied pixel for pixel: its matrix is the frame's, so nothing is resampled.</summary>

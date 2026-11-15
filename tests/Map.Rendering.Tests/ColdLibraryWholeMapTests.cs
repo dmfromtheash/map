@@ -111,6 +111,39 @@ public sealed class ColdLibraryWholeMapTests
     }
 
     [Fact]
+    public void A_layer_rastered_in_strips_matches_a_single_pass_within_two_channel_steps()
+    {
+        // Owner 2026-11-15: objects behind the priority ones appeared after 4-44 s - one worker rastered the layer.
+        var workers = SceneRenderer.ExactLayerStripWorkers;
+        try
+        {
+            byte[] Settled(int strips)
+            {
+                SceneRenderer.ExactLayerStripWorkers = strips;
+                using var view = new WholeMapView(200_000, ready: true); // 2 % exact: 4 000 >= the strip minimum
+                var settled = view.Settle();
+                Assert.Equal(1, settled.Stats.OverviewExactLayer);
+                return view.Pixels();
+            }
+            var single = Settled(1);
+            var again = Settled(1);
+            var diff = single.Zip(again).Count(pair => pair.First != pair.Second);
+            Console.WriteLine($"STRIPS single vs single: {diff} bytes differ");
+            var before = Interlocked.Read(ref SceneRenderer.ExactLayerStripRasters);
+            var strips = Settled(4);
+            Assert.True(Interlocked.Read(ref SceneRenderer.ExactLayerStripRasters) > before, "the strip path was not used");
+            Console.WriteLine($"STRIPS single vs strips: {single.Zip(strips).Count(pair => pair.First != pair.Second)} bytes differ");
+            var worst = single.Zip(strips).Max(pair => Math.Abs(pair.First - pair.Second));
+            Console.WriteLine($"STRIPS worst channel difference: {worst}");
+            Assert.Equal(0, diff);
+            // A strip's translated matrix rounds a few filtered samples differently (Skia float sampling): at most
+            // one step of a channel, never a missing or moved object.
+            Assert.InRange(worst, 0, 2); // measured 2 in 290 of 1 048 576 bytes
+        }
+        finally { SceneRenderer.ExactLayerStripWorkers = workers; }
+    }
+
+    [Fact]
     public void Images_arriving_after_pending_frames_complete_the_fit_view()
     {
         using var view = new WholeMapView(50_000);
@@ -259,6 +292,13 @@ public sealed class ColdLibraryWholeMapTests
             Console.WriteLine($"OVGUARD {Count} {phase} frames={frames}/250 wall={watch.Elapsed.TotalMilliseconds:F1} ms; layer={result.Stats.OverviewExactLayer} drawn={result.Stats.ObjectsDrawn} pending={result.Stats.DetailTilesPending} maxDirectDuringWait={maxDirect}");
             Assert.True(complete(result), $"{phase} did not finish in 250 frames / 10 seconds");
             return result;
+        }
+
+        public byte[] Pixels()
+        {
+            using var image = _surface.Snapshot();
+            using var bitmap = SKBitmap.FromImage(image);
+            return bitmap.Bytes;
         }
 
         public void AssertVisible()
