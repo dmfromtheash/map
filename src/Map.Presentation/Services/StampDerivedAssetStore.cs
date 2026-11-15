@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Buffers;
+using System.Buffers.Binary;
 using System.IO.Compression;
 using System.Text.Json;
 using System.Threading.Channels;
@@ -55,6 +57,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
     public Action? OverviewChanged { get; set; }
     public string[] TakeInvalidated()
     {
+        if (_invalidated.IsEmpty) return [];
         var keys = _invalidated.Keys.ToArray();
         foreach (var key in keys) _invalidated.TryRemove(key, out _);
         return keys;
@@ -88,6 +91,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
     private readonly ConcurrentDictionary<PixelKey, MipRequest> _mips = new();
     private long _discardedMips;
     private readonly int _pixelCapacity;
+    private readonly bool _nativeMipImages;
     private TaskCompletionSource<Mip> _capacityAvailable = new(TaskCreationOptions.RunContinuationsAsynchronously);
     public long DiscardedMips => Interlocked.Read(ref _discardedMips);
     private sealed class MipRequest(CancellationTokenSource stop)
@@ -160,10 +164,11 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
     /// (up to 5 GiB, free-space clamp). A number fixes the ceiling to it, with the same free-space clamp.
     /// </param>
     /// <param name="maintenance">When and how the janitor runs; null is <see cref="DerivedCacheMaintenancePolicy.Default"/>.</param>
+    /// <param name="nativeMipImages">Prepare native canvas images directly from the pooled raw ladder.</param>
     public StampDerivedAssetStore(AssetCatalog catalog, string root, long? diskBudgetBytes = null,
         int metadataCapacity = 65536, int pixelCapacity = 4096, long preparedSourceByteCapacity = 64L * 1024 * 1024,
         TimeProvider? retryClock = null, Action<FileSystemWatcher>? startWatcher = null,
-        DerivedCacheMaintenancePolicy? maintenance = null)
+        DerivedCacheMaintenancePolicy? maintenance = null, bool nativeMipImages = false)
     {
         if (diskBudgetBytes is { } explicitBudget) ArgumentOutOfRangeException.ThrowIfNegativeOrZero(explicitBudget);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(metadataCapacity);
@@ -175,6 +180,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
         _root = Path.GetFullPath(root);
         _metadataCapacity = metadataCapacity;
         _pixelCapacity = pixelCapacity;
+        _nativeMipImages = nativeMipImages;
         _preparedSourceByteCapacity = Math.Min(preparedSourceByteCapacity, AssetImagePolicy.MaxDecodedBytes);
         _policy = maintenance ?? DerivedCacheMaintenancePolicy.Default;
         _janitor = CreateJanitor(diskBudgetBytes);
@@ -334,9 +340,12 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
     public void CancelUnwantedPixels(IReadOnlySet<PixelKey> wanted)
     {
         lock (_requestsGate)
+        {
+            if (_mips.IsEmpty) return;
             foreach (var pair in _mips)
                 if (!pair.Value.Started && !pair.Value.Stop.IsCancellationRequested && !wanted.Contains(pair.Key))
                 { pair.Value.Stop.Cancel(); Interlocked.Increment(ref _discardedMips); }
+        }
     }
 
     private async Task<Mip> ReadRequestedMip(Header header, PixelKey key, MipRequest request)
@@ -388,8 +397,8 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
                     }
                     finally { _compactSourceReader.Release(); }
                 }
-                byte[]? pixels; int width, height;
-                try { pixels = ReadMip(header, key.Level, out width, out height); }
+                byte[]? pixels; SKImage? mipImage; int width, height;
+                try { pixels = ReadMipCore(header, key.Level, out width, out height, _nativeMipImages, out mipImage); }
                 catch (Exception ex)
                 {
                     ReportFailure("read/rebuild " + header.Sha, ex);
@@ -402,11 +411,11 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
                         lock (_requestsGate) { request.Stop.Token.ThrowIfCancellationRequested(); request.Started = true; }
                         var repaired = LoadOrBuild(header.Sha);
                         if (repaired is null) return new Mip(null, 0, 0, reserved);
-                        pixels = ReadMip(repaired, key.Level, out width, out height);
+                        pixels = ReadMipCore(repaired, key.Level, out width, out height, _nativeMipImages, out mipImage);
                     }
                     finally { _compactSourceReader.Release(); }
                 }
-                return new Mip(pixels, width, height, reserved);
+                return new Mip(pixels, width, height, reserved, Image: mipImage);
             }
             finally { _mipReader.Release(); }
         }
@@ -534,6 +543,18 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
 
     public IEnumerable<PixelKey> ReadyPixels => _mips
         .Where(pair => pair.Value.Task.IsCompletedSuccessfully).Select(pair => pair.Key);
+
+    /// <summary>A reusable snapshot; the source adopts outside the request gate as before.</summary>
+    internal void CopyReadyPixels(List<PixelKey> destination)
+    {
+        destination.Clear();
+        lock (_requestsGate)
+        {
+            if (_mips.IsEmpty) return;
+            foreach (var pair in _mips)
+                if (pair.Value.Task.IsCompletedSuccessfully) destination.Add(pair.Key);
+        }
+    }
 
     private async Task Work()
     {
@@ -928,39 +949,67 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
 
     /// <summary>Background/test reader. Never called by a canvas getter.</summary>
     public byte[]? ReadMip(Header header, int level, out int width, out int height)
+        => ReadMipCore(header, level, out width, out height, false, out _);
+
+    private byte[]? ReadMipCore(Header header, int level, out int width, out int height,
+        bool native, out SKImage? image)
     {
         width = height = 0;
+        image = null;
         byte[]? bytes;
         lock (_memoryGate) _memoryPixels.TryGetValue(header.Sha, out bytes);
-        bytes ??= ReadCompressedPixels(header);
-        if (Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bytes)) != header.PixelHash)
-            throw new InvalidDataException("Derived mip checksum mismatch.");
-        using var reader = new BinaryReader(new MemoryStream(bytes));
-        for (var i = 0; i < header.MipCount; i++)
+        // At most four small readers borrow buffers concurrently. The raw ladder and the
+        // skipped levels no longer create LOH arrays on every mip request.
+        var rented = bytes is null ? ArrayPool<byte>.Shared.Rent(2 * 1024 * 1024) : null;
+        try
         {
-            var current = reader.ReadInt32(); var w = reader.ReadInt32(); var h = reader.ReadInt32(); var length = reader.ReadInt32();
-            if (w is < 1 or > 256 || h is < 1 or > 256 || length != w * h * 4) throw new InvalidDataException("Invalid derived mip.");
-            var pixels = reader.ReadBytes(length);
-            if (pixels.Length != length) throw new InvalidDataException("Truncated derived mip.");
-            if (current == level) { width = w; height = h; return pixels; }
+            ReadOnlySpan<byte> data = bytes is not null ? bytes : rented.AsSpan(0, ReadCompressedPixels(header, rented!));
+            if (Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(data)) != header.PixelHash)
+                throw new InvalidDataException("Derived mip checksum mismatch.");
+            var offset = 0;
+            for (var i = 0; i < header.MipCount; i++)
+            {
+                if (data.Length - offset < 16) throw new EndOfStreamException("Truncated derived mip header.");
+                var current = BinaryPrimitives.ReadInt32LittleEndian(data[offset..]);
+                var w = BinaryPrimitives.ReadInt32LittleEndian(data[(offset + 4)..]);
+                var h = BinaryPrimitives.ReadInt32LittleEndian(data[(offset + 8)..]);
+                var length = BinaryPrimitives.ReadInt32LittleEndian(data[(offset + 12)..]);
+                offset += 16;
+                if (w is < 1 or > 256 || h is < 1 or > 256 || length != w * h * 4) throw new InvalidDataException("Invalid derived mip.");
+                if (data.Length - offset < length) throw new InvalidDataException("Truncated derived mip.");
+                if (current == level)
+                {
+                    width = w; height = h;
+                    var pixels = data.Slice(offset, length);
+                    if (!native) return pixels.ToArray();
+                    using var bitmap = new SKBitmap(new SKImageInfo(w, h, SKColorType.Rgba8888, SKAlphaType.Premul));
+                    pixels.CopyTo(bitmap.GetPixelSpan());
+                    bitmap.SetImmutable();
+                    image = SKImage.FromBitmap(bitmap);
+                    return null;
+                }
+                offset += length;
+            }
+            return null;
         }
-        return null;
+        finally { if (rented is not null) ArrayPool<byte>.Shared.Return(rented); }
     }
 
-    private byte[] ReadCompressedPixels(Header header)
+    private int ReadCompressedPixels(Header header, byte[] buffer)
     {
         CountIo(ref _localMipReads);
-        using var file = new FileStream(Stem(header.Sha) + ".pixels", FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
+        using var file = new FileStream(Stem(header.Sha) + ".pixels", FileMode.Open, FileAccess.Read,
+            FileShare.Read | FileShare.Delete, bufferSize: 1);
         using var compressed = new BrotliStream(file, CompressionMode.Decompress);
-        using var raw = new MemoryStream();
-        var buffer = new byte[16 * 1024];
-        int read;
-        while ((read = compressed.Read(buffer)) > 0)
+        var length = 0;
+        while (length < 2 * 1024 * 1024)
         {
-            if (raw.Length + read > 2 * 1024 * 1024) throw new InvalidDataException("Oversized derived mip data.");
-            raw.Write(buffer, 0, read);
+            var read = compressed.Read(buffer.AsSpan(length, 2 * 1024 * 1024 - length));
+            if (read == 0) return length;
+            length += read;
         }
-        return raw.ToArray();
+        if (compressed.ReadByte() >= 0) throw new InvalidDataException("Oversized derived mip data.");
+        return length;
     }
 
     public void Dispose()
