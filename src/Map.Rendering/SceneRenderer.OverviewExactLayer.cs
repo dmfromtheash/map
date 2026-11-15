@@ -32,11 +32,18 @@ public static partial class SceneRenderer
     private readonly record struct ExactLayerKey(ulong Content, SKMatrix Matrix, SKRectI Extent,
         StampForegroundSurface? Foreground, long SourceRevision, long MissingRevision);
 
-    private sealed record ExactLayerImage(ExactLayerKey Key, SKImage Image, bool Complete);
+    /// <summary>
+    /// What a layer was made of, chunk by chunk: the exact set's hash and its largest object, and the selection's hash
+    /// and bounds. After an edit the frame compares them with the current ones to find the few changed places.
+    /// </summary>
+    private sealed record ExactLayerChunks(Dictionary<(int X, int Y), (ulong Hash, double MaxSide)> Map, ulong ExtrasHash, WorldBounds? ExtrasBounds);
+
+    private sealed record ExactLayerImage(ExactLayerKey Key, SKImage Image, bool Complete, ExactLayerChunks Chunks);
 
     /// <summary>The objects of one key and the preparation plan of the images they sample (built off the frame).</summary>
-    private sealed class ExactLayerWork(ExactLayerKey key, IStampPreparationPlan plan)
+    private sealed class ExactLayerWork(ExactLayerKey key, IStampPreparationPlan plan, ExactLayerChunks chunks)
     {
+        public ExactLayerChunks Chunks { get; } = chunks;
         public ExactLayerKey Key { get; } = key;
         public IStampPreparationPlan Plan { get; } = plan;
         public SceneObject[]? Objects;
@@ -49,6 +56,7 @@ public static partial class SceneRenderer
     private sealed class ExactLayerJob
     {
         public required ExactLayerKey Key { get; init; }
+        public required ExactLayerChunks Chunks { get; init; }
         public required SceneObject[] Objects { get; init; }
         public required RenderOptions Options { get; init; }
         public required IStampImageLease Images { get; init; }
@@ -102,6 +110,7 @@ public static partial class SceneRenderer
         var content = 14_695_981_039_346_656_037UL;
         var count = 0;
         var pendingSets = false;
+        var chunkMap = new Dictionary<(int X, int Y), (ulong Hash, double MaxSide)>();
         var minX = (int)Math.Floor(area.Left / OverviewChunkSize); var maxX = (int)Math.Floor(area.Right / OverviewChunkSize);
         var minY = (int)Math.Floor(area.Top / OverviewChunkSize); var maxY = (int)Math.Floor(area.Bottom / OverviewChunkSize);
         if ((long)(maxX - minX + 1) * (maxY - minY + 1) > 16_384) return false;
@@ -125,12 +134,18 @@ public static partial class SceneRenderer
                 count += set.Objects.Length;
                 content = (content ^ set.Hash) * 1_099_511_628_211UL;
                 content = (content ^ (uint)x ^ ((ulong)(uint)y << 32)) * 1_099_511_628_211UL;
+                chunkMap[(x, y)] = (set.Hash, set.MaxSide);
             }
+        var extrasHash = 14_695_981_039_346_656_037UL;
+        WorldBounds? extrasBounds = null;
         foreach (var extra in extras)
         {
             if (!ExactLayerNeutral(extra)) return false;
             content = HashObject(content, extra);
+            extrasHash = HashObject(extrasHash, extra);
+            extrasBounds = Union(extrasBounds, SceneGeometry.BoundsOf(extra));
         }
+        var chunks = new ExactLayerChunks(chunkMap, extrasHash, extrasBounds);
         var context = ExactLayerContexts.GetValue(cache, static _ => new ExactLayerContext());
         SweepExactLayers(context, cache.FrameNumber);
         context.Layers.TryGetValue(layer.Id, out var state);
@@ -160,7 +175,7 @@ public static partial class SceneRenderer
                 if (image is not null)
                 {
                     state.Ready?.Image.Dispose();
-                    state.Ready = new ExactLayerImage(finished.Key, image, finished.Complete);
+                    state.Ready = new ExactLayerImage(finished.Key, image, finished.Complete, finished.Chunks);
                 }
                 // A final raster that failed or still missed an image (a key the plan did not name): the frame draws that view.
                 if (finished.Final && finished.Key == key && (image is null || !finished.Complete)) state.FrameOnly = key;
@@ -173,15 +188,75 @@ public static partial class SceneRenderer
             return true;
         }
         if (state.FrameOnly == key) return false;
-        StartExactLayerWork(state, key, plan, zoomBucket, area, extras, stamps, refine, options);
+        StartExactLayerWork(state, key, chunks, plan, zoomBucket, area, extras, stamps, refine, options);
         if (options.Stats is { } pending) pending.DetailTilesPending++;
         refine();
         // The previous layer stands in: always while the camera moves, and for the same objects (new images or a
-        // pan) when settled. After an edit the settled frame draws directly until the new layer lands.
-        return DrawExactStandIn(canvas, state, matrix, clip, options.CameraMoving ? null : content, options);
+        // pan) when settled.
+        if (DrawExactStandIn(canvas, state, matrix, clip, options.CameraMoving ? null : content, options)) return true;
+        // After an edit: the previous layer everywhere except the few changed places, which are drawn directly until
+        // the new layer lands (Chromium re-rasters only a tile's invalidated rect). Drawing every exact object
+        // directly here cost 378 ms p95 per placement on 2 million objects (pack-5 A/B, 2026-11-15).
+        return !options.CameraMoving && DrawExactPatched(canvas, document, state, key, chunks, plan, zoomBucket, extras, options);
     }
 
-    private static void StartExactLayerWork(ExactLayerState state, ExactLayerKey key, ObjectOverviewPlan overview,
+    /// <summary>At most this many changed chunks are patched; more is a different view, drawn directly as before.</summary>
+    private const int ExactPatchMaximumChunks = 16;
+
+    private static bool DrawExactPatched(SKCanvas canvas, MapDocument document, ExactLayerState state, ExactLayerKey key,
+        ExactLayerChunks chunks, ObjectOverviewPlan plan, int zoomBucket, IReadOnlyList<SceneObject> extras, RenderOptions options)
+    {
+        if (state.Ready is not { } shown || !shown.Key.Matrix.Equals(key.Matrix) || shown.Key.Extent != key.Extent
+            || !ReferenceEquals(shown.Key.Foreground, key.Foreground)) return false;
+        WorldBounds? dirty = null;
+        var changed = 0;
+        foreach (var (cell, now) in chunks.Map)
+        {
+            if (shown.Chunks.Map.TryGetValue(cell, out var was) && was.Hash == now.Hash) continue;
+            if (++changed > ExactPatchMaximumChunks) return false;
+            dirty = Union(dirty, Expand(ChunkBounds(cell), Math.Max(now.MaxSide, was.MaxSide)));
+        }
+        foreach (var (cell, was) in shown.Chunks.Map)
+        {
+            if (chunks.Map.ContainsKey(cell)) continue;
+            if (++changed > ExactPatchMaximumChunks) return false;
+            dirty = Union(dirty, Expand(ChunkBounds(cell), was.MaxSide));
+        }
+        if (shown.Chunks.ExtrasHash != chunks.ExtrasHash)
+        {
+            dirty = Union(dirty, shown.Chunks.ExtrasBounds);
+            dirty = Union(dirty, chunks.ExtrasBounds);
+        }
+        if (dirty is not { } area) return false;
+        var device = key.Matrix.MapRect(ToRect(area));
+        var patch = new SKRectI((int)Math.Floor(device.Left), (int)Math.Floor(device.Top), (int)Math.Ceiling(device.Right), (int)Math.Ceiling(device.Bottom));
+        // The previous layer outside the patch, pixel for pixel.
+        canvas.Save();
+        canvas.ResetMatrix();
+        canvas.ClipRect(patch, SKClipOperation.Difference);
+        canvas.DrawImage(shown.Image, shown.Key.Extent.Left, shown.Key.Extent.Top);
+        canvas.Restore();
+        // Inside the patch: every exact object that touches it, in the layer's order, drawn as the layer draws them.
+        canvas.Save();
+        canvas.ResetMatrix();
+        canvas.ClipRect(patch);
+        canvas.SetMatrix(key.Matrix);
+        var selected = extras.Where(extra => SceneGeometry.BoundsOf(extra).Intersects(area)).ToArray();
+        var objects = GatherExactObjects(plan, zoomBucket, area, selected);
+        foreach (var sceneObject in objects) DrawObject(canvas, sceneObject, document.StampForeground, options);
+        canvas.Restore();
+        if (options.Stats is { } stats) { stats.OverviewExactPatched += objects.Length; stats.DrawCalls += objects.Length + 1; }
+        RecordExactLayer(options, 3);
+        return true;
+    }
+
+    private static WorldBounds ChunkBounds((int X, int Y) cell) => new(cell.X * OverviewChunkSize, cell.Y * OverviewChunkSize,
+        (cell.X + 1) * OverviewChunkSize, (cell.Y + 1) * OverviewChunkSize);
+
+    private static WorldBounds? Union(WorldBounds? a, WorldBounds? b) => a is not { } x ? b : b is not { } y ? x
+        : new WorldBounds(Math.Min(x.Left, y.Left), Math.Min(x.Top, y.Top), Math.Max(x.Right, y.Right), Math.Max(x.Bottom, y.Bottom));
+
+    private static void StartExactLayerWork(ExactLayerState state, ExactLayerKey key, ExactLayerChunks chunks, ObjectOverviewPlan overview,
         int zoomBucket, WorldBounds area, IReadOnlyList<SceneObject> extras, IStampImageSource stamps, Action refine,
         RenderOptions options)
     {
@@ -193,7 +268,7 @@ public static partial class SceneRenderer
         if (state.Work is not { } work || work.Failed || work.Key != key && (!options.CameraMoving || work.Rastered))
         {
             if (stamps.CreatePreparationPlan() is not { } created) { state.FrameOnly = key; return; }
-            work = state.Work = new ExactLayerWork(key, created);
+            work = state.Work = new ExactLayerWork(key, created, chunks);
             var selected = extras.ToArray();
             var foreground = key.Foreground;
             var recordOptions = options.ForBackgroundTile(new ExactRequestRecorder(), new RenderStats());
@@ -238,7 +313,7 @@ public static partial class SceneRenderer
         }
         var job = new ExactLayerJob
         {
-            Key = work.Key, Objects = list, Images = images, Final = ready, Ready = refine, Foreground = work.Key.Foreground,
+            Key = work.Key, Chunks = work.Chunks, Objects = list, Images = images, Final = ready, Ready = refine, Foreground = work.Key.Foreground,
             Options = options.ForBackgroundTile(images, new RenderStats()),
         };
         state.Job = job;
@@ -385,4 +460,8 @@ public static partial class SceneRenderer
 }
 
 /// <summary>A chunk's exact objects at one zoom bucket, their content hash, and whether the exact layer can carry them all.</summary>
-internal sealed record OverviewExactSet(SceneObject[] Objects, ulong Hash, bool Neutral);
+internal sealed record OverviewExactSet(SceneObject[] Objects, ulong Hash, bool Neutral)
+{
+    /// <summary>The longest side of its largest object: how far a change in this chunk can reach past its border.</summary>
+    public double MaxSide { get; } = Objects.Length == 0 ? 0 : Objects.Max(o => Math.Max(o.Width, o.Height));
+}

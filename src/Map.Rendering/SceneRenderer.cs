@@ -180,10 +180,13 @@ public sealed class RenderStats
     /// <summary>Diagnostics: why a layer large enough for dense tiles was drawn object by object in this frame (null when it was not).</summary>
     public string? DenseSkip { get; set; }
     public int ExactObjects { get; set; }
-    /// <summary>Overview exact objects shown from their background screen layer this frame: 1 = the exact layer 1:1, 2 = an older one transformed.</summary>
+    /// <summary>Overview exact objects shown from their background screen layer this frame: 1 = the exact layer 1:1, 2 = an older one
+    /// transformed, 3 = the previous layer with the changed places of an edit drawn directly.</summary>
     public int OverviewExactLayer { get; set; }
     /// <summary>Background rasters of the overview exact layer started this frame.</summary>
     public int OverviewExactLayerStarted { get; set; }
+    /// <summary>Exact objects drawn directly into an edit's patch over the previous layer this frame.</summary>
+    public int OverviewExactPatched { get; set; }
     /// <summary>Time of the overview's exact objects on this thread: the layer copy or the direct draws with their preflight.</summary>
     public double OverviewExactMilliseconds { get; set; }
     public int OverviewObjects { get; set; }
@@ -278,6 +281,7 @@ public sealed class RenderStats
         ExactObjects = 0;
         OverviewExactLayer = 0;
         OverviewExactLayerStarted = 0;
+        OverviewExactPatched = 0;
         OverviewExactMilliseconds = 0;
         OverviewObjects = 0;
         OverviewChunks = 0;

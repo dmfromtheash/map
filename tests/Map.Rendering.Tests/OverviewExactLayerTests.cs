@@ -42,6 +42,10 @@ public sealed class OverviewExactLayerTests(ITestOutputHelper output)
         Assert.True(after.Complete, "the layer run did not settle");
         Assert.True(after.Exact >= 128, $"only {after.Exact} exact objects: the model does not reach the layer");
         Assert.Equal(after.Settled.Count, after.Copied);
+        // After an edit the settled frame keeps the previous layer and draws only the changed place directly.
+        Assert.Equal(3, after.EditKind);
+        Assert.True(after.EditPatched > 0 && after.EditPatched * 4 < after.Exact,
+            $"an edit patched {after.EditPatched} of {after.Exact} exact objects: the frame redraws far more than the changed place");
         // Source-over into a transparent layer and then over the chunks rounds in another order than drawing each
         // stamp over the chunks: a channel moves by 1-2/255, by 3-4 only where many translucent edges overlap
         // (2 000 000 objects: 118 of 921 600 pixels). A different image level or a missing stamp would be far more.
@@ -70,7 +74,12 @@ public sealed class OverviewExactLayerTests(ITestOutputHelper output)
     }
 
     private sealed record Result(List<double> Settled, List<double> Pan, List<double> Wheel, int SettleFrames, bool Complete,
-        int Exact, int Started, int Copied, byte[] Pixels, string Log, List<double>[] ExactMs, byte[]? Direct);
+        int Exact, int Started, int Copied, byte[] Pixels, string Log, List<double>[] ExactMs, byte[]? Direct)
+    {
+        public int EditKind { get; init; } = -1;
+        public int EditPatched { get; init; } = -1;
+        public double EditMs { get; init; } = double.NaN;
+    }
 
     private static Result Run(int count, int distinct, bool layers, bool finalSettle)
     {
@@ -109,6 +118,7 @@ public sealed class OverviewExactLayerTests(ITestOutputHelper output)
 
             var log = new List<string>();
             var moving = false;
+            int editKind = -1, editPatched = -1; var editMs = double.NaN;
             using var tiles = new ObjectOverviewCache(1024, 256L << 20);
             using var atlas = new ObjectOverviewCache();
             using var preparation = new SceneRenderer.OverviewPreparation(() => Volatile.Read(ref moving));
@@ -196,8 +206,26 @@ public sealed class OverviewExactLayerTests(ITestOutputHelper output)
                 using var bitmap = SKBitmap.FromImage(snapshot);
                 direct = bitmap.Bytes;
             }
+            // An edit on the complete fit view: ten large stamps placed near the centre (pack-5 live A/B 2026-11-15:
+            // place-10 p95 18 -> 378 ms, the settled frame drew every exact object one by one until the new layer landed).
+            {
+                Settle(centre, centre, fit);
+                var placed = Enumerable.Range(0, 10).Select(i =>
+                {
+                    var record = records[shas[i]];
+                    var width = 1200.0;
+                    return new SceneObject(ObjectId.New(), SceneObjectKind.Stamp, "Новый " + i, centre + i * 2500 - 12_000, centre - 4000 + i * 700,
+                        width, width * record.Height / record.Width, 15 * i, "#FFFFFFFF", "#00000000", 0, true, false) { Stamp = new StampStyle(record.Sha) };
+                }).ToArray();
+                document = new Map.Core.Editing.AddObjectsCommand(layer.Id, placed).Apply(document);
+                preparation.UpdateDocument(document, source, static () => { });
+                var editFrame = Frame(centre, centre, fit, false);
+                editKind = last.OverviewExactLayer; editPatched = last.OverviewExactPatched; editMs = last.OverviewExactMilliseconds;
+                log.Add($"edit frame: layer kind {editKind}, patched objects {editPatched} of {last.ExactObjects}, exact {editMs:F1} ms, frame {editFrame.Ms:F1} ms");
+                log.Add($"after edit settled={Settle(centre, centre, fit).Complete}");
+            }
             var started = 0;
-            var kinds = new int[3];
+            var kinds = new int[4];
             var directMs = 0.0;
             // A pan at fit: a quarter of the view over two seconds.
             var pan = new List<double>();
@@ -208,7 +236,7 @@ public sealed class OverviewExactLayerTests(ITestOutputHelper output)
                 Thread.Sleep(5);
             }
             log.Add($"pan frames direct/1:1/stand-in={kinds[0]}/{kinds[1]}/{kinds[2]}");
-            kinds = new int[3];
+            kinds = new int[4];
             Settle(centre, centre, fit);
             // Wheel out to fit from eight times closer (still the overview): six moving frames per notch.
             var wheel = new List<double>();
@@ -223,7 +251,8 @@ public sealed class OverviewExactLayerTests(ITestOutputHelper output)
             // Diagnostics only: after this wheel-out the fit view does not complete with or without the layer
             // (16 overview rasters wait in the preparation handoff that no frame takes), so the default run skips it.
             if (finalSettle) log.Add($"final settle={Settle(centre, centre, fit).Complete}");
-            return new Result(settled, pan, wheel, settle.Frames, settle.Complete, exact, started, copied, pixels, string.Join("; ", log), exactMs, direct);
+            return new Result(settled, pan, wheel, settle.Frames, settle.Complete, exact, started, copied, pixels, string.Join("; ", log), exactMs, direct)
+                { EditKind = editKind, EditPatched = editPatched, EditMs = editMs };
         }
         finally
         {
