@@ -21,6 +21,35 @@ public sealed class OverviewExactLayerTests(ITestOutputHelper output)
     private const double Canvas = 131_072;
 
     [Fact]
+    public void Exact_layers_do_not_delay_visible_readiness()
+    {
+        var previousQueue = SceneRenderer.DetailRasterQueue;
+        using var queue = new SceneRenderer.DetailWorkQueue(2);
+        SceneRenderer.DetailRasterQueue = queue;
+        try
+        {
+            // Run this comparison with DOTNET_PROCESSOR_COUNT=4 as well: two detail workers and two
+            // BackgroundWork slots, the budget of the owner's four-core machine.
+            Run(20_000, 100, false, false, readinessOnly: true);
+            Run(20_000, 100, true, false, readinessOnly: true);
+            var off = new List<double>(); var on = new List<double>();
+            for (var pair = 0; pair < 5; pair++)
+                foreach (var layers in pair % 2 == 0 ? new[] { false, true } : new[] { true, false })
+                {
+                    var result = Run(120_000, 1500, layers, false, readinessOnly: true);
+                    Assert.True(result.Complete);
+                    (layers ? on : off).Add(result.ReadyMs);
+                }
+            output.WriteLine($"CPU count={Environment.ProcessorCount}; detail workers=2; cold settled wall: layers off {Describe(off)} | on {Describe(on)}");
+            var ratio = on.Order().ElementAt(2) / off.Order().ElementAt(2);
+            output.WriteLine($"readiness on/off median ratio={ratio:F3}, worst ratio={on.Max() / off.Max():F3}");
+            Assert.True(ratio <= 1.25, $"exact layers delay readiness by {(ratio - 1) * 100:F1}%");
+            Assert.True(on.Max() <= off.Max() * 1.25, "exact layers delay the worst measured readiness by more than 25%");
+        }
+        finally { SceneRenderer.DetailRasterQueue = previousQueue; }
+    }
+
+    [Fact]
     public void Fit_view_copies_the_exact_layer_and_keeps_the_settled_pixels()
     {
         var bench = Environment.GetEnvironmentVariable("MAP_OVERVIEW_EXACT_BENCH") is { Length: > 0 } text
@@ -97,12 +126,13 @@ public sealed class OverviewExactLayerTests(ITestOutputHelper output)
         public int ZoomAfter { get; init; }
         public int ZoomFrames { get; init; }
         public double ZoomMs { get; init; }
+        public double ReadyMs { get; init; }
     }
 
     private sealed record EditFrame(int Kind, double Ms, int Direct);
     private sealed record EditResult(string Name, bool Complete, List<EditFrame> Frames, int MaxDifference, int ChangedPixels, int PatchDifference, int Patches);
 
-    private static Result Run(int count, int distinct, bool layers, bool finalSettle)
+    private static Result Run(int count, int distinct, bool layers, bool finalSettle, bool readinessOnly = false)
     {
         var previous = SceneRenderer.OverviewExactLayers;
         SceneRenderer.OverviewExactLayers = layers;
@@ -202,7 +232,10 @@ public sealed class OverviewExactLayerTests(ITestOutputHelper output)
                     var rendered = Frame(cx, cy, scale, false, synchronous);
                     frames?.Add(new(last.OverviewExactLayer, last.OverviewExactMilliseconds,
                         last.OverviewExactLayer == 0 ? last.ExactObjects : last.OverviewExactPatched));
-                    if (last.OverviewExactLayer == 3 && last.UnresolvedImages == 0 && !source.ImageRequestsPending)
+                    // One resident patch per edit is enough to check its clip; copying every frame's 3.5 MB
+                    // bitmap would add collection pauses to the very frame timings this test measures.
+                    if (patches is { Count: 0 } && last.OverviewExactLayer == 3
+                        && last.UnresolvedImages == 0 && !source.ImageRequestsPending)
                         patches?.Add(Pixels());
                     if (rendered.Complete) return (true, frame);
                     Thread.Sleep(5);
@@ -215,6 +248,9 @@ public sealed class OverviewExactLayerTests(ITestOutputHelper output)
             var fit = Height * .9 / Canvas; // 0.0049, as the live fit view
             var settle = Settle(centre, centre, fit);
             var exact = last.ExactObjects;
+            if (readinessOnly)
+                return new([], [], [], settle.Frames, settle.Complete, exact, 0, 0, [], string.Join("; ", log), [[], [], []], null)
+                    { ReadyMs = wall.Elapsed.TotalMilliseconds };
             // Refinement frames over the complete fit view (each one is what a refining frame redraws).
             var settled = new List<double>();
             List<double>[] exactMs = [[], [], []];

@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using Map.Core.Documents;
 using SkiaSharp;
@@ -56,27 +55,80 @@ public static partial class SceneRenderer
     private static readonly ConditionalWeakTable<ObjectOverviewCache, DetailRasterJobs> DetailRasterContexts = [];
 
     /// <summary>
-    /// Workers for every render context: ProcessorCount − 2 (at most 8), below normal priority, FIFO (tiles are
-    /// asked centre first). They build tile plans and raster tiles; nothing they touch belongs to a frame.
+    /// Workers for every render context: ProcessorCount − 2 (at most 8), below normal priority. Visible tile
+    /// work is FIFO (centre first); optional overview layers wait until visible work has drained.
     /// </summary>
     private static readonly int DetailRasterWorkers = Math.Clamp(Environment.ProcessorCount - 2, 1, 8);
-    private static readonly BlockingCollection<Action> DetailRasterQueue = StartDetailRasterWorkers();
+    internal static DetailWorkQueue DetailRasterQueue = new(DetailRasterWorkers);
 
-    private static void QueueDetailWork(Action work) => DetailRasterQueue.Add(work);
+    private static void QueueDetailWork(Action work, bool overviewLayer = false) => DetailRasterQueue.Add(work, overviewLayer);
 
-    private static BlockingCollection<Action> StartDetailRasterWorkers()
+    /// <summary>Two FIFO priorities. Idle workers leave the CPUs free while a visible raster is still running.</summary>
+    internal sealed class DetailWorkQueue : IDisposable
     {
-        var queue = new BlockingCollection<Action>();
-        for (var i = 0; i < DetailRasterWorkers; i++)
-            new Thread(() =>
+        private readonly object _gate = new();
+        private readonly Queue<Action> _visible = [], _layers = [];
+        private readonly Thread[] _threads;
+        private int _visibleRunning;
+        private bool _stopped;
+
+        internal DetailWorkQueue(int workers)
+        {
+            _threads = new Thread[workers];
+            for (var i = 0; i < workers; i++)
             {
-                foreach (var work in queue.GetConsumingEnumerable())
-                    try { work(); } catch (Exception ex) when (ex is not OutOfMemoryException) { }
-            })
+                _threads[i] = new Thread(Run)
+                {
+                    IsBackground = true, Priority = ThreadPriority.BelowNormal, Name = "Map detail tile raster " + i,
+                };
+                _threads[i].Start();
+            }
+        }
+
+        internal void Add(Action work, bool overviewLayer = false)
+        {
+            lock (_gate)
             {
-                IsBackground = true, Priority = ThreadPriority.BelowNormal, Name = "Map detail tile raster " + i,
-            }.Start();
-        return queue;
+                ObjectDisposedException.ThrowIf(_stopped, this);
+                (overviewLayer ? _layers : _visible).Enqueue(work);
+                Monitor.PulseAll(_gate);
+            }
+        }
+
+        private void Run()
+        {
+            while (true)
+            {
+                Action work;
+                bool visible;
+                lock (_gate)
+                {
+                    while (_visible.Count == 0 && (_layers.Count == 0 || _visibleRunning > 0))
+                    {
+                        if (_stopped && _layers.Count == 0) return;
+                        Monitor.Wait(_gate);
+                    }
+                    visible = _visible.Count > 0;
+                    work = (visible ? _visible : _layers).Dequeue();
+                    if (visible) _visibleRunning++;
+                }
+                try { work(); } catch (Exception ex) when (ex is not OutOfMemoryException) { }
+                finally
+                {
+                    lock (_gate)
+                    {
+                        if (visible) _visibleRunning--;
+                        Monitor.PulseAll(_gate);
+                    }
+                }
+            }
+        }
+
+        public void Dispose()
+        {
+            lock (_gate) { _stopped = true; Monitor.PulseAll(_gate); }
+            foreach (var thread in _threads) thread.Join();
+        }
     }
 
     /// <summary>

@@ -32,6 +32,12 @@ public static partial class SceneRenderer
         private bool _frameMoving;
         private long _openedAt;
 
+        /// <summary>Plans and visible chunks in flight or awaiting adoption; neighbour prefetch is optional.</summary>
+        internal bool VisibleWorkPending
+        {
+            get { lock (_gate) return _queued.Any(work => !work.Prefetch) || _ready.Keys.Any(work => !work.Prefetch); }
+        }
+
         /// <summary>Neighbour prefetch starts no sooner than this after the first layer of a map arrived.</summary>
         public double PrefetchAfterOpenMilliseconds { get; set; } = 1000;
         private long _startedDuringGesture, _prefetchDeferred, _gestureWaits;
