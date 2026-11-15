@@ -315,7 +315,38 @@ public sealed class PortableDerivedAssetTests : IDisposable
         File.WriteAllBytes(path, bytes);
         if (preserveTimestamp) File.SetLastWriteTimeUtc(path, timestamp);
         await using var reader = new StampDerivedAssetStore(catalog, Path.Combine(_root, "reader"));
+        // The portable file matches by path and length, so it is used at once; the background hash check must then
+        // reject it, and the asset must not resolve from the changed original (its SHA no longer matches).
+        await reader.Request(record.Sha256);
+        await WaitForTrust(reader);
+        Assert.Equal(1, reader.TrustStatistics.Rejected);
         Assert.Null(await reader.Request(record.Sha256));
+    }
+
+    /// <summary>Background trust checks finish within seconds; a test waits for them instead of a fixed sleep.</summary>
+    private static async Task WaitForTrust(StampDerivedAssetStore store)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(20);
+        while (store.TrustStatistics.Pending > 0 && DateTime.UtcNow < deadline) await Task.Delay(20);
+        Assert.Equal(0, store.TrustStatistics.Pending);
+    }
+
+    [Fact]
+    public async Task A_new_machine_uses_a_portable_file_without_hashing_the_original_before_the_first_request()
+    {
+        // CPU trace 2026-11-15 (2M objects, new cache): the first open spent 143 s reading and hashing originals inside
+        // the request path. The request must answer from the portable file at once; the hash check runs afterwards.
+        await using var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));
+        var record = ImportOwner(catalog);
+        await using (var builder = new StampDerivedAssetStore(catalog, Path.Combine(_root, "builder")))
+            await builder.BuildPortableAsync(record.Sha256);
+        await using var reader = new StampDerivedAssetStore(catalog, Path.Combine(_root, "new-machine"));
+        var header = await reader.Request(record.Sha256);
+        Assert.NotNull(header!.PortablePath);
+        Assert.Equal(0, reader.Builds);
+        Assert.Equal(1, reader.TrustStatistics.Queued);
+        await WaitForTrust(reader);
+        Assert.Equal(0, reader.TrustStatistics.Rejected);
     }
 
     [Fact]
@@ -331,6 +362,8 @@ public sealed class PortableDerivedAssetTests : IDisposable
         {
             Assert.NotNull((await reader.Request(record.Sha256))!.PortablePath);
             Assert.Equal(0, reader.Builds);
+            await WaitForTrust(reader);
+            Assert.Equal(0, reader.TrustStatistics.Rejected);
             Assert.True(reader.DiskBytes > 0);
         }
         Assert.Single(Directory.GetFiles(cache, "*.trust", SearchOption.AllDirectories));

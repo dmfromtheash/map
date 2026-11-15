@@ -18,6 +18,69 @@ public sealed partial class StampDerivedAssetStore
     private readonly Dictionary<string, FileStamp?> _rejectedPortable = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, PortableTrust> _portableTrust = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// Portable files whose sources still need the full hash check on this machine. Until 2026-11-15 the check ran
+    /// inline before the first use: on a new machine (or a new cache) the first open read and hashed every original
+    /// (CPU trace, 2M objects: 143 s in ReadEncodedFile; USER 1M: first open 66 s against 8.8 s warm). Now a portable
+    /// file whose sources match by path and length is used at once and verified here, one at a time, in the background
+    /// (stale-while-revalidate); a mismatch rejects it and the asset is rebuilt from its original.
+    /// </summary>
+    private readonly System.Threading.Channels.Channel<string> _trustQueue =
+        System.Threading.Channels.Channel.CreateUnbounded<string>(new() { SingleReader = true });
+    private readonly HashSet<string> _trustPending = new(StringComparer.OrdinalIgnoreCase);
+    private int _trustQueued, _trustRejected;
+
+    /// <summary>Background trust checks queued and rejected so far (tests and diagnostics).</summary>
+    public (int Queued, int Pending, int Rejected) TrustStatistics
+    {
+        get { lock (_requestsGate) return (Volatile.Read(ref _trustQueued), _trustPending.Count, Volatile.Read(ref _trustRejected)); }
+    }
+
+    private void QueueTrustVerification(string sha)
+    {
+        lock (_requestsGate)
+        {
+            if (_disposed || !_trustPending.Add(sha)) return;
+        }
+        Interlocked.Increment(ref _trustQueued);
+        if (!_trustQueue.Writer.TryWrite(sha)) lock (_requestsGate) _trustPending.Remove(sha);
+    }
+
+    private async Task TrustWork()
+    {
+        await foreach (var sha in _trustQueue.Reader.ReadAllAsync().ConfigureAwait(false))
+        {
+            try
+            {
+                if (_disposed || _catalog.Find(sha) is not { } record) continue;
+                var path = PortablePath(record);
+                PortableManifest manifest;
+                using (var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete))
+                    (manifest, _) = ReadPortableManifest(file);
+                if (!VerifyPortableSourcesNow(record, manifest)) RejectUntrustedPortable(sha, path, _catalog.SourcePath(record));
+            }
+            catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or JsonException or ArgumentException)
+            {
+                // The file went away or is unreadable: the next request reads its header again and decides.
+            }
+            finally { lock (_requestsGate) _trustPending.Remove(sha); }
+        }
+    }
+
+    private void RejectUntrustedPortable(string sha, string portablePath, string? originalPath)
+    {
+        var stamp = FileStamp.Read(portablePath);
+        lock (_requestsGate)
+        {
+            while (_rejectedPortable.Count >= _metadataCapacity) _rejectedPortable.Remove(_rejectedPortable.Keys.First());
+            _rejectedPortable[sha] = stamp;
+            _portableTrust.Remove(sha);
+        }
+        Interlocked.Increment(ref _trustRejected);
+        ReportFailure("portable trust " + sha, new InvalidDataException("Portable sources differ from the library originals."));
+        if (originalPath is not null) InvalidateFile(originalPath, cancelPixels: false);
+    }
+
     private string PortablePath(AssetRecord record) => Path.Combine(_catalog.RootFor(record), "derived", "v" + Version, record.Sha256.ToLowerInvariant() + ".mapderived");
 
     private bool IsRejectedPortable(string sha, string path)
@@ -158,6 +221,16 @@ public sealed partial class StampDerivedAssetStore
             RememberPortableTrust(record.Sha256, trust);
             return true;
         }
+        // Sources already match by path and length (PortableSourcesMatch): use the file now, prove it in the background.
+        QueueTrustVerification(record.Sha256);
+        return true;
+    }
+
+    private bool VerifyPortableSourcesNow(AssetRecord record, PortableManifest manifest)
+    {
+        var sources = PortableSources(record);
+        var path = Stem(record.Sha256) + ".trust";
+        PortableTrust? trust;
         // A portable file is not a machine-local proof of the source identity. Verify
         // the master once, and each ladder's exact bytes, without decoding any image.
         CountIo(ref _sourceVerifications);

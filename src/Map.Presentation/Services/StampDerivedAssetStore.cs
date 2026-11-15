@@ -171,7 +171,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
         _policy = maintenance ?? DerivedCacheMaintenancePolicy.Default;
         _janitor = CreateJanitor(diskBudgetBytes);
         _diskBudget = diskBudgetBytes ?? _policy.Budget.TotalBytes;
-        _workers = Task.WhenAll(Task.Run(Work), Task.Run(BuildWork), StartMaintenance());
+        _workers = Task.WhenAll(Task.Run(Work), Task.Run(BuildWork), StartMaintenance(), Task.Run(TrustWork));
     }
 
     public Task<Header?> Request(string sha)
@@ -934,7 +934,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
         lock (_requestsGate)
         {
             if (_disposed) return;
-            _disposed = true; _stop.Cancel(); _queue.Writer.TryComplete();
+            _disposed = true; _stop.Cancel(); _queue.Writer.TryComplete(); _trustQueue.Writer.TryComplete();
             StopMaintenance();
             Forget();
             lock (_watchers) { foreach (var watcher in _watchers.Values) watcher.Dispose(); _watchers.Clear(); }
