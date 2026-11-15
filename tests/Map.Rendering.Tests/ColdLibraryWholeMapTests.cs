@@ -24,6 +24,22 @@ public sealed class ColdLibraryWholeMapTests
     [ColdLibraryDefectFact]
     public void Pending_fit_frame_object_time_does_not_scale_with_the_document()
     {
+        double warmSmall;
+        using (var view = new WholeMapView(50_000, ready: true))
+        {
+            view.Settle();
+            warmSmall = Median(Enumerable.Range(0, 9).Select(_ => view.Frame("warm-time")).ToArray());
+            view.AssertVisible();
+        }
+        double warmLarge;
+        using (var view = new WholeMapView(200_000, ready: true))
+        {
+            view.Settle();
+            warmLarge = Median(Enumerable.Range(0, 9).Select(_ => view.Frame("warm-time")).ToArray());
+            view.AssertVisible();
+        }
+        Console.WriteLine($"OVGUARD warm scaling 50000 -> 200000: objects median {warmSmall:F3} -> {warmLarge:F3} ms");
+        AssertTimeBound(warmSmall, warmLarge);
         double small;
         using (var view = new WholeMapView(50_000)) small = Median(view.PendingFrames());
         double large;
@@ -31,8 +47,7 @@ public sealed class ColdLibraryWholeMapTests
         Console.WriteLine($"OVGUARD scaling 50000 -> 200000: objects median {small:F3} -> {large:F3} ms; ratio={large / Math.Max(.001, small):F2}");
         // Nine post-adoption samples, full JIT, a ratio plus 0.1 ms scheduling allowance.
         // The deterministic draw-count guard above is the primary complexity check.
-        Assert.True(large <= small * 2 + .1,
-            $"4x objects cost {small:F3} -> {large:F3} ms on the frame (limit 2x + 0.1 ms)");
+        AssertTimeBound(small, large);
     }
 
     [Theory]
@@ -77,6 +92,9 @@ public sealed class ColdLibraryWholeMapTests
     }
 
     private static double Median(FrameResult[] frames) => frames.Select(f => f.Stats.ObjectsMilliseconds).Order().ElementAt(frames.Length / 2);
+
+    private static void AssertTimeBound(double small, double large) => Assert.True(large <= small * 2 + .1,
+        $"4x objects cost {small:F3} -> {large:F3} ms on the frame (limit 2x + 0.1 ms)");
 
     internal sealed record FrameResult(RenderStats Stats, int FrameImageLookups)
     {
@@ -157,7 +175,7 @@ public sealed class ColdLibraryWholeMapTests
             finally { _tiles.EndFrame(); _atlas.EndFrame(); }
             Assert.Null(_preparation.Statistics.Error);
             var result = new FrameResult(stats, Images.FrameImageLookups);
-            if (log) Console.WriteLine($"OVGUARD {Count} {phase} frame={++_frame}: drawn={stats.ObjectsDrawn} overview={stats.OverviewObjects} exact={stats.ExactObjects} direct={result.DirectObjects} calls={stats.DrawCalls} layer={stats.OverviewExactLayer} started={stats.OverviewExactLayerStarted} objectsMs={stats.ObjectsMilliseconds:F3} exactMs={stats.OverviewExactMilliseconds:F3} pending={stats.DetailTilesPending} unresolved={stats.UnresolvedImages} chunks={stats.OverviewChunks} frameLookups={result.FrameImageLookups}");
+            if (log) Console.WriteLine($"OVGUARD {Count} {phase} frame={++_frame}: drawn={stats.ObjectsDrawn} overview={stats.OverviewObjects} exact={stats.ExactObjects} direct={result.DirectObjects} calls={stats.DrawCalls} layer={stats.OverviewExactLayer} kept={stats.LayerImagesKept} started={stats.OverviewExactLayerStarted} plans={Images.PreparationPlans} objectsMs={stats.ObjectsMilliseconds:F3} exactMs={stats.OverviewExactMilliseconds:F3} pending={stats.DetailTilesPending} unresolved={stats.UnresolvedImages} chunks={stats.OverviewChunks} frameLookups={result.FrameImageLookups}");
             return result;
         }
 
@@ -165,9 +183,9 @@ public sealed class ColdLibraryWholeMapTests
         {
             // Let the real worker build the plan and hand off all visible chunks while the
             // metadata and pixels remain pending. Then measure repeated still/refinement frames.
-            WaitFrames("cold-adopt", frame => frame.Stats.ObjectsDrawn == Count &&
-                _preparation.Statistics.Idle && _preparation.Statistics.Queued == 0 &&
-                _preparation.Statistics.ReadyImages == 0);
+            // All objects must be represented before sampling. Optional neighbour prefetch
+            // need not be idle: the canvas also continues framing while that work runs.
+            WaitFrames("cold-adopt", frame => frame.Stats.ObjectsDrawn == Count);
             Assert.False(Images.Ready);
             Assert.True(Volatile.Read(ref _requests) > 0);
             return Enumerable.Range(0, 9).Select(_ => Frame("pending")).ToArray();
@@ -225,12 +243,14 @@ public sealed class ColdLibraryWholeMapTests
         private int _ready;
         private int _frameThread;
         private int _frameLookups;
+        private int _plans;
         private long _unresolved;
         public bool Ready => Volatile.Read(ref _ready) != 0;
         public long? OverviewColorRevision => Ready ? 1 : 0;
         public bool ImageRequestsPending => !Ready;
         public long UnresolvedRequestVersion => Volatile.Read(ref _unresolved);
         public int FrameImageLookups => Volatile.Read(ref _frameLookups);
+        public int PreparationPlans => Volatile.Read(ref _plans);
 
         public PendingMountains(bool ready)
         {
@@ -256,7 +276,11 @@ public sealed class ColdLibraryWholeMapTests
             return Ready;
         }
         public bool PrepareForPixelSizes(IEnumerable<(string Sha256, double Width, double Height)> stamps, Action ready) => Ready;
-        public IStampPreparationPlan CreatePreparationPlan() => new Plan(this);
+        public IStampPreparationPlan CreatePreparationPlan()
+        {
+            Interlocked.Increment(ref _plans);
+            return new Plan(this);
+        }
         public void Arrive()
         {
             Volatile.Write(ref _ready, 1);
@@ -311,7 +335,7 @@ public sealed class ColdLibraryDefectFactAttribute : FactAttribute
     public ColdLibraryDefectFactAttribute()
     {
         if (Environment.GetEnvironmentVariable("MAP_OVGUARD_RED") != "1")
-            Skip = "defect: cold metadata leaves O(exact objects) frame work; SceneRenderer.cs:6513";
+            Skip = "defect: cold metadata leaves O(exact objects) frame work; SceneRenderer.cs:6521";
     }
 }
 
@@ -320,6 +344,6 @@ public sealed class ColdLibraryHugeFactAttribute : FactAttribute
     public ColdLibraryHugeFactAttribute()
     {
         if (Environment.GetEnvironmentVariable("MAP_OVGUARD_HUGE") != "1")
-            Skip = "defect: million-object cold fit direct draws, opt in with MAP_OVGUARD_HUGE=1; SceneRenderer.cs:6513";
+            Skip = "defect: million-object cold fit direct draws, opt in with MAP_OVGUARD_HUGE=1; SceneRenderer.cs:6521";
     }
 }

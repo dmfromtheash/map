@@ -34,7 +34,8 @@ public sealed class WholeMapOpenLifetimeTests
     }
 
     // A distinct stack frame prevents JIT local lifetimes from keeping the last opening alive
-    // across the caller's full GC. The document deliberately stays the same through all opens.
+    // across the caller's full GC. The canonical document stays alive; each open below
+    // materializes fresh instances of its objects, preserving the persisted content and IDs.
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static (WeakReference[] Owners, int LiveEntries, int ClosedEntries) OpenRenderClose(MapDocument document)
     {
