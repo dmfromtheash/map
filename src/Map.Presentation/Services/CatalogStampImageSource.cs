@@ -220,16 +220,32 @@ public sealed partial class CatalogStampImageSource(
     public sealed record MipSelectionDiagnostic(string Sha, double RequestedWidth, double RequestedHeight,
         int ImageWidth, int ImageHeight, string Path, long Frame);
     private readonly Dictionary<string, MipSelectionDiagnostic> _diagnosticSelections = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, long> _diagnosticSelectionOrders = new(StringComparer.OrdinalIgnoreCase);
+    private readonly System.Collections.Concurrent.ConcurrentQueue<(MipSelectionDiagnostic Selection, long Order)> _busySelections = new();
+    private long _diagnosticSelectionSerial;
     private long _diagnosticFrame;
     public bool CaptureMipSelections { get; set; }
     public object ReadMipSelections()
     {
-        lock (_gate) return new { Frame = _diagnosticFrame, LastPerSha = _diagnosticSelections.Values.ToArray() };
+        lock (_gate)
+        {
+            while (_busySelections.TryDequeue(out var item))
+                if (item.Order > _diagnosticSelectionOrders.GetValueOrDefault(item.Selection.Sha))
+                {
+                    _diagnosticSelections[item.Selection.Sha] = item.Selection;
+                    _diagnosticSelectionOrders[item.Selection.Sha] = item.Order;
+                }
+            return new { Frame = _diagnosticFrame, LastPerSha = _diagnosticSelections.Values.ToArray() };
+        }
     }
     private SKImage? ObserveMipSelection(string sha, double width, double height, SKImage? image, string path)
     {
         if (CaptureMipSelections)
+        {
+            var order = Interlocked.Increment(ref _diagnosticSelectionSerial);
             _diagnosticSelections[sha] = new(sha, width, height, image?.Width ?? 0, image?.Height ?? 0, path, _diagnosticFrame);
+            _diagnosticSelectionOrders[sha] = order;
+        }
         return image;
     }
 
@@ -679,6 +695,7 @@ public sealed partial class CatalogStampImageSource(
         _frameBeganUnderGate = false;
         _frameAnswersRotated = false;
         _requestedFrameWork.Clear();
+        if (CaptureMipSelections) Interlocked.Increment(ref _diagnosticFrame);
         Volatile.Write(ref _frameThread, Environment.CurrentManagedThreadId);
         if (!Monitor.TryEnter(_gate, FrameGateWaitMilliseconds))
         {
@@ -701,7 +718,6 @@ public sealed partial class CatalogStampImageSource(
             _derived?.ObserveCanvasThread();
             _validatedThisFrame.Clear();
             _wantedMips.Clear();
-            if (CaptureMipSelections) _diagnosticFrame++;
             if (_derived is not null)
                 foreach (var sha in _derived.TakeInvalidated()) InvalidateDerived(sha);
             // Consume completed work even if the camera moved away from its request. Otherwise

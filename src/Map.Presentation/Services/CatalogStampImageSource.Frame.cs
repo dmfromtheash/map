@@ -93,11 +93,26 @@ public sealed partial class CatalogStampImageSource
             // The wheel changes pixel dimensions every frame. Keep a resident picture even when this exact
             // request was not made before; its pending bit prevents provisional pixels becoming a kept tile.
             if (_currentFallbacks.TryGetValue(key.Sha, out var current) && _currentFrame.TryGetValue(current, out var held)
-                && held.Revision == SourceRevision) return held;
+                && held.Revision == SourceRevision) return ObserveBusySelection(key, held);
             if (_previousFallbacks.TryGetValue(key.Sha, out var previous) && _previousFrame.TryGetValue(previous, out held)
-                && held.Revision == SourceRevision) return held;
+                && held.Revision == SourceRevision) return ObserveBusySelection(key, held);
         }
-        return answer.Revision == SourceRevision ? answer : default;
+        return ObserveBusySelection(key, answer.Revision == SourceRevision ? answer : default);
+    }
+
+    private FrameAnswer ObserveBusySelection(FrameKey key, FrameAnswer answer)
+    {
+        if (CaptureMipSelections && key.Query is FrameQuery.Pixels or FrameQuery.Ready)
+        {
+            // The source gate is busy: publish diagnostics without touching its guarded dictionary.
+            // Orders prevent this deferred observation overwriting a later ordinary lookup when read.
+            var path = key.Query == FrameQuery.Pixels ? "exact-request/frame-resident"
+                : answer.Image is null ? "ready-missing/frame-resident" : "ready-fallback/frame-resident";
+            var selection = new MipSelectionDiagnostic(key.Sha, key.Width, key.Height, answer.Image?.Width ?? 0,
+                answer.Image?.Height ?? 0, path, Interlocked.Read(ref _diagnosticFrame));
+            _busySelections.Enqueue((selection, Interlocked.Increment(ref _diagnosticSelectionSerial)));
+        }
+        return answer;
     }
 
     private void RememberFrameFallback(FrameKey key, FrameAnswer answer)
