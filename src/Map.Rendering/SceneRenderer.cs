@@ -4173,8 +4173,12 @@ public static partial class SceneRenderer
         using var ownedPaint = scratch is null
             ? new SKPaint { IsAntialias = true, BlendMode = SKBlendMode.SrcOver } : null;
         var paint = scratch?.Paint ?? ownedPaint!;
+        // A magnified image never samples its mips: asking for them made the GPU build a mip chain for each large
+        // image as it was uploaded - 58 stamps at 1600 % took 160-220 ms per frame (PC ladder 100 000, 2026-11-15).
+        var device = canvas.TotalMatrix;
+        var magnified = objects[start].Width * Math.Sqrt(device.ScaleX * device.ScaleX + device.SkewY * device.SkewY) >= image!.Width;
         canvas.DrawAtlas(image!, sources, transforms, colors, SKBlendMode.Modulate,
-            new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear), paint);
+            new SKSamplingOptions(SKFilterMode.Linear, magnified ? SKMipmapMode.None : SKMipmapMode.Linear), paint);
         if (options.Stats is { } stats)
         {
             stats.DrawCalls++; stats.StampAtlasBatches++; stats.ObjectsDrawn += count; stats.ExactObjects += count;
