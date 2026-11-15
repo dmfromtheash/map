@@ -227,6 +227,25 @@ public sealed partial class EditorViewModel
     }
 
     /// <summary>Re-runs the current query. Metadata only: no original image is opened here.</summary>
+    /// <summary>
+    /// The catalog lives for the whole session, an editor only while its map is open, so the editor listens weakly.
+    /// Static on purpose: a lambda written inside the constructor shares the constructor's closure, which other
+    /// lambdas there tie to <c>this</c>; the "weak" handler then held the editor strongly and every opened map
+    /// stayed in memory with its view and caches (live 2026-11-15: +~60 MiB per open, heap dump root
+    /// AssetCatalog -> handler -> constructor closure -> editor -> canvas -> view).
+    /// </summary>
+    private static void SubscribeToMountsWeakly(AssetCatalog catalog, EditorViewModel editor)
+    {
+        var self = new WeakReference<EditorViewModel>(editor);
+        EventHandler? handler = null;
+        handler = (_, _) =>
+        {
+            if (self.TryGetTarget(out var target)) target.OnDriveLibrariesChanged();
+            else catalog.MountsChanged -= handler;
+        };
+        catalog.MountsChanged += handler;
+    }
+
     /// <summary>A drive library was attached or removed: its cards appear or go, its pictures are looked for again.</summary>
     private void OnDriveLibrariesChanged()
     {
