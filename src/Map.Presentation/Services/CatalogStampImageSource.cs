@@ -693,6 +693,9 @@ public sealed class CatalogStampImageSource(
         Enter();
         _latePixels.RemoveWhere(key => string.Equals(key.Sha, sha, StringComparison.OrdinalIgnoreCase));
         _overviewColors.Remove(sha); _workingDimensions.Remove(sha); _resolved.Remove(sha);
+        _cacheableMissing.RemoveWhere(key => string.Equals(key.Sha, sha, StringComparison.OrdinalIgnoreCase));
+        _cacheableMissingShas.Remove(sha);
+        _derived?.SetCacheableMissing(sha, false);
         foreach (var key in _pixelFailures.Keys.Where(key => key.StartsWith(sha + "#", StringComparison.OrdinalIgnoreCase)
             || key.StartsWith(sha + "@", StringComparison.OrdinalIgnoreCase)).ToArray())
         { _pixelFailures.Remove(key); _pixelRetryAt.Remove(key); _decodeFailed.Remove(key); }

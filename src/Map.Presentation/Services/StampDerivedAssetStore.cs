@@ -35,6 +35,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
     private readonly ConcurrentDictionary<string, TaskCompletionSource<Header?>> _requests = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, (int Attempts, long RetryAt)> _failedHeaders = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, byte> _quietMissing = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _hintRetries = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, SKColor> _deliveredPreviews = new(StringComparer.OrdinalIgnoreCase);
     private readonly TimeProvider _retryClock;
     internal void SetCacheableMissing(string sha, bool missing)
@@ -182,6 +183,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
             if (_disposed) return Task.FromResult<Header?>(null);
             if (_requests.TryGetValue(sha, out var existing))
             {
+                if (!existing.Task.IsCompleted) return existing.Task;
                 if (!_failedHeaders.TryGetValue(sha, out var failed) || _retryClock.GetUtcNow().ToUnixTimeMilliseconds() < failed.RetryAt) return existing.Task;
                 _requests.TryRemove(sha, out _); _previews.TryRemove(sha, out _);
             }
@@ -221,6 +223,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
             Interlocked.Increment(ref _generation);
             _requests.Clear(); _previews.Clear(); _completedHeaders.Clear(); _failedHeaders.Clear();
             _quietMissing.Clear(); _deliveredPreviews.Clear();
+            _hintRetries.Clear();
             _portableTrust.Clear(); _rejectedPortable.Clear();
             Interlocked.Increment(ref _overviewColorRevision);
             foreach (var request in _mips.Values) Retire(request);
@@ -249,11 +252,14 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
         // A recovered miss is announced once by the image source's missing revision; waking the
         // canvas here as well would draw the same recovery twice.
         var recovered = false;
+        var hintedRecovery = false;
         lock (_requestsGate)
         {
             if (_requests.TryGetValue(sha, out var active) && ReferenceEquals(active, completion))
             {
                 recovered = header is not null && _failedHeaders.ContainsKey(sha);
+                hintedRecovery = _hintRetries.Remove(sha) && header is not null;
+                if (hintedRecovery) _invalidated[sha] = 0;
                 if (header is null)
                 {
                     var attempts = _failedHeaders.GetValueOrDefault(sha).Attempts + 1;
@@ -270,6 +276,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
         }
         completion.TrySetResult(header);
         OverviewColorChanged(header is not null && !recovered);
+        if (hintedRecovery) SourceChanged?.Invoke();
     }
 
     public Task<Mip> RequestMip(Header header, int level) => RequestPixels(header, 0, level);
@@ -618,19 +625,24 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
         if (_disposed || !_watchedFiles.TryGetValue(path, out var sha)) return;
         lock (_requestsGate)
         {
-            // File events are only hints for terminal misses. A successful read by the
-            // slow retry confirms recovery; repeated events must not wake the canvas.
+            // A hint permits an immediate read, but only a successful read confirms recovery.
+            // Keep the attempt count so repeated hints for a missing file do not wake the canvas.
             var quiet = _quietMissing.ContainsKey(sha)
                 || _failedHeaders.TryGetValue(sha, out var failure) && failure.Attempts >= 4;
             Interlocked.Increment(ref _generation);
             _requests.TryRemove(sha, out _); _previews.TryRemove(sha, out _);
-            if (!quiet) _failedHeaders.TryRemove(sha, out _);
+            if (_failedHeaders.TryGetValue(sha, out var failed)) _failedHeaders[sha] = (failed.Attempts, 0);
             if (cancelPixels)
                 foreach (var key in _mips.Keys.Where(key => string.Equals(key.Sha, sha, StringComparison.OrdinalIgnoreCase)))
                     if (_mips.TryRemove(key, out var request))
                     { Interlocked.Decrement(ref _journalPixels); Retire(request); }
             SignalCapacity();
-            if (quiet) return;
+            if (quiet)
+            {
+                _hintRetries.Add(sha);
+                Request(sha); // Metadata work stays on the worker, including the existence check.
+                return;
+            }
             _deliveredPreviews.TryRemove(sha, out _);
             _invalidated[sha] = 0;
         }
