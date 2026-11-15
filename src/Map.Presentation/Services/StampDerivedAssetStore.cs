@@ -65,8 +65,8 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
     private long _overviewColorRevision;
     public long OverviewColorRevision => Interlocked.Read(ref _overviewColorRevision);
 
-    // A miss leaves the colour unknown, so the canvas has nothing new to draw: it only bumps the
-    // revision (the overview re-reads which misses are now final) without waking a frame.
+    // A miss without a remembered colour has nothing new to draw: bump the revision without
+    // waking a frame. Removing a colour already shown by the overview must still wake it.
     private void OverviewColorChanged(bool colorArrived = true)
     {
         Interlocked.Increment(ref _overviewColorRevision);
@@ -254,12 +254,13 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
         // canvas here as well would draw the same recovery twice.
         var recovered = false;
         var saveColors = false;
+        var colorRemoved = false;
         lock (_requestsGate)
         {
             if (!_disposed && _requests.TryGetValue(sha, out var active) && ReferenceEquals(active, completion))
             {
                 if (header is not null) saveColors = RememberColor(sha, header);
-                else ForgetColor(sha);
+                else colorRemoved = ForgetColor(sha);
                 recovered = header is not null && _failedHeaders.ContainsKey(sha);
                 if (header is null)
                 {
@@ -278,7 +279,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
             completion.TrySetResult(header);
         }
         if (saveColors) SaveKnownColors();
-        OverviewColorChanged(header is not null && !recovered);
+        OverviewColorChanged(colorRemoved || header is not null && !recovered);
     }
 
     public Task<Mip> RequestMip(Header header, int level) => RequestPixels(header, 0, level);

@@ -75,9 +75,11 @@ public sealed partial class StampDerivedAssetStore
             || System.Diagnostics.Stopwatch.GetElapsedTime(Interlocked.Read(ref _colorsSavedAt)).TotalSeconds >= 5;
     }
 
-    private void ForgetColor(string sha)
+    private bool ForgetColor(string sha)
     {
-        if (_knownColors.TryRemove(sha, out _)) Interlocked.Increment(ref _colorsUnsaved);
+        if (!_knownColors.TryRemove(sha, out _)) return false;
+        Interlocked.Increment(ref _colorsUnsaved);
+        return true;
     }
 
     private static string ColorSourceStamp(FileStamp? original, FileStamp? working) =>

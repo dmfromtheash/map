@@ -15,6 +15,24 @@ public sealed class StampDerivedAssetStoreColorTests : IDisposable
     private string Colors => Path.Combine(Cache, "v1", "overview-colors.bin");
 
     [Fact]
+    public async Task Header_failure_wakes_the_view_when_it_removes_a_visible_remembered_color()
+    {
+        await using var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));
+        var (record, _) = ColorCacheFixture.Seed(catalog, Cache);
+        await using (var writer = Store(catalog)) Assert.NotNull(await writer.Request(record.Sha256));
+        await using var store = Store(catalog);
+        await Private<Task>(store, "_colorValidation");
+        Assert.NotNull(store.KnownColor(record.Sha256));
+        var notices = 0;
+        store.OverviewChanged = () => Interlocked.Increment(ref notices);
+        var completion = new TaskCompletionSource<StampDerivedAssetStore.Header?>();
+        Private<ConcurrentDictionary<string, TaskCompletionSource<StampDerivedAssetStore.Header?>>>(store, "_requests")[record.Sha256] = completion;
+        Call(store, "CompleteHeader", record.Sha256, completion, null);
+        Assert.Null(store.KnownColor(record.Sha256));
+        Assert.Equal(1, Volatile.Read(ref notices));
+    }
+
+    [Fact]
     public async Task Remembered_source_validation_notifies_outside_the_request_gate()
     {
         await using var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));
