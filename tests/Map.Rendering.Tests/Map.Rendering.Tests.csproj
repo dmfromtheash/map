@@ -21,10 +21,12 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Map.Core\Map.Core.csproj" />
     <ProjectReference Include="..\..\src\Map.Rendering\Map.Rendering.csproj" />
+    <ProjectReference Include="..\..\src\Map.Presentation\Map.Presentation.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <Compile Include="..\Shared\FixedWorkingMemory.cs" Link="Shared\FixedWorkingMemory.cs" />
+    <Compile Include="..\Shared\ColorCacheFixture.cs" Link="Shared\ColorCacheFixture.cs" />
   </ItemGroup>
 
 </Project>

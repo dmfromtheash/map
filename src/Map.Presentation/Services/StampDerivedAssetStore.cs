@@ -65,8 +65,8 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
     private long _overviewColorRevision;
     public long OverviewColorRevision => Interlocked.Read(ref _overviewColorRevision);
 
-    // A miss leaves the colour unknown, so the canvas has nothing new to draw: it only bumps the
-    // revision (the overview re-reads which misses are now final) without waking a frame.
+    // A miss without a remembered colour has nothing new to draw: bump the revision without
+    // waking a frame. Removing a colour already shown by the overview must still wake it.
     private void OverviewColorChanged(bool colorArrived = true)
     {
         Interlocked.Increment(ref _overviewColorRevision);
@@ -128,6 +128,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
     public sealed record Mip(byte[]? Pixels, int Width, int Height, bool Reserved, bool Cancelled = false,
         SKImage? Image = null, bool LargeReserved = false);
     private readonly Task _workers;
+    private readonly Task _colorValidation;
     private Task? _shutdown;
     private readonly ConcurrentQueue<Task> _retirements = new();
     public Task Completion => _shutdown ?? _workers;
@@ -172,7 +173,9 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
         _janitor = CreateJanitor(diskBudgetBytes);
         _diskBudget = diskBudgetBytes ?? _policy.Budget.TotalBytes;
         LoadKnownColors();
-        _workers =Task.WhenAll(Task.Run(Work), Task.Run(BuildWork), StartMaintenance(), Task.Run(TrustWork));
+        _colorValidation = Task.Run(ValidateKnownColorSources);
+        _workers = Task.WhenAll(Task.Run(Work), Task.Run(BuildWork), StartMaintenance(), Task.Run(TrustWork),
+            _colorValidation);
     }
 
     public Task<Header?> Request(string sha)
@@ -250,10 +253,14 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
         // A recovered miss is announced once by the image source's missing revision; waking the
         // canvas here as well would draw the same recovery twice.
         var recovered = false;
+        var saveColors = false;
+        var colorRemoved = false;
         lock (_requestsGate)
         {
-            if (_requests.TryGetValue(sha, out var active) && ReferenceEquals(active, completion))
+            if (!_disposed && _requests.TryGetValue(sha, out var active) && ReferenceEquals(active, completion))
             {
+                if (header is not null) saveColors = RememberColor(sha, header);
+                else colorRemoved = ForgetColor(sha);
                 recovered = header is not null && _failedHeaders.ContainsKey(sha);
                 if (header is null)
                 {
@@ -268,11 +275,11 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
                     if (_requests.TryGetValue(oldest.Sha, out var current) && ReferenceEquals(current, oldest.Completion))
                     { _requests.TryRemove(oldest.Sha, out _); _previews.TryRemove(oldest.Sha, out _); }
             }
+            else header = null; // A retired header must not resurrect or erase a newer colour.
+            completion.TrySetResult(header);
         }
-        if (header is not null && !_disposed) RememberColor(sha, header.Color);
-        else if (header is null) ForgetColor(sha); // a missing or changed source is not shown with its old colour next time
-        completion.TrySetResult(header);
-        OverviewColorChanged(header is not null && !recovered);
+        if (saveColors) SaveKnownColors();
+        OverviewColorChanged(colorRemoved || header is not null && !recovered);
     }
 
     public Task<Mip> RequestMip(Header header, int level) => RequestPixels(header, 0, level);
@@ -616,11 +623,12 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
 
     private void FileChanged(string path) => InvalidateFile(path, cancelPixels: true);
 
-    private void InvalidateFile(string path, bool cancelPixels)
+    private void InvalidateFile(string path, bool cancelPixels, KnownOverviewColor? expectedColor = null)
     {
         if (_disposed || !_watchedFiles.TryGetValue(path, out var sha)) return;
         lock (_requestsGate)
         {
+            if (expectedColor is not null && (!_knownColors.TryGetValue(sha, out var known) || known != expectedColor)) return;
             // File events are only hints for terminal misses. A successful read by the
             // slow retry confirms recovery; repeated events must not wake the canvas.
             var quiet = _quietMissing.ContainsKey(sha)

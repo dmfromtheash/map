@@ -103,7 +103,7 @@ public sealed class CatalogStampImageSource(
             _derivedReady = ready;
             // Colours remembered from an earlier run are the overview at once; their headers are read only when
             // pixels are wanted (StampDerivedAssetStore.Colors).
-            shas = assets.Where(sha => !_overviewColors.ContainsKey(sha) && !TakeKnownColor(sha)).ToArray();
+            shas = assets.Where(sha => !TakeKnownColor(sha)).ToArray();
             foreach (var sha in shas) TrackMissingHeader(sha);
             shas = shas.Where(sha => !IsMissingCacheable(sha)).ToArray();
         }
@@ -353,7 +353,11 @@ public sealed class CatalogStampImageSource(
     /// <summary>Under _gate: a colour the derived store remembers becomes this source's overview colour.</summary>
     private bool TakeKnownColor(string sha256)
     {
-        if (_derived?.KnownColor(sha256) is not { } remembered) return false;
+        if (_derived?.KnownColor(sha256) is not { } remembered)
+        {
+            _overviewColors.Remove(sha256);
+            return false;
+        }
         _overviewColors[sha256] = remembered;
         return true;
     }
@@ -365,7 +369,6 @@ public sealed class CatalogStampImageSource(
             lock (_gate)
             {
                 if (_disposed) return null;
-                if (_overviewColors.TryGetValue(sha256, out var known)) return known;
                 if (TakeKnownColor(sha256)) return _overviewColors[sha256];
                 TrackMissingHeader(sha256);
                 if (IsMissingCacheable(sha256)) return null;
