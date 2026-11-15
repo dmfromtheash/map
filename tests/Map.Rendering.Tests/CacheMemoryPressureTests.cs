@@ -24,6 +24,7 @@ public sealed class CacheMemoryPressureTests
         return surface.Snapshot();
     }
 
+    // The on-all cache enforces its fixed product budget internally.
     private static ObjectOverviewCache Cache(WorkingMemoryBudget budget) =>
         new(1024, 16 * TileBytes, budget, memoryAccount: "object-overview")
         { PressureProtectedFrames = 3, PressureProtectedMilliseconds = 0 };
@@ -36,12 +37,16 @@ public sealed class CacheMemoryPressureTests
         cache.BeginFrame();
         for (var x = 0; x < 16; x++) cache.GetOrCreate(layer, x, 0, 1, 1, Count);
         cache.EndFrame();
+        var worst = 0d;
         for (var frame = 0; frame < frames; frame++)
         {
             cache.BeginFrame();
             for (var x = 0; x < 4; x++) cache.GetOrCreate(layer, x, 0, 1, 1, Count);
+            var started = System.Diagnostics.Stopwatch.GetTimestamp();
             cache.EndFrame();
+            worst = Math.Max(worst, System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds);
         }
+        Console.WriteLine($"PRESSURE budgetMs=2 frames={frames} worstEndFrameMs={worst:F3} remainingBytes={cache.Bytes}");
         builds += made;
     }
 
@@ -51,7 +56,7 @@ public sealed class CacheMemoryPressureTests
         using var cache = Cache(Budget(pressure: true));
         var layer = LayerId.New();
         var builds = 0;
-        Route(cache, layer, frames: 5, ref builds);
+        Route(cache, layer, frames: 12, ref builds);
         Assert.Equal(16, builds); // The visible tiles were never rebuilt.
         Assert.Equal(8 * TileBytes, cache.Bytes);
         for (var x = 0; x < 4; x++) Assert.True(cache.TryGet(layer, x, 0, 1, 1, out _), "visible " + x);
@@ -64,7 +69,7 @@ public sealed class CacheMemoryPressureTests
         using var cache = Cache(Budget(pressure: false));
         var layer = LayerId.New();
         var builds = 0;
-        Route(cache, layer, frames: 5, ref builds);
+        Route(cache, layer, frames: 12, ref builds);
         Assert.Equal(16 * TileBytes, cache.Bytes);
         Assert.Equal(0, cache.PressureTrims);
     }
@@ -87,7 +92,7 @@ public sealed class CacheMemoryPressureTests
         using var cache = Cache(Budget(pressure: true));
         var layer = LayerId.New();
         var builds = 0;
-        Route(cache, layer, frames: 5, ref builds);
+        Route(cache, layer, frames: 12, ref builds);
         Assert.False(cache.TryGet(layer, 4, 0, 1, 1, out _));
         cache.BeginFrame();
         var rebuilt = cache.GetOrCreate(layer, 4, 0, 1, 1, Tile);
@@ -109,7 +114,7 @@ public sealed class CacheMemoryPressureTests
         for (var x = 0; x < 15; x++) cache.GetOrCreate(layer, x, 0, 1, 1, Tile);
         cache.EndFrame();
         // Fallbacks are pinned in every open frame; let the protected frames pass without drawing.
-        for (var frame = 0; frame < 4; frame++) { cache.BeginFrame(); cache.EndFrame(); }
+        for (var frame = 0; frame < 12; frame++) { cache.BeginFrame(); cache.EndFrame(); }
         Assert.Equal(8 * TileBytes, cache.Bytes);
         Assert.True(cache.TryGet(layer, 0, 0, 0, 1, out _));
     }
