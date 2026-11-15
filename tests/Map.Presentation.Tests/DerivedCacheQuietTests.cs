@@ -130,6 +130,118 @@ public sealed class DerivedCacheQuietTests : IDisposable
         Assert.True(store.LastCleanup!.ScanComplete);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_running_pass_pauses_for_new_demand_and_resumes_or_accepts_an_explicit_command(bool explicitCommand)
+    {
+        await using var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));
+        var stale = StaleWrite();
+        // Enough distinct groups to put the pause inside the first scan, before any deletion.
+        for (var i = 1; i <= 50; i++)
+        {
+            var stem = Path.Combine(Derived, "v1", i.ToString("x64"));
+            File.WriteAllBytes(stem + ".json", new byte[10]);
+            File.WriteAllBytes(stem + ".pixels", new byte[20]);
+        }
+        var idle = 1;
+        var scanning = 0;
+        var paused = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        bool ViewIdle()
+        {
+            if (File.Exists(Path.Combine(Derived, DerivedCacheJanitor.LockFileName))
+                && Interlocked.Increment(ref scanning) == 20)
+            {
+                Volatile.Write(ref idle, 0);
+                paused.TrySetResult();
+            }
+            return Volatile.Read(ref idle) != 0;
+        }
+        await using var store = new StampDerivedAssetStore(catalog, Derived, maintenance: Policy(ViewIdle));
+        await paused.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await Task.Delay(100);
+        Assert.Equal(0, store.Cleanups);
+        Assert.True(File.Exists(stale));
+        if (explicitCommand)
+        {
+            var report = await store.CleanNowAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.True(report.ScanComplete);
+        }
+        else
+        {
+            Volatile.Write(ref idle, 1);
+            await Until(() => store.Cleanups > 0);
+        }
+        Assert.False(File.Exists(stale));
+        Assert.True(store.LastCleanup!.FilesScanned >= 300);
+    }
+
+    [Fact]
+    public async Task Scans_yield_in_slices_without_losing_entries()
+    {
+        Directory.CreateDirectory(Path.Combine(Derived, "v1"));
+        for (var i = 1; i <= 10; i++)
+        {
+            var stem = Path.Combine(Derived, "v1", i.ToString("x64"));
+            File.WriteAllBytes(stem + ".json", new byte[10]);
+            File.WriteAllBytes(stem + ".pixels", new byte[20]);
+        }
+        var janitor = new DerivedCacheJanitor(Derived, new()
+        {
+            ScanSlice = TimeSpan.FromTicks(1), ScanPause = TimeSpan.FromMilliseconds(1),
+        }, () => 1L << 50);
+        var report = await janitor.CleanAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.True(report.ScanComplete);
+        Assert.Empty(report.Errors);
+        Assert.Equal(60, report.FilesScanned); // three complete scans of twenty owned files
+        Assert.True(report.ScanYields >= 60);
+        Assert.Equal(300, report.BytesKept);
+        Assert.Equal(0, report.FilesDeleted);
+    }
+
+    [Fact]
+    public async Task Pressure_classification_also_checks_activity_between_header_reads()
+    {
+        Directory.CreateDirectory(Path.Combine(Derived, "v1"));
+        for (var i = 1; i <= 10; i++)
+        {
+            var stem = Path.Combine(Derived, "v1", i.ToString("x64"));
+            File.WriteAllText(stem + ".json", "{}");
+            File.WriteAllBytes(stem + ".pixels", new byte[20]);
+        }
+        using var resume = new ManualResetEventSlim();
+        var paused = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var classified = 0;
+        var janitor = new DerivedCacheJanitor(Derived, new()
+        {
+            MaximumBytes = 1,
+            Classify = entry =>
+            {
+                _ = entry.OriginalPath;
+                Interlocked.Increment(ref classified);
+                return DerivedCacheEntryClass.Live;
+            },
+        }, () => 1L << 50);
+        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var cleanup = Task.Run(() => janitor.Clean(stop.Token, () =>
+        {
+            if (Volatile.Read(ref classified) > 0 && !resume.IsSet)
+            {
+                paused.TrySetResult();
+                resume.Wait(stop.Token);
+            }
+        }));
+        try
+        {
+            await paused.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Equal(1, Volatile.Read(ref classified));
+        }
+        finally { resume.Set(); await cleanup; }
+        Assert.True(cleanup.Result.ScanComplete);
+        Assert.Equal(10, classified);
+        Assert.Equal(0, cleanup.Result.BytesKept);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_root)) Directory.Delete(_root, recursive: true);

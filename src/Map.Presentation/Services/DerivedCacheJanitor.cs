@@ -14,6 +14,9 @@ public sealed record DerivedCacheJanitorOptions
     public int CurrentVersion { get; init; } = 1;
     public TimeSpan LockTimeout { get; init; } = TimeSpan.FromSeconds(2);
     public TimeSpan TemporaryFileGrace { get; init; } = TimeSpan.FromHours(1);
+    /// <summary>Cooperative scan budget between filesystem operations; one OS call may take longer.</summary>
+    public TimeSpan ScanSlice { get; init; } = TimeSpan.FromMilliseconds(20);
+    public TimeSpan ScanPause { get; init; } = TimeSpan.FromMilliseconds(10);
     /// <summary>
     /// When set, the ceiling is this share of the shared prepared-data budget (its policy replaces MaximumBytes,
     /// FreeSpaceFraction and MinimumFreeBytes) and the kept bytes are reported back to it after each cleanup.
@@ -73,6 +76,8 @@ public sealed class DerivedCacheEntry
 
 public sealed record DerivedCacheJanitorReport
 {
+    public long FilesScanned { get; internal init; }
+    public long ScanYields { get; internal init; }
     public bool LockAcquired { get; internal init; }
     public bool ScanComplete { get; internal init; }
     public bool CleanupTriggered { get; internal init; }
@@ -203,6 +208,7 @@ public sealed class DerivedCacheJanitor
                 FilesKept = kept.Files, BytesKept = kept.Bytes, VersionFoldersDeleted = removedFolders,
                 ReserveSatisfied = _availableFreeBytes() >= MinimumFree,
                 EvictedUnreferenced = evicted[0], EvictedUnmounted = evicted[1], EvictedLive = evicted[2],
+                FilesScanned = pass.FilesScanned, ScanYields = pass.ScanYields,
                 Errors = pass.Errors
             };
         }, beforeWork);
@@ -238,6 +244,7 @@ public sealed class DerivedCacheJanitor
                 FilesDeleted = pass.DeletedFiles, BytesDeleted = pass.DeletedBytes, FilesKept = kept.Files,
                 BytesKept = kept.Bytes, PurgedEntries = purged, PurgeSkipped = skipped.Count,
                 SkippedShas = skipped.ToArray(), ReserveSatisfied = true, CeilingBytes = long.MaxValue,
+                FilesScanned = pass.FilesScanned, ScanYields = pass.ScanYields,
                 Errors = pass.Errors
             };
         });
@@ -279,7 +286,8 @@ public sealed class DerivedCacheJanitor
         {
             pass.Error(_root, ex);
             return new() { LockAcquired = cleanerLock is not null, FilesDeleted = pass.DeletedFiles,
-                BytesDeleted = pass.DeletedBytes, Errors = pass.Errors };
+                BytesDeleted = pass.DeletedBytes, FilesScanned = pass.FilesScanned,
+                ScanYields = pass.ScanYields, Errors = pass.Errors };
         }
         finally
         {
@@ -291,8 +299,9 @@ public sealed class DerivedCacheJanitor
     private sealed class Pass(DerivedCacheJanitor owner, CancellationToken cancellationToken, Action? beforeWork)
     {
         private readonly HashSet<string> _errors = new(StringComparer.Ordinal);
+        private readonly Stopwatch _slice = Stopwatch.StartNew();
         public bool Complete = true;
-        public long DeletedFiles, DeletedBytes;
+        public long DeletedFiles, DeletedBytes, FilesScanned, ScanYields;
         public string[] Errors => _errors.ToArray();
         private DerivedCacheJanitorOptions Options => owner._options;
 
@@ -300,12 +309,23 @@ public sealed class DerivedCacheJanitor
         {
             cancellationToken.ThrowIfCancellationRequested();
             beforeWork?.Invoke();
+            if (_slice.Elapsed >= Options.ScanSlice)
+            {
+                cancellationToken.WaitHandle.WaitOne(Options.ScanPause);
+                cancellationToken.ThrowIfCancellationRequested();
+                ScanYields++;
+                _slice.Restart();
+            }
         }
 
         public void Error(string path, Exception ex) => _errors.Add(path + ": " + ex.Message);
 
-        public DerivedCacheEntry Describe(Entry entry) => new(entry.Sha, entry.Used,
-            entry.Files.FirstOrDefault(f => f.Path.EndsWith(".json", StringComparison.Ordinal))?.Path);
+        public DerivedCacheEntry Describe(Entry entry)
+        {
+            Checkpoint();
+            return new(entry.Sha, entry.Used,
+                entry.Files.FirstOrDefault(f => f.Path.EndsWith(".json", StringComparison.Ordinal))?.Path);
+        }
 
         public Snapshot Scan()
         {
@@ -333,6 +353,7 @@ public sealed class DerivedCacheJanitor
                             CheckPath(path, directory: false);
                             var info = new FileInfo(path);
                             files.Add(new(path, name[..64], info.Length, info.LastWriteTimeUtc, temporary));
+                            FilesScanned++;
                         }
                         catch (Exception ex) when (IsFileError(ex))
                         { blocked.Add(name[..64]); Complete = false; Error(path, ex); }
@@ -499,6 +520,7 @@ public sealed class DerivedCacheJanitor
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(options.CurrentVersion);
         ArgumentNullException.ThrowIfNull(options.Share);
         if (options.FreeSpaceFraction is < 0 or > 1 || options.LockTimeout < TimeSpan.Zero
+            || options.ScanSlice <= TimeSpan.Zero || options.ScanPause <= TimeSpan.Zero
             || options.TemporaryFileGrace < TimeSpan.Zero || options.TemporaryFileGrace > TimeSpan.FromDays(365))
             throw new ArgumentOutOfRangeException(nameof(options));
     }
