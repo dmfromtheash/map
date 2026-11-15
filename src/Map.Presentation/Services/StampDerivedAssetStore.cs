@@ -250,10 +250,13 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
         // A recovered miss is announced once by the image source's missing revision; waking the
         // canvas here as well would draw the same recovery twice.
         var recovered = false;
+        var saveColors = false;
         lock (_requestsGate)
         {
-            if (_requests.TryGetValue(sha, out var active) && ReferenceEquals(active, completion))
+            if (!_disposed && _requests.TryGetValue(sha, out var active) && ReferenceEquals(active, completion))
             {
+                if (header is not null) saveColors = RememberColor(sha, header.Color);
+                else ForgetColor(sha);
                 recovered = header is not null && _failedHeaders.ContainsKey(sha);
                 if (header is null)
                 {
@@ -268,10 +271,10 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
                     if (_requests.TryGetValue(oldest.Sha, out var current) && ReferenceEquals(current, oldest.Completion))
                     { _requests.TryRemove(oldest.Sha, out _); _previews.TryRemove(oldest.Sha, out _); }
             }
+            else header = null; // A retired header must not resurrect or erase a newer colour.
+            completion.TrySetResult(header);
         }
-        if (header is not null && !_disposed) RememberColor(sha, header.Color);
-        else if (header is null) ForgetColor(sha); // a missing or changed source is not shown with its old colour next time
-        completion.TrySetResult(header);
+        if (saveColors) SaveKnownColors();
         OverviewColorChanged(header is not null && !recovered);
     }
 

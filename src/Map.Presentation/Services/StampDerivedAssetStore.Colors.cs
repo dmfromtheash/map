@@ -52,13 +52,14 @@ public sealed partial class StampDerivedAssetStore
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or FormatException) { _knownColors.Clear(); }
     }
 
-    private void RememberColor(string sha, uint color)
+    // Under _requestsGate, together with checking the completing request's identity.
+    // The caller saves outside that gate so file I/O cannot block a canvas request.
+    private bool RememberColor(string sha, uint color)
     {
-        if (_knownColors.TryGetValue(sha, out var known) && known == color) return;
+        if (_knownColors.TryGetValue(sha, out var known) && known == color) return false;
         _knownColors[sha] = color;
-        if (Interlocked.Increment(ref _colorsUnsaved) >= ColorsSaveEvery
-            || System.Diagnostics.Stopwatch.GetElapsedTime(Interlocked.Read(ref _colorsSavedAt)).TotalSeconds >= 5)
-            SaveKnownColors();
+        return Interlocked.Increment(ref _colorsUnsaved) >= ColorsSaveEvery
+            || System.Diagnostics.Stopwatch.GetElapsedTime(Interlocked.Read(ref _colorsSavedAt)).TotalSeconds >= 5;
     }
 
     private void ForgetColor(string sha)
@@ -98,6 +99,9 @@ public sealed partial class StampDerivedAssetStore
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
+                // The previous file is still authoritative on disk. Keep the mutation
+                // dirty so a later worker or awaited shutdown retries the snapshot.
+                Interlocked.Increment(ref _colorsUnsaved);
                 try { File.Delete(temporary); } catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException) { }
                 ReportFailure("overview colours", ex);
             }
