@@ -1079,19 +1079,37 @@ public static partial class SceneRenderer
     {
         private readonly int _unsupported;
         public bool Supported => _unsupported == 0;
+        // Revisions a frame never drew (several edits between two frames) are derived through their deltas too:
+        // only the first revision was then known, and the frame after a placement counted all 2 million objects
+        // (192 ms, live place-10 trace 2026-11-15). Bounded, so a long unrendered chain falls back to one count.
+        private const int MaxDeltaDepth = 64;
+        [ThreadStatic] private static int _depth;
+
         public LayerImageSupport(ObjectLayer layer)
         {
-            if (ObjectLayerChanges.TryGet(layer, out var delta)
-                && KeptLayerSupport.TryGetValue(delta.Source, out var previous))
+            LayerImageSupport? previous = null;
+            if (ObjectLayerChanges.TryGet(layer, out var delta) && !KeptLayerSupport.TryGetValue(delta.Source, out previous)
+                && _depth < MaxDeltaDepth)
             {
-                _unsupported = previous._unsupported - delta.Removed.Count(i => !Independent(delta.Source.Objects[i]))
+                _depth++;
+                try { previous = KeptLayerSupport.GetValue(delta.Source, static l => new(l)); }
+                finally { _depth--; }
+            }
+            if (previous is not null)
+            {
+                _unsupported = previous._unsupported - delta!.Removed.Count(i => !Independent(delta.Source.Objects[i]))
                     + delta.Added.Count(i => !Independent(layer.Objects[i]));
             }
             else
             {
+                Interlocked.Increment(ref _fullCounts);
                 _unsupported = layer.Objects.Count(o => !Independent(o));
             }
         }
+
+        /// <summary>Full counts made (every object visited). Diagnostics and tests only.</summary>
+        internal static long FullCounts => Interlocked.Read(ref _fullCounts);
+        private static long _fullCounts;
 
         private static bool Independent(SceneObject o) => o.Kind switch
         {
@@ -1102,6 +1120,10 @@ public static partial class SceneRenderer
     }
 
     private static readonly ConditionalWeakTable<ObjectLayer, LayerImageSupport> KeptLayerSupport = [];
+
+    /// <summary>Tests: whether a layer may keep its image, and how many full object counts that took so far.</summary>
+    internal static bool KeptLayerSupported(ObjectLayer layer) => KeptLayerSupport.GetValue(layer, static l => new(l)).Supported;
+    internal static long KeptLayerSupportFullCounts => LayerImageSupport.FullCounts;
 
     private static bool DrawKeptObjectLayer(SKCanvas canvas, MapDocument document, ObjectLayer layer, MapLayer? clippingSource,
         WorldBounds view, RenderOptions options)

@@ -243,6 +243,12 @@ public sealed partial class MapCanvasControl : Control
     /// <summary>Diagnostics: QPC (Stopwatch ticks) of the last canvas frame's start and of the end of its CPU work.</summary>
     public static long LastFrameStartQpc { get; private set; }
     public static long LastFrameEndQpc { get; private set; }
+    /// <summary>
+    /// The GPU frame timer is a diagnostic (MAP_GPU_TIMER=1). In the product it is off: opening its query leases the
+    /// platform graphics API, which flushed Skia and blocked one frame for 234 ms (live trace, PC, 2026-11-15).
+    /// </summary>
+    internal static readonly bool GpuFrameTimerEnabled = Environment.GetEnvironmentVariable("MAP_GPU_TIMER") == "1";
+
     /// <summary>QPC start of the canvas frame whose GPU timer result is <see cref="LastFrameGpuTimerMilliseconds"/>.</summary>
     public static long LastFrameGpuTimerFrameQpc => GpuTimer.LastFrameQpc;
     /// <summary>GPU time of a recent canvas frame from the asynchronous timer query (DEC-111); null when unavailable.</summary>
@@ -831,7 +837,7 @@ public sealed partial class MapCanvasControl : Control
                 overviewFrame = true;
                 using var lease = feature.Lease();
                 // DEC-111 sensor: GPU time of this frame, read asynchronously a few frames later.
-                if (!MeasureGpuFlush) GpuTimer.Begin(lease);
+                if (GpuFrameTimerEnabled && !MeasureGpuFlush) GpuTimer.Begin(lease);
                 // One Avalonia GPU context is shared by the windows. Bound its reusable texture
                 // cache; active frame resources remain owned by the borrowed lease/driver.
                 if (lease.GrContext is { } gpu && gpu.GetResourceCacheLimit() != GpuResourceCacheBytes)
