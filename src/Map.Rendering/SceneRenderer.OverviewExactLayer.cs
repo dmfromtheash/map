@@ -21,6 +21,7 @@ public static partial class SceneRenderer
 
     /// <summary>Below this many exact objects the direct draw is cheaper than a layer.</summary>
     private const int ExactLayerMinimumObjects = 128;
+    private const int OverviewExactDirectBudget = 512;
     private const long ExactLayerMaximumPixels = 20L * 1024 * 1024;
     /// <summary>A stand-in layer from resident images (cold library) is redrawn at most this often while images arrive.</summary>
     private const double ExactLayerPartialIntervalMilliseconds = 250;
@@ -92,8 +93,9 @@ public static partial class SceneRenderer
     /// </summary>
     private static bool TryDrawOverviewExactLayer(SKCanvas canvas, MapDocument document, ObjectLayer layer,
         ObjectOverviewPlan plan, int zoomBucket, double bucketScale, IReadOnlyList<SceneObject> extras, RenderOptions options,
-        bool visibleChunksPending)
+        bool visibleChunksPending, out bool pending)
     {
+        pending = false;
         if (!OverviewExactLayers || options.IsExport || options.RequestRefinedFrame is not { } refine
             || options.Stamps is not { } stamps || options.ObjectCache is not { } cache
             || options.ObjectOverrides is { Count: > 0 }) return false;
@@ -153,6 +155,7 @@ public static partial class SceneRenderer
         context.Layers.TryGetValue(layer.Id, out var state);
         if (pendingSets)
         {
+            pending = true;
             // A new bucket or edited chunk: its sets arrive in a frame or two. Keep the previous layer even
             // while settled; returning false here drew the entire exact set on the snapshot handoff frame.
             if (options.Stats is { } waiting) waiting.DetailTilesPending++;
@@ -213,7 +216,8 @@ public static partial class SceneRenderer
         // required for the first complete view (four-core live regression: 35 -> 175 seconds).
         if (!visibleChunksPending && options.OverviewPreparation?.VisibleWorkPending != true)
             StartExactLayerWork(state, key, chunks, plan, zoomBucket, area, extras, stamps, refine, options);
-        if (options.Stats is { } pending) pending.DetailTilesPending++;
+        pending = true;
+        if (options.Stats is { } waitingLayer) waitingLayer.DetailTilesPending++;
         refine();
         // The previous layer stands in: always while the camera moves, and for the same objects (new images or a
         // pan) when settled.

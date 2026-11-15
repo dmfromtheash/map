@@ -6478,9 +6478,10 @@ public static partial class SceneRenderer
         // the tiny color metadata: a ready color does not make this complete frame ready.
         // Without this preflight a kept layer could freeze whichever subset arrived first.
         // Many of them: one background layer the frame copies (see TryDrawOverviewExactLayer), not one draw each.
+        var exactLayerPending = false;
         var layered = fallbackScale is null && exactCandidates + extras.Count >= ExactLayerMinimumObjects
             && TryDrawOverviewExactLayer(canvas, document, layer, plan, zoomBucket, bucketScale, extras, options,
-                deferred || prepared?.ColorsPending == true);
+                deferred || prepared?.ColorsPending == true, out exactLayerPending);
         if (!layered)
             foreach (var variant in exactVariants)
                 foreach (var sceneObject in variant.ExactObjects)
@@ -6498,6 +6499,19 @@ public static partial class SceneRenderer
         }
         // The layer carries the chunks' exact objects; the dictionary then holds the selection only.
         var exactCount = layered ? exactCandidates + extras.Count : exact.Count;
+        if (!layered && exactLayerPending && exact.Count > OverviewExactDirectBudget)
+        {
+            // Until the first layer lands, refine a bounded centre-first subset. Keep the
+            // synchronous reference/export path and unsupported layers fully exact.
+            var viewCentreX = (view.Left + view.Right) / 2;
+            var viewCentreY = (view.Top + view.Bottom) / 2;
+            exact = exact.Values.OrderBy(item =>
+                Math.Pow(item.X + item.Width / 2 - viewCentreX, 2)
+                + Math.Pow(item.Y + item.Height / 2 - viewCentreY, 2))
+                .ThenBy(item => item.Id.Value).Take(OverviewExactDirectBudget)
+                .ToDictionary(item => item.Id);
+            options.RequestRefinedFrame!.Invoke();
+        }
         if (!layered && options.RequestRefinedFrame is { } refine && options.Stamps is { } exactSource)
         {
             var matrix = canvas.TotalMatrix;
@@ -6533,7 +6547,7 @@ public static partial class SceneRenderer
             if (overviewMissing > 0 && palette.Unresolved) stats.UnresolvedImages++;
             stats.OverviewChunks += overviewChunks;
             stats.OverviewBatches += overviewBatches;
-            stats.ExactObjects += exactCount;
+            stats.ExactObjects += layered ? exactCount : exact.Count;
             stats.DrawCalls += overviewChunks + (layered ? 0 : exact.Count);
             stats.ObjectCacheHits += cache.Hits - cacheHitsBefore;
             stats.ObjectCacheMisses += cache.Misses - cacheMissesBefore;
