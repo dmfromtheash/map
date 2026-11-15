@@ -198,6 +198,10 @@ public sealed class RenderStats
     public double DetailRasterMilliseconds { get; set; }
     /// <summary>Exact object tiles left for a later frame by the settled-frame budget (R05).</summary>
     public int DetailTilesPending { get; set; }
+    /// <summary>Pending detail tiles drawn from a kept tile of another zoom level (a parent or children) instead of
+    /// their exact pixels, and pending tiles with no kept level at all, left to the overview of their objects.</summary>
+    public int DetailTilesStandIn { get; set; }
+    public int DetailTilesUncovered { get; set; }
     /// <summary>Detail tiles handed to a background raster, taken in from one, still waiting for one, and drawn on the frame thread.</summary>
     public int DetailRastersStarted { get; set; }
     public int DetailRastersAdopted { get; set; }
@@ -3758,16 +3762,27 @@ public static partial class SceneRenderer
                 && (budgetSpent || tileReady!.GetValueOrDefault((x, y), true) == false)))
             {
                 var covered = false;
-                if (fallbackBucket is { } fallback)
+                // A tile may straddle the document boundary; only its part inside the page needs coverage.
+                if (TryIntersect(bounds, page, out var inside))
                 {
                     canvas.Save();
                     canvas.ClipRect(ToRect(bounds));
-                    // A tile may straddle the document boundary; only its part inside the page needs coverage.
-                    covered = TryIntersect(bounds, page, out var inside)
-                        && TryDrawKeptTiles(canvas, layer, inside, fallback, revisions, cache, options);
+                    covered = fallbackBucket is { } fallback && TryDrawKeptTiles(canvas, layer, inside, fallback, revisions, cache, options);
+                    // After a pan the new part of the view has no level that is kept for the whole screen: look per
+                    // tile instead, so a tile never shows emptiness while any zoom level still keeps its objects.
+                    if (!covered && TryDrawNearestKeptTile(canvas, document, layer, inside, bucket, revisions, cache, options))
+                    {
+                        covered = true;
+                        if (options.Stats is { } standIn) standIn.DetailTilesStandIn++;
+                    }
                     canvas.Restore();
                 }
-                if (!covered) (coldTiles ??= []).Add(bounds);
+                else covered = true;
+                if (!covered)
+                {
+                    (coldTiles ??= []).Add(bounds);
+                    if (options.Stats is { } uncovered) uncovered.DetailTilesUncovered++;
+                }
                 deferredTiles++;
                 if (options.Stats is { } pending) pending.DetailTilesPending++;
                 options.RequestRefinedFrame?.Invoke();
@@ -4040,6 +4055,26 @@ public static partial class SceneRenderer
         }
         if (options.Stats is { } stats) { stats.DrawCalls += tiles.Count; stats.ObjectTilesDrawn += tiles.Count; stats.ObjectsDrawn += drawn; }
         return true;
+    }
+
+    /// <summary>
+    /// Draws one pending tile from the nearest zoom level that still keeps all of its area: coarser levels first (a
+    /// parent: one resampled tile), then finer (children, at most 4x finer), then every coarser level down to the
+    /// whole-page one. MapLibre keeps parent/child tiles of a missing ideal tile for the same reason, and Chromium
+    /// shows its low-resolution tiling instead of a checkerboard. Draws nothing and returns false when no level does.
+    /// </summary>
+    private static bool TryDrawNearestKeptTile(SKCanvas canvas, MapDocument document, ObjectLayer layer, WorldBounds tile, int bucket,
+        DetailTileRevisions revisions, ObjectOverviewCache cache, RenderOptions options)
+    {
+        for (var delta = 1; delta <= 12; delta++)
+        {
+            if (TryDrawKeptTiles(canvas, layer, tile, bucket - delta, revisions, cache, options)) return true;
+            if (delta <= 8 && TryDrawKeptTiles(canvas, layer, tile, bucket + delta, revisions, cache, options)) return true;
+        }
+        var pageBucket = (int)Math.Floor(Math.Log2(512d / Math.Max(1, Math.Max(document.Canvas.Width, document.Canvas.Height))) * 4);
+        for (var coarse = bucket - 13; coarse >= pageBucket; coarse--)
+            if (TryDrawKeptTiles(canvas, layer, tile, coarse, revisions, cache, options)) return true;
+        return false;
     }
 
     /// <summary>Consecutive, compatible stamps share one submission without reordering the scene.</summary>

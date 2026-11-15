@@ -80,32 +80,7 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
         var disk = new MipDisk();
         try
         {
-            var random = new Random(17);
-            var shas = Enumerable.Range(0, assets).Select(i => Convert.ToHexStringLower(
-                System.Security.Cryptography.SHA256.HashData(BitConverter.GetBytes(i)))).ToArray();
-            var records = shas.Select((sha, i) =>
-            {
-                var side = 700 + random.Next(2900);
-                return new AssetShape(sha, side, (int)(side * (0.7 + random.NextDouble() * 0.6)), i % MipDisk.Fixtures);
-            }).ToDictionary(r => r.Sha, StringComparer.OrdinalIgnoreCase);
-            var items = new SceneObject[objects];
-            for (var i = 0; i < objects; i++)
-            {
-                var width = 64 * (0.5 + random.NextDouble() * 1.5);
-                var x = random.NextDouble() * (canvas - width);
-                var y = random.NextDouble() * (canvas - width);
-                // Clustered: each sixteenth of the page has its own sixteenth of the library (forests here, peaks there).
-                var region = (int)(x * 4 / canvas) + 4 * (int)(y * 4 / canvas);
-                var record = records[shas[clustered ? region * (assets / 16) + i % (assets / 16) : i % assets]];
-                items[i] = new SceneObject(ObjectId.New(), SceneObjectKind.Stamp, "Гора", x, y, width, width * record.Height / record.Width, random.Next(-180, 181),
-                    "#FFFFFFFF", "#00000000", 0, true, false) { Stamp = new StampStyle(record.Sha) };
-            }
-            var layer = new ObjectLayer(LayerId.New(), "Горы", true, false, 1, items);
-            var document = new MapDocument(DocumentId.New(), "Dense", DateTimeOffset.UnixEpoch,
-                new CanvasDefinition(canvas, canvas, "px", "#FFFFFFFF"),
-                [new BaseColorLayer(LayerId.New(), "Page", true, false, 1, "#FFFFFFFF"), layer])
-                .WithAssets(shas.Select(sha => new MapAssetReference(sha, sha, "image/png", "png", ProjectAssetStorage.Linked,
-                    DateTimeOffset.UnixEpoch, "owner-fixture", "user-owned", catalogId: sha)).ToArray());
+            var (records, document) = Scene(objects, assets, canvas, clustered);
             var scale = Math.Min((double)Width / canvas, (double)Height / canvas);
             var offsetX = -(Width / scale - canvas) / 2;
 
@@ -206,15 +181,99 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
         finally { disk.Dispose(); }
     }
 
+    private static (Dictionary<string, AssetShape> Records, MapDocument Document) Scene(int objects, int assets, int canvas, bool clustered)
+    {
+        var random = new Random(17);
+        var shas = Enumerable.Range(0, assets).Select(i => Convert.ToHexStringLower(
+            System.Security.Cryptography.SHA256.HashData(BitConverter.GetBytes(i)))).ToArray();
+        var records = shas.Select((sha, i) =>
+        {
+            var side = 700 + random.Next(2900);
+            return new AssetShape(sha, side, (int)(side * (0.7 + random.NextDouble() * 0.6)), i % MipDisk.Fixtures);
+        }).ToDictionary(r => r.Sha, StringComparer.OrdinalIgnoreCase);
+        var items = new SceneObject[objects];
+        for (var i = 0; i < objects; i++)
+        {
+            var width = 64 * (0.5 + random.NextDouble() * 1.5);
+            var x = random.NextDouble() * (canvas - width);
+            var y = random.NextDouble() * (canvas - width);
+            // Clustered: each sixteenth of the page has its own sixteenth of the library (forests here, peaks there).
+            var region = (int)(x * 4 / canvas) + 4 * (int)(y * 4 / canvas);
+            var record = records[shas[clustered ? region * (assets / 16) + i % (assets / 16) : i % assets]];
+            items[i] = new SceneObject(ObjectId.New(), SceneObjectKind.Stamp, "Гора", x, y, width, width * record.Height / record.Width, random.Next(-180, 181),
+                "#FFFFFFFF", "#00000000", 0, true, false) { Stamp = new StampStyle(record.Sha) };
+        }
+        var layer = new ObjectLayer(LayerId.New(), "Горы", true, false, 1, items);
+        var document = new MapDocument(DocumentId.New(), "Dense", DateTimeOffset.UnixEpoch,
+            new CanvasDefinition(canvas, canvas, "px", "#FFFFFFFF"),
+            [new BaseColorLayer(LayerId.New(), "Page", true, false, 1, "#FFFFFFFF"), layer])
+            .WithAssets(shas.Select(sha => new MapAssetReference(sha, sha, "image/png", "png", ProjectAssetStorage.Linked,
+                DateTimeOffset.UnixEpoch, "owner-fixture", "user-owned", catalogId: sha)).ToArray());
+        return (records, document);
+    }
+
+    [Fact]
+    public void The_first_frame_after_a_pan_at_400_percent_shows_no_empty_tiles()
+    {
+        // Live 2026-11-15 (USER, 32768/500k): right after a pan stops at 400 %, parts of the view were EMPTY until their
+        // exact tiles arrived. The map was seen whole first (as on open), so a coarser kept level exists for every tile
+        // of the new place: a pending tile must show it, not nothing (MapLibre retained parents, Chromium low-res tiling).
+        const int canvas = 4096;
+        var disk = new MipDisk();
+        try
+        {
+            var (records, document) = Scene(objects: 24_000, assets: 300, canvas, clustered: false);
+            using var tiles = new ObjectOverviewCache();
+            using var atlas = new ObjectOverviewCache();
+            using var overview = new SceneRenderer.OverviewPreparation();
+            // A product-sized shelf (the RAM cache is 1/8-1/4 of memory): a 400 % view needs more than 128 MiB, and a
+            // shelf smaller than the view's working set thrashes - that is step B.1 (needed images are not evicted).
+            var source = new BoundedDerivedSource(records, disk, 1L << 30) { LargeByOutput = true, SmallWaiting = 64, Background = true };
+            var fit = Math.Min((double)Width / canvas, (double)Height / canvas);
+            var last = "";
+            bool SettleAt(double x, double y, double scale)
+            {
+                var clock = Stopwatch.StartNew();
+                while (clock.Elapsed < TimeSpan.FromSeconds(60))
+                {
+                    var stats = new RenderStats();
+                    Draw(source, tiles, atlas, stats, refine: true, x, scale, document, 16.7, out _, overview: overview, offsetY: y);
+                    if (stats.DetailTilesPending == 0 && stats.UnresolvedImages == 0 && !source.ImageRequestsPending) return true;
+                    last = $"pending={stats.DetailTilesPending} unresolved={stats.UnresolvedImages} requests={source.ImageRequestsPending} "
+                        + $"started={stats.DetailRastersStarted} adopted={stats.DetailRastersAdopted} waiting={stats.DetailRastersWaiting} onFrame={stats.DetailTilesBuiltOnFrame} "
+                        + $"standIn={stats.DetailTilesStandIn} uncovered={stats.DetailTilesUncovered} drawn={stats.ObjectTilesDrawn}";
+                    Thread.Sleep(5);
+                }
+                return false;
+            }
+            Assert.True(SettleAt(-(Width / fit - canvas) / 2, 0, fit), "The whole-map view did not settle: " + last);
+            const double zoom = 4;
+            var viewWidth = Width / zoom; var viewHeight = Height / zoom;
+            var (ax, ay) = (canvas * .3, canvas * .3);
+            Assert.True(SettleAt(ax, ay, zoom), "The 400 % view did not settle: " + last);
+            // A gesture: thirty moving frames carry the view one and a half screens right and down.
+            for (var i = 1; i <= 30; i++)
+                Draw(source, tiles, atlas, new RenderStats(), refine: true, ax + i * viewWidth * 1.5 / 30, zoom, document, 16.7, out _,
+                    fastTerrain: true, overview: overview, offsetY: ay + i * viewHeight * 1.5 / 30);
+            var stopped = new RenderStats();
+            Draw(source, tiles, atlas, stopped, refine: true, ax + viewWidth * 1.5, zoom, document, 16.7, out _, overview: overview,
+                offsetY: ay + viewHeight * 1.5);
+            output.WriteLine($"pending={stopped.DetailTilesPending} standIn={stopped.DetailTilesStandIn} uncovered={stopped.DetailTilesUncovered}");
+            Assert.Equal(0, stopped.DetailTilesUncovered);
+        }
+        finally { disk.Dispose(); }
+    }
+
     [ThreadStatic] private static double LastEndMilliseconds;
 
     private static byte[] Draw(BoundedDerivedSource source, ObjectOverviewCache tiles, ObjectOverviewCache atlas, RenderStats stats,
-        bool refine, double offsetX, double scale, MapDocument document, double sinceLastFrame, out double renderMilliseconds, bool fastTerrain = false, SceneRenderer.OverviewPreparation? overview = null)
+        bool refine, double offsetX, double scale, MapDocument document, double sinceLastFrame, out double renderMilliseconds, bool fastTerrain = false, SceneRenderer.OverviewPreparation? overview = null,
+        double offsetY = 0)
     {
         using var surface = SKSurface.Create(new SKImageInfo(Width, Height))!;
         surface.Canvas.Clear(SKColors.White);
         surface.Canvas.Scale((float)scale);
-        surface.Canvas.Translate((float)-offsetX, 0);
+        surface.Canvas.Translate((float)-offsetX, (float)-offsetY);
         var started = Stopwatch.GetTimestamp();
         using (source.BeginFrame(sinceLastFrame))
         {
@@ -224,7 +283,7 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
                 SceneRenderer.Render(surface.Canvas, document, new RenderOptions
                 {
                     Stamps = source, ObjectCache = tiles, AtlasCache = atlas, Stats = stats, ViewScale = scale,
-                    VisibleWorld = new(offsetX, 0, offsetX + Width / scale, Height / scale),
+                    VisibleWorld = new(offsetX, offsetY, offsetX + Width / scale, offsetY + Height / scale),
                     RequestRefinedFrame = refine ? () => { } : null, FastTerrain = fastTerrain, OverviewPreparation = overview,
                 });
             }
