@@ -41,8 +41,8 @@ public sealed class RenderPathCostGuardTests : IClassFixture<RenderPathCostGuard
     [Fact(Skip = "defect: " + DenseLinear + "; 10k/100k allocation ratio 10.338 > 3")]
     public void Dense_overview_delta() => Compare("overview-delta-dense", 100_000, true);
 
-    [Fact(Skip = "O(N): " + RiverLinear)]
-    public void River_preview_resolution() => Compare("river-preview", 200_000, true);
+    [Fact(Skip = "defect: " + RiverLinear + "; 10k/100k allocation ratio 9.998 > 3")]
+    public void River_preview_resolution() => Compare("river-preview", 100_000, true);
 
     [Fact(Skip = "O(N): " + RoadLinear)]
     public void Road_preview_resolution() => Compare("road-preview", 200_000, true);
