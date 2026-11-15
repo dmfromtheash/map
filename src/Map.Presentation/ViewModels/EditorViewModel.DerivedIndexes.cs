@@ -35,6 +35,7 @@ public sealed partial class EditorViewModel
         // or zooms: right after open it would otherwise take a core from the first gestures.
         DerivedIndexPreparation = Map.Core.Resources.BackgroundWork.RunAsync(() =>
         {
+            using var load = Map.Core.Resources.BackgroundLoad.Enter(Map.Core.Resources.BackgroundProducer.DerivedIndexes);
             try
             {
                 // Bounded: a burst of edits during preparation is followed, an endless one is

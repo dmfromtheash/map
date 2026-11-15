@@ -104,6 +104,7 @@ public static class LightMaps
         var rgba = bitmap.Bytes;
         return Task.Run(() =>
         {
+            using var load = Map.Core.Resources.BackgroundLoad.Enter(Map.Core.Resources.BackgroundProducer.LightMaps);
             var set = Build(sha256, rgba, w, h);
             Ready?.Invoke();
             return set;

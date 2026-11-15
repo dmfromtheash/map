@@ -38,6 +38,7 @@ public static class MbTilesWriter
     private static int Write(PngTilePyramid pyramid, string path, string name, bool webp,
         CancellationToken cancellationToken, Action<double>? progress, int parallelism)
     {
+        using var load = Map.Core.Resources.BackgroundLoad.Enter(Map.Core.Resources.BackgroundProducer.MbTiles);
         if (File.Exists(path)) File.Delete(path);
         var tiles = new List<(int Level, int Column, int Row)>();
         for (var level = 0; level < pyramid.Levels; level++)
@@ -116,8 +117,12 @@ public static class MbTilesWriter
             for (var start = 0; start < tiles.Count; start += batch.Length)
             {
                 var count = Math.Min(batch.Length, tiles.Count - start);
-                Parallel.For(0, count, new ParallelOptions { MaxDegreeOfParallelism = workers, CancellationToken = cancellationToken },
-                    i => batch[i] = Encode(pyramid.CheckTile(tiles[start + i].Level, tiles[start + i].Column, tiles[start + i].Row), webp, pyramid.TileEdge));
+                using (Map.Core.Resources.BackgroundLoad.Pause())
+                    Parallel.For(0, count, new ParallelOptions { MaxDegreeOfParallelism = workers, CancellationToken = cancellationToken }, i =>
+                    {
+                        using var work = Map.Core.Resources.BackgroundLoad.Enter(Map.Core.Resources.BackgroundProducer.MbTiles);
+                        batch[i] = Encode(pyramid.CheckTile(tiles[start + i].Level, tiles[start + i].Column, tiles[start + i].Row), webp, pyramid.TileEdge);
+                    });
                 for (var i = 0; i < count; i++)
                 {
                     cancellationToken.ThrowIfCancellationRequested();

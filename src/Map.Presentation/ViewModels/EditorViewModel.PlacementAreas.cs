@@ -717,7 +717,11 @@ public sealed partial class EditorViewModel
                 var cancellation = _areaPreviewCancellation = new CancellationTokenSource(); var token = cancellation.Token;
                 try
                 {
-                    var result = await Task.Run(() => ComputeAreaPreview(draft, original, dragging, obstacles, document, memory, token, ecology), token);
+                    var result = await Task.Run(() =>
+                    {
+                        using var load = Map.Core.Resources.BackgroundLoad.Enter(Map.Core.Resources.BackgroundProducer.PlacementPreview);
+                        return ComputeAreaPreview(draft, original, dragging, obstacles, document, memory, token, ecology);
+                    }, token);
                     // A result for an older shape of the same draft is still closer than nothing;
                     // the pass for the newest shape is already queued behind it.
                     if (!token.IsCancellationRequested && _areaDraft?.Id == draft.Id && _areaDragging == dragging)

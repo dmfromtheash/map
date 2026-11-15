@@ -192,8 +192,12 @@ public static partial class StyleRenderer
         try
         {
             // Half the cores: the map, the panels and the pictures of «Вид» keep the rest.
-            Parallel.ForEach(work, new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount / 2), CancellationToken = token },
-                step => step());
+            using (Map.Core.Resources.BackgroundLoad.Pause())
+                Parallel.ForEach(work, new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount / 2), CancellationToken = token }, step =>
+                {
+                    using var load = Map.Core.Resources.BackgroundLoad.Enter(Map.Core.Resources.BackgroundProducer.StylePaint);
+                    step();
+                });
         }
         catch (OperationCanceledException) { }
     }
@@ -219,9 +223,14 @@ public static partial class StyleRenderer
         var sources = drawn.Distinct(ReferenceEqualityComparer.Instance).Cast<SKImage>()
             .Where(s => !PainterFormMaps.IsBuilt(s)).ToArray();
         if (sources.Length < 2) return;
+        using (Map.Core.Resources.BackgroundLoad.Pause())
         Parallel.ForEach(sources.SelectMany(s => new[] { (s, true), (s, false) }),
             new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount - 1) },
-            pair => PainterFormMaps.Get(pair.Item1, pair.Item2));
+            pair =>
+            {
+                using var load = Map.Core.Resources.BackgroundLoad.Enter(Map.Core.Resources.BackgroundProducer.StylePaint);
+                PainterFormMaps.Get(pair.Item1, pair.Item2);
+            });
     }
 
     /// <summary>The largest side of a list's objects and how many objects have it (an exact maximum under edits).</summary>

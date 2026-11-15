@@ -43,6 +43,7 @@ internal sealed class DriveLibraryWatcher : IDisposable
         var attached = _catalog.Mounts.ToList();
         Task.Run(() =>
         {
+            using var load = Map.Core.Resources.BackgroundLoad.Enter(Map.Core.Resources.BackgroundProducer.Watcher);
             var roots = AssetDriveLibraries.CatalogRoots(AssetDriveLibraries.Discover());
             var byRoot = attached.ToDictionary(mount => mount.Root, StringComparer.OrdinalIgnoreCase);
             var changed = attached.Any(mount => mount.ChangedOnDisk);

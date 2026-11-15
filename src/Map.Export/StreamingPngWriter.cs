@@ -71,6 +71,7 @@ internal sealed class StreamingPngWriter : IDisposable
 
     public void WriteRow(ReadOnlySpan<byte> rgba)
     {
+        using var load = Map.Core.Resources.BackgroundLoad.Enter(Map.Core.Resources.BackgroundProducer.ExportEncode);
         if (_complete || _rows >= _height || rgba.Length != _row.Length / (_opaque ? 3 : 4) * 4)
             throw new InvalidOperationException("Неверное число или размер строк PNG.");
         if (_opaque)
@@ -149,6 +150,7 @@ internal sealed class StreamingPngWriter : IDisposable
 
     public void Complete()
     {
+        using var load = Map.Core.Resources.BackgroundLoad.Enter(Map.Core.Resources.BackgroundProducer.ExportEncode);
         if (_complete || _rows != _height)
             throw new InvalidOperationException("PNG не содержит все строки результата.");
         if (_zlib is not null) _zlib.Dispose();
@@ -194,13 +196,15 @@ internal sealed class StreamingPngWriter : IDisposable
 
     private void WriteNextBlock()
     {
-        var part = _pending.Dequeue().GetAwaiter().GetResult();
+        DeflatePart part;
+        using (Map.Core.Resources.BackgroundLoad.Pause()) part = _pending.Dequeue().GetAwaiter().GetResult();
         _chunks.Write(part.Bytes);
         _adler = CombineAdler(_adler, part.Adler, part.Length);
     }
 
     private static DeflatePart CompressBlock(byte[] rows, int rowsLength, byte[] above, int bpp, CompressionLevel level)
     {
+        using var load = Map.Core.Resources.BackgroundLoad.Enter(Map.Core.Resources.BackgroundProducer.ExportCompression);
         var stride = above.Length;
         var length = rowsLength / stride * (stride + 1);
         var input = new byte[length];

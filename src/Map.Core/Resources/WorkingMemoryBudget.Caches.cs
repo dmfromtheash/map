@@ -230,6 +230,7 @@ public sealed partial class WorkingMemoryBudget
     public void PollCachePressure()
     {
         if (Interlocked.CompareExchange(ref _cachePolling, 1, 0) != 0) return;
+        using var load = BackgroundLoad.Enter(BackgroundProducer.MemoryTrim);
         try
         {
             var memory = _read();

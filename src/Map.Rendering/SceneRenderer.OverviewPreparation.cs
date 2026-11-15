@@ -48,6 +48,7 @@ public static partial class SceneRenderer
         {
             if (!YieldDuringGesture || !_interaction()) return;
             lock (_gate) _gestureWaits++;
+            using var paused = Map.Core.Resources.BackgroundLoad.Pause();
             while (YieldDuringGesture && _interaction() && !token.IsCancellationRequested && !_disposed) Thread.Sleep(10);
         }
 
@@ -325,6 +326,8 @@ public static partial class SceneRenderer
                 {
                     work.Layer.Token.ThrowIfCancellationRequested();
                     using var slot = Map.Core.Resources.BackgroundWork.EnterSlot(work.Layer.Token);
+                    using var load = Map.Core.Resources.BackgroundLoad.Enter(work.Prefetch
+                        ? Map.Core.Resources.BackgroundProducer.OverviewPrefetch : Map.Core.Resources.BackgroundProducer.Overview);
                     if (work.Chunk is null) PreparePlan(work.Layer);
                     else PrepareChunk(work);
                 }
@@ -484,6 +487,7 @@ public static partial class SceneRenderer
                 }
                 // The plan is immutable. Enumerating a large layer's chunk directory never holds
                 // the gate a frame uses to request/take its next raster.
+                using var load = Map.Core.Resources.BackgroundLoad.Enter(Map.Core.Resources.BackgroundProducer.OverviewPrefetch);
                 var neighbours = snapshot.Plan.Chunks.Where(item =>
                     item.Key.X >= Math.Floor(view.Bounds.Left / OverviewChunkSize) && item.Key.X <= Math.Floor(view.Bounds.Right / OverviewChunkSize)
                     && item.Key.Y >= Math.Floor(view.Bounds.Top / OverviewChunkSize) && item.Key.Y <= Math.Floor(view.Bounds.Bottom / OverviewChunkSize))

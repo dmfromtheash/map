@@ -420,7 +420,7 @@ public sealed partial class HexChunkCache : IDisposable
     /// Moves pictures the worker finished into the cache, up to <see cref="CollectBytesPerFrame"/>;
     /// called on the render thread. True when more are waiting for the next frame.
     /// </summary>
-    internal bool Collect()
+    internal bool Collect(FrameBudget? budget = null)
     {
         var finished = new List<BuildRequest>();
         bool more;
@@ -444,8 +444,15 @@ public sealed partial class HexChunkCache : IDisposable
             more = _done.Count > 0;
         }
 
-        foreach (var request in finished)
+        for (var index = 0; index < finished.Count; index++)
         {
+            if (budget?.TryTake(FrameWorkKind.Hex, .1) == false)
+            {
+                lock (_gate)
+                    for (var pending = finished.Count - 1; pending >= index; pending--) _done.Add(finished[pending]);
+                return true;
+            }
+            var request = finished[index];
             if (request.Image is null) continue;
             if (request.Generation != _generation)
             {
@@ -453,7 +460,9 @@ public sealed partial class HexChunkCache : IDisposable
                 continue;
             }
 
+            var started = System.Diagnostics.Stopwatch.GetTimestamp();
             Add(request.Chunk, request.Orientation, request.Level, request.Look, request.Image, request.Context);
+            budget?.Report(FrameWorkKind.Hex, System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds);
         }
 
         return more;
@@ -480,6 +489,7 @@ public sealed partial class HexChunkCache : IDisposable
 
             try
             {
+                using var load = Map.Core.Resources.BackgroundLoad.Enter(Map.Core.Resources.BackgroundProducer.HexChunk);
                 next.Image = next.Draw();
             }
             catch (Exception error) when (error is InvalidOperationException or ArgumentException or OutOfMemoryException)

@@ -52,6 +52,7 @@ public static class ViewerFolderWriter
         var done = 0;
         Parallel.ForEach(tiles, new ParallelOptions { MaxDegreeOfParallelism = workers, CancellationToken = cancellationToken }, tile =>
         {
+            using var load = Map.Core.Resources.BackgroundLoad.Enter(Map.Core.Resources.BackgroundProducer.ViewerFolder);
             var (id, data) = MbTilesWriter.Encode(pyramid.CheckTile(tile.Level, tile.Column, tile.Row), webp);
             if (id is not null)
             {

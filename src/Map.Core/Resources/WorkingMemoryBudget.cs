@@ -77,6 +77,7 @@ public sealed partial class WorkingMemoryBudget
                 Volatile.Write(ref _lastPressureProbe, Environment.TickCount64);
                 _ = Task.Run(() =>
                 {
+                    using var load = BackgroundLoad.Enter(BackgroundProducer.MemoryTrim);
                     try
                     {
                         lock (_gate)
@@ -283,6 +284,7 @@ public sealed partial class WorkingMemoryBudget
         {
             _ = Task.Run(() =>
             {
+                using var load = BackgroundLoad.Enter(BackgroundProducer.MemoryTrim);
                 try { RefreshOtherMapPrivate(); }
                 catch { /* The last known figure stays in use. */ }
                 finally { Volatile.Write(ref _otherMapPrivateRefreshing, 0); }

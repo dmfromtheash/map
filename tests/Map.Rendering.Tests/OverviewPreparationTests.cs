@@ -338,19 +338,19 @@ public sealed class OverviewPreparationTests
         finally { cache.EndFrame(); }
     }
 
-    private static SceneObject Stamp(int i, bool painted, double size = 32, double offset = 0) => new(ObjectId.New(), SceneObjectKind.Stamp,
+    internal static SceneObject Stamp(int i, bool painted, double size = 32, double offset = 0) => new(ObjectId.New(), SceneObjectKind.Stamp,
         "owner mountain", (i % 16) * 8192 + 2048 + offset, (i / 16) * 8192 + 2048 + offset,
         size, size, 0, "#FFFFFFFF", "#00000000", 0, true, false)
         { Stamp = new StampStyle(Sha) { ShadowOpacity = painted ? .7 : 0, ShadowBlur = painted ? 6 : 0 } };
 
-    private static MapDocument Document(SceneObject[] objects, int extent = 32768) => new(DocumentId.New(), "overview prep",
+    internal static MapDocument Document(SceneObject[] objects, int extent = 32768) => new(DocumentId.New(), "overview prep",
         DateTimeOffset.UnixEpoch, new CanvasDefinition(extent, extent, "px", "#FFFFFFFF"),
         [new BaseColorLayer(LayerId.New(), "paper", true, false, 1, "#FFFFFFFF"),
          new ObjectLayer(LayerId.New(), "mountains", true, false, 1, objects)],
         [new MapAssetReference(Sha, "owner mountain", "image/png", "png", ProjectAssetStorage.Linked,
             DateTimeOffset.UnixEpoch, "owner fixture", "owner", catalogId: "owner-mountain-01")]);
 
-    private sealed class Mountains : IStampImageSource, IDisposable
+    internal sealed class Mountains : IStampImageSource, IDisposable
     {
         private readonly SKImage _image;
         public bool Block { get; set; }

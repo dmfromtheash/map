@@ -33,6 +33,7 @@ public sealed class BackgroundGeneration : IDisposable
             worker = Task.Run(async () =>
             {
                 try { await previous.ConfigureAwait(false); } catch (Exception) { /* A previous job reports its own failure. */ }
+                using var load = Resources.BackgroundLoad.Enter(Resources.BackgroundProducer.Generation);
                 source.Token.ThrowIfCancellationRequested();
                 var command = calculate(snapshot, source.Token);
                 var preview = command.Apply(snapshot);

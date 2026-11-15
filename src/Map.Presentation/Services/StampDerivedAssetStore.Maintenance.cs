@@ -170,6 +170,7 @@ public sealed partial class StampDerivedAssetStore
     private void Execute(Job job)
     {
         if (_disposed) { job.Done?.TrySetCanceled(); return; }
+        using var load = BackgroundLoad.Enter(BackgroundProducer.AssetJanitor);
         try
         {
             Directory.CreateDirectory(_root);

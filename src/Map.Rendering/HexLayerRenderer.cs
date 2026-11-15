@@ -125,7 +125,7 @@ public static partial class HexLayerRenderer
             player ? null : options.HexCursor, options.IsExport, options.RequestRefinedFrame,
             options.Stats, options.HexGestureLive, player,
             player ? null : options.HexOverlay, options.IsExport || player ? null : options.HexSettles,
-            options.HexAmbient && !options.IsExport, options.RequestAmbientFrame);
+            options.HexAmbient && !options.IsExport, options.RequestAmbientFrame, options.FrameBudget);
         DrawPresentation(canvas, layer, view, options.HexPresentation, options.ViewScale, player);
     }
 
@@ -135,7 +135,8 @@ public static partial class HexLayerRenderer
     public static void Draw(SKCanvas canvas, HexLayer layer, WorldBounds view, double viewScale,
         HexChunkCache? cache, GRContext? gpu, HexCursorPreview? cursor, bool isExport,
         Action? requestFrame = null, RenderStats? stats = null, bool live = false, bool player = false,
-        HexOverlay? overlay = null, HexSettles? settles = null, bool ambient = false, Action? requestAmbientFrame = null)
+        HexOverlay? overlay = null, HexSettles? settles = null, bool ambient = false, Action? requestAmbientFrame = null,
+        FrameBudget? frameBudget = null)
     {
         cache?.RefreshTileSets();
         if (player) layer = PlayerLayers.GetValue(layer, ExportPlayerVisibility.Sanitize);
@@ -144,9 +145,9 @@ public static partial class HexLayerRenderer
         // An export far smaller than the board (a library thumbnail of a 512 × 512 board) draws the
         // far look too: hundreds of thousands of tiles a pixel wide only average to grey.
         var flat = hexPixels < (isExport ? ExportFlatBelowPixels : FlatColourBelowPixels);
-        var budget = new BuildBudget(System.Diagnostics.Stopwatch.GetTimestamp());
+        var budget = new BuildBudget(System.Diagnostics.Stopwatch.GetTimestamp(), isExport ? null : frameBudget);
         // Pictures left for the next frame ask for it, like chunks still being drawn.
-        if (cache is { BuildInBackground: true } && !isExport && cache.Collect()) requestFrame?.Invoke();
+        if (cache is { BuildInBackground: true } && !isExport && cache.Collect(frameBudget)) requestFrame?.Invoke();
         if (cache is not null && !live && !isExport) cache.EndLive(board.Orientation);
         if (!isExport) DrawBackdrop(canvas, layer, viewScale, hexPixels);
 
@@ -280,15 +281,17 @@ public static partial class HexLayerRenderer
     }
 
     /// <summary>How many chunk images a frame built, how many it left for later, and when it started.</summary>
-    private struct BuildBudget(long started)
+    private struct BuildBudget(long started, FrameBudget? shared)
     {
         public long Started = started;
+        public FrameBudget? Shared = shared;
         public int Built;
         public int Pending;
 
         /// <summary>The first picture of a frame is always drawn; more only while the frame's budget lasts.</summary>
-        public readonly bool MayBuild => Built == 0
-            || System.Diagnostics.Stopwatch.GetElapsedTime(Started).TotalMilliseconds < BuildBudgetMilliseconds;
+        public readonly bool MayBuild => (Built == 0
+            || System.Diagnostics.Stopwatch.GetElapsedTime(Started).TotalMilliseconds < BuildBudgetMilliseconds)
+            && Shared?.TryTake(FrameWorkKind.Hex, 1) != false;
     }
 
     /// <summary>
@@ -360,7 +363,7 @@ public static partial class HexLayerRenderer
                     continue;
                 }
 
-                switch (TryDrawCached(canvas, layer, key, chunk, look, viewScale, cache, gpu, context, budget.MayBuild && !live, merged, place, sway))
+                switch (TryDrawCached(canvas, layer, key, chunk, look, viewScale, cache, gpu, context, budget.MayBuild && !live, merged, place, sway, budget.Shared))
                 {
                     case CachedDraw.Kept:
                         continue;
@@ -739,6 +742,7 @@ public static partial class HexLayerRenderer
                 var current = kept is not null && kept.Chunks.AsSpan().SequenceEqual(chunks, ReferenceComparer.Instance);
                 if (!current && budget.MayBuild)
                 {
+                    var buildStarted = System.Diagnostics.Stopwatch.GetTimestamp();
                     var topLeft = board.ChunkBounds(new HexChunkKey(bx * span, by * span));
                     var bottomRight = board.ChunkBounds(new HexChunkKey(Math.Min(bx * span + span - 1, lastChunkX), Math.Min(by * span + span - 1, lastChunkY)));
                     var bounds = new WorldBounds(topLeft.Left, topLeft.Top, bottomRight.Right, bottomRight.Bottom);
@@ -767,6 +771,7 @@ public static partial class HexLayerRenderer
                         budget.Built++;
                         current = true;
                     }
+                    budget.Shared?.Report(FrameWorkKind.Hex, System.Diagnostics.Stopwatch.GetElapsedTime(buildStarted).TotalMilliseconds);
                 }
 
                 if (kept is not null)
@@ -851,7 +856,7 @@ public static partial class HexLayerRenderer
 
     private static CachedDraw TryDrawCached(SKCanvas canvas, HexLayer layer, HexChunkKey key, HexChunk chunk, HexLook look,
         double viewScale, HexChunkCache cache, GRContext? gpu, HexChunkContext? context, bool mayBuild, bool merged,
-        HexChunkCache.Place place, double sway = -1)
+        HexChunkCache.Place place, double sway = -1, FrameBudget? frameBudget = null)
     {
         var board = layer.Board;
         // Level n keeps the chunk at scale 2^n: the nearest level at or above the view scale.
@@ -914,6 +919,7 @@ public static partial class HexLayerRenderer
 
         if (image is null)
         {
+            var buildStarted = System.Diagnostics.Stopwatch.GetTimestamp();
             var info = new SKImageInfo(width, height, SKColorType.Rgba8888, SKAlphaType.Premul);
             using var surface = (gpu is not null ? SKSurface.Create(gpu, false, info) : null) ?? SKSurface.Create(info);
             if (surface is null) return CachedDraw.Direct;
@@ -926,6 +932,7 @@ public static partial class HexLayerRenderer
             if (image is null) return CachedDraw.Direct;
             cache.Add(chunk, board.Orientation, level, look, image, context);
             result = CachedDraw.Built;
+            frameBudget?.Report(FrameWorkKind.Hex, System.Diagnostics.Stopwatch.GetElapsedTime(buildStarted).TotalMilliseconds);
         }
 
         // The right picture fades in over the one that stood in for it instead of replacing it at once.

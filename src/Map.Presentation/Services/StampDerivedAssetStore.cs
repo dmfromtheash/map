@@ -342,6 +342,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
             await _mipReader.WaitAsync(request.Stop.Token).ConfigureAwait(false);
             try
             {
+                using var load = Map.Core.Resources.BackgroundLoad.Enter(Map.Core.Resources.BackgroundProducer.AssetSmallReader);
                 lock (_requestsGate) { request.Stop.Token.ThrowIfCancellationRequested(); request.Started = true; }
                 if (header.PortablePath is not null && TryReadPortablePixels(header, key) is { } portable)
                 {
@@ -411,6 +412,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
                 lock (_largeGate) _largePreparingPeak = Math.Max(_largePreparingPeak, ++_largePreparing);
                 try
                 {
+                    using var load = Map.Core.Resources.BackgroundLoad.Enter(Map.Core.Resources.BackgroundProducer.AssetLargeLane);
                     if (header.PortablePath is not null && TryReadPortablePixels(header, key) is { } portable)
                     {
                         using var bitmap = new SKBitmap(new SKImageInfo(portable.Width, portable.Height, SKColorType.Rgba8888, SKAlphaType.Premul));
@@ -507,6 +509,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
     {
         await foreach (var (sha, completion, previewCompletion) in _queue.Reader.ReadAllAsync().ConfigureAwait(false))
         {
+            using var load = Map.Core.Resources.BackgroundLoad.Enter(Map.Core.Resources.BackgroundProducer.AssetHeader);
             try
             {
             if (!IsCurrent(sha, completion)) { completion.TrySetResult(null); previewCompletion.TrySetResult(null); continue; }
@@ -551,6 +554,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
     {
         await foreach (var (sha, completion) in _buildQueue.Reader.ReadAllAsync().ConfigureAwait(false))
         {
+            using var load = Map.Core.Resources.BackgroundLoad.Enter(Map.Core.Resources.BackgroundProducer.AssetBuild);
             try
             {
             if (!IsCurrent(sha, completion)) { completion.TrySetResult(null); continue; }
@@ -596,6 +600,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
             watcher.Renamed += (_, args) => { FileChanged(args.OldFullPath); FileChanged(args.FullPath); };
             watcher.Error += (_, _) =>
             {
+                using var load = Map.Core.Resources.BackgroundLoad.Enter(Map.Core.Resources.BackgroundProducer.Watcher);
                 // A disconnected drive or overflow loses the notification history. Drop the
                 // broken watcher so the next catalog reconnect/request can register it again.
                 lock (_watchers)
@@ -611,7 +616,11 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
         }
     }
 
-    private void FileChanged(string path) => InvalidateFile(path, cancelPixels: true);
+    private void FileChanged(string path)
+    {
+        using var load = Map.Core.Resources.BackgroundLoad.Enter(Map.Core.Resources.BackgroundProducer.Watcher);
+        InvalidateFile(path, cancelPixels: true);
+    }
 
     private void InvalidateFile(string path, bool cancelPixels)
     {

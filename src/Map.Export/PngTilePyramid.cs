@@ -72,6 +72,7 @@ public sealed record PngTilePyramid(string DirectoryPath, int Width, int Height,
     private static PngTilePyramid OpenCore(string sourcePath, string cacheRoot,
         IProgress<ExportProgress>? progress, CancellationToken token, ExportEngineSettings settings)
     {
+        using var load = Map.Core.Resources.BackgroundLoad.Enter(Map.Core.Resources.BackgroundProducer.PngPyramid);
         sourcePath = Path.GetFullPath(sourcePath);
         cacheRoot = Path.GetFullPath(cacheRoot);
         using var source = new PngPixelReader(sourcePath);
@@ -251,8 +252,10 @@ public sealed record PngTilePyramid(string DirectoryPath, int Width, int Height,
             var stride = _width * 4;
             try
             {
+                using var paused = Map.Core.Resources.BackgroundLoad.Pause();
                 Parallel.For(0, _writers.Count, new ParallelOptions { MaxDegreeOfParallelism = _workers }, column =>
                 {
+                    using var load = Map.Core.Resources.BackgroundLoad.Enter(Map.Core.Resources.BackgroundProducer.PngPyramid);
                     var (_, png, bytes) = _writers[column];
                     var offset = column * Edge * 4;
                     for (var y = 0; y < rows; y++) png.WriteRow(_batch.AsSpan(y * stride + offset, bytes));

@@ -42,7 +42,11 @@ internal sealed class AssetMetadataWriter(string path, AssetLibraryDocument? ini
             AssetLibraryDocument snapshot;
             lock (_gate) { snapshot = _pending!; _pending = null; }
             Exception? failure = null;
-            try { AssetLibraryStore.Save(path, snapshot); Saved?.Invoke(); }
+            try
+            {
+                using var load = Map.Core.Resources.BackgroundLoad.Enter(Map.Core.Resources.BackgroundProducer.AssetMetadata);
+                AssetLibraryStore.Save(path, snapshot); Saved?.Invoke();
+            }
             catch (Exception error) { failure = error; }
             lock (_gate)
             {

@@ -105,6 +105,7 @@ public sealed partial class MapCanvasControl : Control
     private sealed class CanvasRenderResources
     {
         public object Gate { get; } = new();
+        public FrameBudget FrameBudget { get; } = new();
         private long _disposedObjectImages;
         private readonly System.Collections.Generic.Dictionary<int, HexChunkCache> _hexChunks = [];
         private readonly System.Collections.Generic.Dictionary<int, (IStampImageSource? Source, long Revision)> _sourceVersions = [];
@@ -818,16 +819,24 @@ public sealed partial class MapCanvasControl : Control
 
         private void RenderFrame(ISkiaSharpApiLeaseFeature feature, long frameStarted)
         {
+            var budget = resources.FrameBudget;
+            var movingNow = cameraMoving || cameraMotionNow();
+            // The editor targets 60 Hz; time waiting for the render gate already belongs to this frame.
+            budget.Begin(1000d / 60, Stopwatch.GetElapsedTime(frameStarted).TotalMilliseconds);
             // Pictures other threads push out of the stamp cache while this frame draws are freed after it.
             if (editor.StampImages is Map.Presentation.Services.CatalogStampImageSource images)
+            {
+                images.FrameMoving = movingNow;
                 images.SetFrameReady(requestRefinedFrame);
-            using var stampFrame = editor.StampImages?.BeginFrame();
+            }
+            using var stampFrame = editor.StampImages?.BeginFrame(budget);
+            budget.Complete(FrameWorkKind.MipAdoption);
             var (tileCache, objectCache, carvedLandCache, styledLandCache, terrainCache, atlasCache, refinement, previewCache, layerImages) = resources.Current(editor.StampImages);
             tileCache.BeginFrame();
             var overviewFrame = false;
             try
             {
-                objectCache.BeginFrame(); atlasCache.BeginFrame();
+                objectCache.BeginFrame(budget); atlasCache.BeginFrame(budget);
                 overviewFrame = true;
                 using var lease = feature.Lease();
                 // DEC-111 sensor: GPU time of this frame, read asynchronously a few frames later.
@@ -908,9 +917,6 @@ public sealed partial class MapCanvasControl : Control
             var page = new SKRect(0, 0, renderDocument.Canvas.Width, renderDocument.Canvas.Height);
             // An idle draw operation can still be queued when the next input changes the
             // shared viewport. Do not start a cold exact render of that new, moving view.
-            var movingNow = cameraMoving || cameraMotionNow();
-            // The next frame's mip adoption takes the smaller gesture byte budget while the camera moves.
-            if (editor.StampImages is Map.Presentation.Services.CatalogStampImageSource movingImages) movingImages.FrameMoving = movingNow;
             // Background derived work (lookups, overview prefetch) steps aside during gestures.
             if (movingNow || fastPreview) Map.Core.Resources.BackgroundWork.NoteInteraction();
             if (GestureBudgetDisabled) { objectCache.GestureAdoptedPixelsPerFrame = 0; overviewPreparation.YieldDuringGesture = false; }
@@ -925,6 +931,7 @@ public sealed partial class MapCanvasControl : Control
             }
             var sceneOptions = new Map.Rendering.RenderOptions
             {
+                FrameBudget = budget,
                 GpuContext = lease.GrContext,
                 SelectedObjectId = editor.CanvasWorkflowOpen ? null : editor.Session.SelectedObjectId,
                 CoSelectedObjectIds = !editor.CanvasWorkflowOpen && editor.Session.SelectedObjectIds.Count > 1
@@ -1170,6 +1177,10 @@ public sealed partial class MapCanvasControl : Control
             }
             finally
             {
+                budget.Complete(FrameWorkKind.VisibleDetailTiles);
+                budget.Complete(FrameWorkKind.DetailPreparation);
+                budget.Complete(FrameWorkKind.Overview);
+                budget.Complete(FrameWorkKind.Hex);
                 tileCache.EndFrame();
                 if (overviewFrame) { objectCache.EndFrame(); atlasCache.EndFrame(); }
             }

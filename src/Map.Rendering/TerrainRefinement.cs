@@ -89,6 +89,7 @@ public sealed class TerrainRefinement : IDisposable
             var started = System.Diagnostics.Stopwatch.GetTimestamp();
             try
             {
+                using var load = Map.Core.Resources.BackgroundLoad.Enter(Map.Core.Resources.BackgroundProducer.Terrain);
                 image = request.Build();
                 if (image is null) error = "Terrain surface could not be created.";
             }

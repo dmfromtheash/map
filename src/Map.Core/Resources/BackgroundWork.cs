@@ -49,6 +49,7 @@ public static class BackgroundWork
                 using (EnterSlot())
                 {
                     YieldToInteraction();
+                    using var load = BackgroundLoad.Enter(BackgroundProducer.BackgroundWork);
                     work();
                 }
                 completion.SetResult();
@@ -84,6 +85,7 @@ public static class BackgroundWork
     {
         if (!_owned || !InteractionActive) return;
         Interlocked.Increment(ref _yields);
+        using var paused = BackgroundLoad.Pause();
         while (InteractionActive && !cancellationToken.IsCancellationRequested) Thread.Sleep(10);
     }
 

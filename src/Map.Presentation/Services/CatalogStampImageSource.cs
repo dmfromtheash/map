@@ -620,11 +620,16 @@ public sealed class CatalogStampImageSource(
     public long ByteLimitedFrames => Interlocked.Read(ref _byteLimitedFrames);
 
     /// <summary>The canvas frame on the render thread: evictions by other threads wait until it ends.</summary>
-    public IDisposable? BeginFrame()
+    public IDisposable? BeginFrame() => BeginFrame(null);
+
+    private FrameBudget? _frameBudget;
+
+    public IDisposable? BeginFrame(FrameBudget? budget)
     {
         lock (_gate)
         {
             if (_disposed) return null;
+            _frameBudget = budget;
             _frameThread = Environment.CurrentManagedThreadId;
             _derived?.ObserveCanvasThread();
             _validatedThisFrame.Clear();
@@ -644,21 +649,28 @@ public sealed class CatalogStampImageSource(
                 long adoptedBytes = 0;
                 foreach (var key in _derived.ReadyPixels)
                 {
+                    // The frame budget adds the time side; the byte limit above stays as it was.
+                    if (budget?.TryTake(FrameWorkKind.MipAdoption, .1) == false)
+                    { _derivedReady?.Invoke(); break; }
+                    var unitStarted = budget is null ? 0 : System.Diagnostics.Stopwatch.GetTimestamp();
                     if (_derived.TryTakePixels(key, out var mip))
                     {
                         AdoptDerivedMip(key, mip);
                         adoptedBytes += (long)(mip?.Width ?? 0) * (mip?.Height ?? 0) * 4;
+                        budget?.Report(FrameWorkKind.MipAdoption,
+                            System.Diagnostics.Stopwatch.GetElapsedTime(unitStarted).TotalMilliseconds);
                     }
-                    if (System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds >= 2
-                        || byteBudget > 0 && adoptedBytes >= byteBudget)
+                    var byteLimited = byteBudget > 0 && adoptedBytes >= byteBudget;
+                    if (System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds >= 2 || byteLimited)
                     {
-                        if (adoptedBytes >= byteBudget) _byteLimitedFrames++;
+                        if (byteLimited) _byteLimitedFrames++;
                         if (_derived.ReadyPixels.Any()) _derivedReady?.Invoke();
                         break;
                     }
                 }
                 if (MeasureTimings) _adoptTicks += System.Diagnostics.Stopwatch.GetTimestamp() - started;
             }
+            budget?.Complete(FrameWorkKind.MipAdoption);
             return new FrameScope(this);
         }
     }
@@ -682,8 +694,16 @@ public sealed class CatalogStampImageSource(
             _samples.DisposeRetired();
             // Only while Windows is short of memory: images nobody drew for two seconds, on the frame's own thread
             // after it, within 2 ms together. Sampled steps (cheap to remake) go before decoded sources.
-            _samples.TrimForMemoryPressure(1);
-            _cache.TrimForMemoryPressure(1);
+            if (_frameBudget?.TryTake(FrameWorkKind.Trims, .1) != false)
+            {
+                var trimStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+                var slice = Math.Min(1, _frameBudget?.AvailableMilliseconds(FrameWorkKind.Trims) / 2 ?? 1);
+                _samples.TrimForMemoryPressure(slice);
+                _cache.TrimForMemoryPressure(slice);
+                _frameBudget?.Report(FrameWorkKind.Trims,
+                    System.Diagnostics.Stopwatch.GetElapsedTime(trimStarted).TotalMilliseconds);
+            }
+            _frameBudget = null;
         }
     }
 
@@ -868,6 +888,7 @@ public sealed class CatalogStampImageSource(
                 var left = lease.Deadline - Environment.TickCount64;
                 try
                 {
+                    using var paused = Map.Core.Resources.BackgroundLoad.Pause();
                     if (left <= 0 || !wait.Wait(TimeSpan.FromMilliseconds(left), lease.Cancellation))
                     { lock (_gate) lease.Preparing++; return true; }
                 }
@@ -1249,6 +1270,7 @@ public sealed class CatalogStampImageSource(
                         if (!_derived.TryRequestPixels(header, pixel.Step, pixel.Level, out task)) continue;
                     }
                     await task.ConfigureAwait(false);
+                    using var load = Map.Core.Resources.BackgroundLoad.Enter(Map.Core.Resources.BackgroundProducer.AssetRetry);
                     lock (_gate)
                     {
                         if (_disposed || !_cacheableMissing.Contains(pixel)) continue;
@@ -1332,6 +1354,7 @@ public sealed class CatalogStampImageSource(
         _decoding.Add(key);
         _ = Task.Run(() =>
         {
+            using var load = Map.Core.Resources.BackgroundLoad.Enter(Map.Core.Resources.BackgroundProducer.AssetDecode);
             byte[]? encoded = null; SKImage? image = null;
             try
             {

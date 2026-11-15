@@ -617,6 +617,7 @@ public sealed class ImageExportEngine : IImageExporter
         int? tileIndex,
         CancellationToken cancellationToken)
     {
+        using var load = Map.Core.Resources.BackgroundLoad.Enter(Map.Core.Resources.BackgroundProducer.ExportRender);
         cancellationToken.ThrowIfCancellationRequested();
         var width = checked(pixelRect.Width + (2 * bleed));
         var height = checked(pixelRect.Height + (2 * bleed));
@@ -683,6 +684,7 @@ public sealed class ImageExportEngine : IImageExporter
 
     private static SKData Encode(SKImage image, ExportImageFormat format, int quality)
     {
+        using var load = Map.Core.Resources.BackgroundLoad.Enter(Map.Core.Resources.BackgroundProducer.ExportEncode);
         var data = image.Encode(ToSkiaFormat(format), quality)
             ?? throw new InvalidOperationException($"Кодировщик {FormatName(format)} недоступен.");
         return data;
@@ -690,6 +692,7 @@ public sealed class ImageExportEngine : IImageExporter
 
     private static SKData EncodePngTile(SKImage image, CancellationToken cancellationToken)
     {
+        using var load = Map.Core.Resources.BackgroundLoad.Enter(Map.Core.Resources.BackgroundProducer.ExportEncode);
         var info = new SKImageInfo(image.Width, image.Height, SKColorType.Rgba8888, SKAlphaType.Unpremul);
         using var pixels = new SKBitmap(info);
         if (!image.ReadPixels(info, pixels.GetPixels(), pixels.RowBytes, 0, 0))

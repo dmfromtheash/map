@@ -30,6 +30,7 @@ public static partial class LabelPriority
                     _ready = ready;
                     _task ??= Task.Run(() =>
                     {
+                        using var load = Resources.BackgroundLoad.Enter(Resources.BackgroundProducer.LabelIndex);
                         try { Prepare(document); }
                         finally
                         {

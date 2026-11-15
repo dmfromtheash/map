@@ -59,6 +59,7 @@ public sealed class ObjectOverviewCache : IDisposable
     private readonly double _overviewBuildBudgetMilliseconds;
     private double _overviewBuildMilliseconds;
     private int _overviewBuilds;
+    private FrameBudget? _frameBudget;
 
     private readonly Map.Core.Resources.CacheMemoryAccount? _account;
     private long _pressureRetryFrame;
@@ -68,8 +69,9 @@ public sealed class ObjectOverviewCache : IDisposable
     /// <summary>... nor one drawn within this time, so a fast frame rate does not shorten the protection.</summary>
     public long PressureProtectedMilliseconds { get; init; } = 2000;
     public long PressureTrims { get; private set; }
-    /// <summary>Time one pressure pass may take on the owner thread; the first tile of a pass always goes.</summary>
+    /// <summary>Local pressure ceiling; without a shared budget the first tile always goes.</summary>
     internal double PressureTrimMilliseconds { get; init; } = 2;
+    public double FramePressureTrimMilliseconds { get; private set; }
 
     private void Touch(Entry entry)
     {
@@ -89,6 +91,8 @@ public sealed class ObjectOverviewCache : IDisposable
         if (_account is null || _frame < _pressureRetryFrame) return;
         var target = _account.TargetBytes;
         if (Bytes <= target) return;
+        if (_frameBudget?.TryTake(FrameWorkKind.Trims, .1) == false) return;
+        var slice = Math.Min(PressureTrimMilliseconds, _frameBudget?.AvailableMilliseconds(FrameWorkKind.Trims) ?? PressureTrimMilliseconds);
         var started = System.Diagnostics.Stopwatch.GetTimestamp();
         var now = Environment.TickCount64;
         var candidates = new List<KeyValuePair<Key, Entry>>();
@@ -109,23 +113,29 @@ public sealed class ObjectOverviewCache : IDisposable
         foreach (var pair in candidates)
         {
             if (Bytes <= target) break;
-            // The scan and sort count against the budget too, but a pass always frees one tile: on a slow PC (a CI
-            // runner's cold JIT, 2026-11-14) the scan alone took the 2 ms and the cache never fell to its watermark.
-            if (items > 0 && System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds >= PressureTrimMilliseconds)
+            // With no shared owner preserve main's first-item progress after an expensive scan.
+            // A shared frame instead defers when its slice has already been spent by that scan.
+            if ((items > 0 || _frameBudget is not null)
+                && System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds >= slice)
             { exhausted = false; break; }
             if (Remove(pair.Key, eviction: true)) items++;
         }
         if (exhausted && Bytes > target) _pressureRetryFrame = retry == long.MaxValue ? _frame + 15 : retry;
         if (items > 0) { PressureTrims++; _account.RecordTrim(before - Bytes, items); }
+        FramePressureTrimMilliseconds += System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+        _frameBudget?.Report(FrameWorkKind.Trims, FramePressureTrimMilliseconds);
     }
 
-    internal void BeginOverviewPass()
+    internal void BeginOverviewPass(FrameBudget? budget = null)
     {
+        _frameBudget = budget;
+        budget?.SetCeiling(FrameWorkKind.Overview, _overviewBuildBudgetMilliseconds);
         if (!_frameOpen) { _overviewBuildMilliseconds = 0; _overviewBuilds = 0; _adoptedPixels = 0; _adoptions = 0; _adoptionMoving = false; }
     }
 
-    // One indivisible chunk is allowed to make progress even if it alone exceeds the budget.
-    internal bool CanBuildOverview => _overviewBuilds == 0 || _overviewBuildMilliseconds < _overviewBuildBudgetMilliseconds;
+    // The legacy local ceiling allows one chunk; a shared frame also requires admission.
+    internal bool CanBuildOverview => (_overviewBuilds == 0 || _overviewBuildMilliseconds < _overviewBuildBudgetMilliseconds)
+        && _frameBudget?.TryTake(FrameWorkKind.Overview, .5) != false;
     // Taking a ready background raster costs microseconds here, but its first draw uploads it to
     // the GPU. Bound the new pixels per frame too (at least one picture always goes through).
     internal const long AdoptedPixelsPerFrame = 8L * 1024 * 1024;
@@ -154,6 +164,7 @@ public sealed class ObjectOverviewCache : IDisposable
     {
         _adoptionMoving |= cameraMoving;
         if (_overviewBuildMilliseconds >= _overviewBuildBudgetMilliseconds) return false;
+        if (_frameBudget?.TryTake(FrameWorkKind.Overview, .1) == false) return false;
         if (_adoptions == 0) return true; // one indivisible picture always goes through
         if (_adoptionMoving && GestureAdoptedPixelsPerFrame > 0 && _adoptions >= GestureAdoptionsPerFrame) return false;
         return _adoptedPixels < AdoptionBudgetPixels;
@@ -169,6 +180,7 @@ public sealed class ObjectOverviewCache : IDisposable
         _overviewBuilds++;
         var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds;
         _overviewBuildMilliseconds += elapsed;
+        _frameBudget?.Report(FrameWorkKind.Overview, elapsed);
         return elapsed;
     }
 
@@ -236,11 +248,14 @@ public sealed class ObjectOverviewCache : IDisposable
         _gpuContext = context;
     }
 
-    public void BeginFrame()
+    public void BeginFrame(FrameBudget? budget = null)
     {
         EnsureOwnerThread();
         if (_frameOpen) throw new InvalidOperationException("An overview frame is already open.");
         _frameOpen = true;
+        FramePressureTrimMilliseconds = 0;
+        _frameBudget = budget;
+        budget?.SetCeiling(FrameWorkKind.Overview, _overviewBuildBudgetMilliseconds);
         _frame++;
         _overviewBuildMilliseconds = 0;
         _overviewBuilds = 0;

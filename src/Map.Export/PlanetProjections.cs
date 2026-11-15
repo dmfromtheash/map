@@ -59,8 +59,10 @@ public static class PlanetProjections
         var src = source.Pixels;
         var (sw, sh) = (source.Width, source.Height);
         var (lambda0, phi0) = (centerLongitude * Math.PI / 180, centerLatitude * Math.PI / 180);
+        using (Map.Core.Resources.BackgroundLoad.Pause())
         Parallel.For(0, h, y =>
         {
+            using var load = Map.Core.Resources.BackgroundLoad.Enter(Map.Core.Resources.BackgroundProducer.Planet);
             for (var x = 0; x < w; x++)
             {
                 var (u, v) = ((x + .5) / w, (y + .5) / h);

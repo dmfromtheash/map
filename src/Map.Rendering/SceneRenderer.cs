@@ -77,6 +77,7 @@ public interface IStampImageSource
     /// only when it ends. Null when the source has nothing to defer.
     /// </summary>
     IDisposable? BeginFrame() => null;
+    IDisposable? BeginFrame(FrameBudget? budget) => BeginFrame();
 }
 
 /// <summary>See <see cref="IStampImageSource.CreatePreparationPlan"/>.</summary>
@@ -196,6 +197,8 @@ public sealed class RenderStats
     public int ObjectTilesDrawn { get; set; }
     public double DetailPrepareMilliseconds { get; set; }
     public double DetailRasterMilliseconds { get; set; }
+    /// <summary>Frame-thread tile builds and adoption; excludes worker raster time.</summary>
+    public double DetailRefinementMilliseconds { get; set; }
     /// <summary>Exact object tiles left for a later frame by the settled-frame budget (R05).</summary>
     public int DetailTilesPending { get; set; }
     /// <summary>Pending detail tiles drawn from a kept tile of another zoom level (a parent or children) instead of
@@ -283,6 +286,7 @@ public sealed class RenderStats
         ObjectTilesDrawn = 0;
         DetailPrepareMilliseconds = 0;
         DetailRasterMilliseconds = 0;
+        DetailRefinementMilliseconds = 0;
         DetailTilesPending = 0;
         GpuDetailTiles = 0;
         ObjectCacheHits = 0;
@@ -363,6 +367,9 @@ public enum RenderLodTier
 /// <summary>Options of one scene pass. Selection overlay is editor chrome and is opt-in only.</summary>
 public sealed class RenderOptions
 {
+    /// <summary>Shared render-thread refinement deadline; null preserves independent client budgets.</summary>
+    public FrameBudget? FrameBudget { get => _frameBudget; init => _frameBudget = value; }
+    private FrameBudget? _frameBudget;
     /// <summary>Borrowed only during a native frame. Cached detail images remain raster-owned.</summary>
     public GRContext? GpuContext { get => _gpuContext; init => _gpuContext = value; }
     private GRContext? _gpuContext;
@@ -455,6 +462,7 @@ public sealed class RenderOptions
         copy._stamps = stamps;
         copy._stats = stats;
         copy._gpuContext = null;
+        copy._frameBudget = null;
         copy._objectCache = null;
         copy._atlasCache = null;
         copy._overviewPreparation = null;
@@ -807,6 +815,37 @@ public static partial class SceneRenderer
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(options);
 
+        options.FrameBudget?.SetCeiling(FrameWorkKind.VisibleDetailTiles, options.DetailTileBudgetMilliseconds);
+        options.FrameBudget?.SetCeiling(FrameWorkKind.DetailPreparation, DetailPreparation.PrepareBudgetMilliseconds);
+        if (options.FrameBudget is { } budget)
+        {
+            // Release reservations for absent clients without walking any layer's objects.
+            var hasObjects = false;
+            var hasDetail = false;
+            var hasHex = false;
+            // An index loop: enumerating the IReadOnlyList would allocate an enumerator every frame.
+            var layers = document.Layers;
+            for (var index = 0; index < layers.Count; index++)
+            {
+                var layer = layers[index];
+                if (!layer.Visible) continue;
+                if (layer is ObjectLayer objects)
+                {
+                    hasObjects = true;
+                    hasDetail |= objects.Objects.Count >= DenseTileMinimumObjects;
+                }
+                else if (layer is HexLayer) hasHex = true;
+            }
+            if (options.ObjectCache is null || options.ViewScale < .03
+                || !hasDetail)
+            {
+                budget.Complete(FrameWorkKind.VisibleDetailTiles);
+                budget.Complete(FrameWorkKind.DetailPreparation);
+            }
+            if (options.ObjectCache is null || !hasObjects) budget.Complete(FrameWorkKind.Overview);
+            if (options.HexChunks is null || !hasHex)
+                budget.Complete(FrameWorkKind.Hex);
+        }
         options.Stats?.Reset();
         options.PreviewCache?.Sync(options.Preview);
         if (UseCoarseCoverage(options))
@@ -2262,7 +2301,8 @@ public static partial class SceneRenderer
                     using var faint = new SKPaint { Color = SKColors.White.WithAlpha((byte)Math.Round(255 * alpha)) };
                     canvas.SaveLayer(faint);
                     HexLayerRenderer.Draw(canvas, hexLayer, view, options.ViewScale, options.IsExport ? null : options.HexChunks,
-                        options.GpuContext, null, options.IsExport, options.RequestRefinedFrame, null, false, options.HexPlayerView || options.HexPresentation == HexPresentation.PlayerKnowledge, null);
+                        options.GpuContext, null, options.IsExport, options.RequestRefinedFrame, null, false, options.HexPlayerView || options.HexPresentation == HexPresentation.PlayerKnowledge, null,
+                        frameBudget: options.FrameBudget);
                     canvas.Restore();
                     break;
                 }
@@ -2986,8 +3026,10 @@ public static partial class SceneRenderer
             // in order exactly as before.
             var fields = new LandCliffField[squares.Count];
             var prepareStarted = Stopwatch.GetTimestamp();
+            using (Map.Core.Resources.BackgroundLoad.Pause())
             Parallel.For(0, squares.Count, new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount / 2) }, i =>
             {
+                using var load = Map.Core.Resources.BackgroundLoad.Enter(Map.Core.Resources.BackgroundProducer.Cliff);
                 var made = LandCliffField.Get(layer, beneath, cliff.Lean, cliffReach, lod, squares[i].Fx, squares[i].Fy, screeReach);
                 fields[i] = made;
                 if (made.Wall is { } reach && reach.Intersects(view) && deviceScale * made.Texel <= 1.001)
@@ -3735,8 +3777,9 @@ public static partial class SceneRenderer
             var bounds = new WorldBounds(x * worldSize, y * worldSize, (x + 1) * worldSize, (y + 1) * worldSize);
             var revision = revisions.Version(x, y, bucket, Expand(bounds, 1 / scale), missingRevision);
             var exactKept = cache.TryGet(layer.Id, x, y, DetailZoomKey(layer, bucket), revision, out _);
-            var budgetSpent = budgetTiles && frame.Built > 0
-                && System.Diagnostics.Stopwatch.GetElapsedTime(frame.Started).TotalMilliseconds >= options.DetailTileBudgetMilliseconds;
+            var budgetSpent = budgetTiles && (frame.Built > 0
+                && System.Diagnostics.Stopwatch.GetElapsedTime(frame.Started).TotalMilliseconds >= options.DetailTileBudgetMilliseconds
+                || !exactKept && options.FrameBudget?.TryTake(FrameWorkKind.VisibleDetailTiles, 1) == false);
             if (!exactKept && prepareBucket is not null && budgetSpent)
             {
                 deferredTiles++;
@@ -3793,6 +3836,7 @@ public static partial class SceneRenderer
             var drawnBefore = options.Stats?.ObjectsDrawn ?? 0;
             var unresolvedBefore = options.Stats?.UnresolvedImages ?? 0;
             var requestsBefore = options.Stamps?.UnresolvedRequestVersion ?? 0;
+            var tileStarted = Stopwatch.GetTimestamp();
             var cached = background == BackgroundTile.Adopted ? adopted : cache.GetOrCreate(layer.Id, x, y, DetailZoomKey(layer, bucket), revision, () =>
             {
                 // Preserve the established platform pixel layout on both paths: changing it
@@ -3825,6 +3869,12 @@ public static partial class SceneRenderer
             }, () => (objectCount, culledCount), fallback: prepareBucket is not null,
                 keep: () => (options.Stats?.UnresolvedImages ?? 0) == unresolvedBefore
                     && (options.Stamps?.UnresolvedRequestVersion ?? 0) == requestsBefore);
+            if (!exactKept && background != BackgroundTile.Adopted)
+            {
+                var elapsed = Stopwatch.GetElapsedTime(tileStarted).TotalMilliseconds;
+                options.FrameBudget?.Report(FrameWorkKind.VisibleDetailTiles, elapsed);
+                if (options.Stats is { } refinement) refinement.DetailRefinementMilliseconds += elapsed;
+            }
             // One pixel of bleed avoids seams from neighboring tiles under fractional pan/zoom.
             if (prepareBucket is null)
             {
@@ -3943,6 +3993,17 @@ public static partial class SceneRenderer
     /// refining frame no longer walks every object of the view several times.
     /// </summary>
     private static bool TileImagesReady(ObjectLayer layer, DetailTileRevisions revisions, int x, int y, int bucket,
+        WorldBounds bounds, double scale, RenderOptions options, DetailPreparation frame)
+    {
+        if (options.FrameBudget is not { } budget || options.Stamps is null || options.RequestRefinedFrame is null)
+            return PrepareTileImages(layer, revisions, x, y, bucket, bounds, scale, options, frame);
+        if (!budget.TryTake(FrameWorkKind.DetailPreparation, .1)) return false;
+        var started = Stopwatch.GetTimestamp();
+        try { return PrepareTileImages(layer, revisions, x, y, bucket, bounds, scale, options, frame); }
+        finally { budget.Report(FrameWorkKind.DetailPreparation, Stopwatch.GetElapsedTime(started).TotalMilliseconds); }
+    }
+
+    private static bool PrepareTileImages(ObjectLayer layer, DetailTileRevisions revisions, int x, int y, int bucket,
         WorldBounds bounds, double scale, RenderOptions options, DetailPreparation frame)
     {
         if (options.Stamps is not { } stamps || options.RequestRefinedFrame is not { } ready) return true;
@@ -6308,7 +6369,7 @@ public static partial class SceneRenderer
         // Prepare centre-first, then composite in the original row order: painted margins
         // can overlap. The cache retains the variant together with its old raster, including
         // its bounds and exact objects, even when another render context advances the plan.
-        cache.BeginOverviewPass();
+        cache.BeginOverviewPass(options.FrameBudget);
         var visible = new List<(int X, int Y, OverviewChunk Chunk)>();
         for (var y = minY; y <= maxY; y++)
             for (var x = minX; x <= maxX; x++)

@@ -71,7 +71,12 @@ public static partial class SceneRenderer
             new Thread(() =>
             {
                 foreach (var work in queue.GetConsumingEnumerable())
-                    try { work(); } catch (Exception ex) when (ex is not OutOfMemoryException) { }
+                    try
+                    {
+                        using var load = Map.Core.Resources.BackgroundLoad.Enter(Map.Core.Resources.BackgroundProducer.DetailRaster);
+                        work();
+                    }
+                    catch (Exception ex) when (ex is not OutOfMemoryException) { }
             })
             {
                 IsBackground = true, Priority = ThreadPriority.BelowNormal, Name = "Map detail tile raster " + i,
@@ -220,6 +225,7 @@ public static partial class SceneRenderer
                 if (!job.Done) { if (options.Stats is { } waiting) waiting.DetailRastersWaiting++; return BackgroundTile.Waiting; }
                 // Each adopted tile is a texture upload on its first draw (on the CPU a 0.26 Mpx copy): one per frame.
                 if (frame.Adopted >= 1) return BackgroundTile.Waiting;
+                if (options.FrameBudget?.TryTake(FrameWorkKind.VisibleDetailTiles, .1) == false) return BackgroundTile.Waiting;
                 image = job.Image;
                 job.Image = null;
             }
@@ -231,9 +237,13 @@ public static partial class SceneRenderer
                 return BackgroundTile.FrameThread;
             }
             frame.Adopted++;
+            var adoptionStarted = System.Diagnostics.Stopwatch.GetTimestamp();
             if (options.Stats is { } taken) taken.DetailRastersAdopted++;
             adopted = cache.GetOrCreate(layer.Id, x, y, DetailZoomKey(layer, bucket), revision, () => image,
                 () => (job.Objects, job.Culled), fallback: seed);
+            var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(adoptionStarted).TotalMilliseconds;
+            options.FrameBudget?.Report(FrameWorkKind.VisibleDetailTiles, elapsed);
+            if (options.Stats is { } refinement) refinement.DetailRefinementMilliseconds += elapsed;
             return BackgroundTile.Adopted;
         }
         var area = Expand(bounds, 1 / scale);

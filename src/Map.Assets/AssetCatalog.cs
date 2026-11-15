@@ -134,7 +134,11 @@ public sealed partial class AssetCatalog : IAsyncDisposable
         // The query copy sees the owner's library and every mounted drive library as one list;
         // it never writes, so the merged snapshot is never persisted anywhere.
         var snapshot = _snapshot;
-        return Task.Run(() => new AssetCatalog(this, snapshot).QueryCore(query, cancellationToken), cancellationToken);
+        return Task.Run(() =>
+        {
+            using var load = Map.Core.Resources.BackgroundLoad.Enter(Map.Core.Resources.BackgroundProducer.AssetQuery);
+            return new AssetCatalog(this, snapshot).QueryCore(query, cancellationToken);
+        }, cancellationToken);
     }
 
     public AssetLibraryStatus Status => _snapshot.Own.Document.Status;

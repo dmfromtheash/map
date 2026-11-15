@@ -101,7 +101,13 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
             + $"pan p99/max={PanP99:F1}/{PanMax:F1} ms preflight={PreflightMsTotal:F0} ms/{PreflightItems} items reference={ReferenceSeconds:F1}s refetched={Refetched} {Diagnostics}";
     }
 
-    internal static Result Run(int objects, int assets, int canvas, double simulatedSeconds, long residentBytes, bool pan = false, bool clustered = false)
+    internal readonly record struct RefinementSample(double Mips, double Tiles, double Ready, double Overview, double Trims)
+    {
+        public double Total => Mips + Tiles + Ready + Overview + Trims;
+    }
+
+    internal static Result Run(int objects, int assets, int canvas, double simulatedSeconds, long residentBytes, bool pan = false, bool clustered = false,
+        FrameBudget? budget = null, Action<RefinementSample>? refinementSample = null)
     {
         var disk = new MipDisk();
         try
@@ -137,7 +143,10 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
                 var preflightBefore = source.PreflightMilliseconds;
                 var pauseBefore = GC.GetTotalPauseDuration().TotalMilliseconds;
                 var pixels = Draw(source, progressiveTiles, progressiveAtlas, stats, refine: true, offsetX, scale, document, lastFrame, out var elapsed,
-                    overview: overviewPreparation);
+                    overview: overviewPreparation, budget: budget);
+                refinementSample?.Invoke(new(source.LastAdoptionMilliseconds, stats.DetailRefinementMilliseconds,
+                    stats.DetailReadyMilliseconds, stats.OverviewRefinementMilliseconds,
+                    progressiveTiles.FramePressureTrimMilliseconds + progressiveAtlas.FramePressureTrimMilliseconds));
                 var build = stats.DetailRasterMilliseconds + stats.DetailPrepareMilliseconds;
                 started += stats.DetailRastersStarted; adoptedTiles += stats.DetailRastersAdopted; onFrame += stats.DetailTilesBuiltOnFrame;
                 if (stats.DetailRastersWaiting > 0) waitingFrames++;
@@ -294,26 +303,36 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
 
     private static byte[] Draw(BoundedDerivedSource source, ObjectOverviewCache tiles, ObjectOverviewCache atlas, RenderStats stats,
         bool refine, double offsetX, double scale, MapDocument document, double sinceLastFrame, out double renderMilliseconds, bool fastTerrain = false, SceneRenderer.OverviewPreparation? overview = null,
-        double offsetY = 0)
+        double offsetY = 0, FrameBudget? budget = null)
     {
         using var surface = SKSurface.Create(new SKImageInfo(Width, Height))!;
         surface.Canvas.Clear(SKColors.White);
         surface.Canvas.Scale((float)scale);
         surface.Canvas.Translate((float)-offsetX, (float)-offsetY);
         var started = Stopwatch.GetTimestamp();
-        using (source.BeginFrame(sinceLastFrame))
+        budget?.Begin(1000d / 60, 0);
+        using (source.BeginFrame(sinceLastFrame, budget))
         {
-            tiles.BeginFrame(); atlas.BeginFrame();
+            tiles.BeginFrame(budget); atlas.BeginFrame(budget);
             try
             {
                 SceneRenderer.Render(surface.Canvas, document, new RenderOptions
                 {
                     Stamps = source, ObjectCache = tiles, AtlasCache = atlas, Stats = stats, ViewScale = scale,
+                    FrameBudget = budget,
                     VisibleWorld = new(offsetX, offsetY, offsetX + Width / scale, offsetY + Height / scale),
                     RequestRefinedFrame = refine ? () => { } : null, FastTerrain = fastTerrain, OverviewPreparation = overview,
                 });
             }
-            finally { var ending = Stopwatch.GetTimestamp(); tiles.EndFrame(); atlas.EndFrame(); LastEndMilliseconds = Stopwatch.GetElapsedTime(ending).TotalMilliseconds; }
+            finally
+            {
+                budget?.Complete(FrameWorkKind.VisibleDetailTiles);
+                budget?.Complete(FrameWorkKind.DetailPreparation);
+                budget?.Complete(FrameWorkKind.Overview);
+                budget?.Complete(FrameWorkKind.Hex);
+                var ending = Stopwatch.GetTimestamp(); tiles.EndFrame(); atlas.EndFrame();
+                LastEndMilliseconds = Stopwatch.GetElapsedTime(ending).TotalMilliseconds;
+            }
         }
         renderMilliseconds = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
         // Only a settled (or reference) frame is read back: a 9 MB array per frame is the harness's own
@@ -419,8 +438,11 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
         [ThreadStatic] private static bool _pending;
         public bool LastImageRequestPending => _pending;
 
-        public IDisposable BeginFrame(double sinceLastFrame)
+        public double LastAdoptionMilliseconds { get; private set; }
+
+        public IDisposable BeginFrame(double sinceLastFrame, FrameBudget? budget = null)
         {
+            LastAdoptionMilliseconds = 0;
             var begun = Stopwatch.GetTimestamp();
             _inFrame = true;
             (_previousWanted, _wanted) = (_wanted, _previousWanted);
@@ -455,6 +477,8 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
             {
                 var (key, _, pixels) = _finished[next];
                 if (!pixels.IsCompleted) { next++; continue; }
+                if (budget?.TryTake(FrameWorkKind.MipAdoption, .1) == false) break;
+                var adoptedAt = Stopwatch.GetTimestamp();
                 _finished.RemoveAt(next);
                 _inFlight.Remove(key);
                 // The real adoption copies the prepared pixels into a frame-owned image.
@@ -462,7 +486,11 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
                 using var copy = SKBitmap.FromImage(image);
                 Adopt(key, SKImage.FromBitmap(copy));
                 _late.Remove(key);
+                var elapsed = Stopwatch.GetElapsedTime(adoptedAt).TotalMilliseconds;
+                LastAdoptionMilliseconds += elapsed;
+                budget?.Report(FrameWorkKind.MipAdoption, elapsed);
             }
+            budget?.Complete(FrameWorkKind.MipAdoption);
             LastBeginFrameMilliseconds = Stopwatch.GetElapsedTime(begun).TotalMilliseconds;
             return new End(this);
         }

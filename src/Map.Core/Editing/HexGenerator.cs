@@ -256,8 +256,10 @@ public static class HexWorldGenerator
             var scale = (0.9 + 3.2 * Math.Clamp(fragmentation, 0, 1)) * (_settings.Mode == HexWorldMode.Archipelago ? 2.2 : 1);
             var rimFalloff = _settings.OpenEdges ? 0 : 1.1 - 0.6 * fragmentation;
             var span = Math.Max(_columns, _rows);
+            using (Resources.BackgroundLoad.Pause())
             Parallel.For(0, _rows, new ParallelOptions { CancellationToken = _cancellation, MaxDegreeOfParallelism = 2 }, row =>
             {
+                using var load = Resources.BackgroundLoad.Enter(Resources.BackgroundProducer.Generation);
                 for (var column = 0; column < _columns; column++)
                 {
                     var hex = _board.Layout.FromOffset(new HexOffset(column, row));

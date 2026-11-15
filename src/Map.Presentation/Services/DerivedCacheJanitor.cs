@@ -145,7 +145,11 @@ public sealed class DerivedCacheJanitor
 
     // Task.Run also moves the initial directory/drive queries and lock wait off the caller thread.
     public Task<DerivedCacheJanitorReport> CleanAsync(CancellationToken cancellationToken = default) =>
-        Task.Run(() => Clean(cancellationToken), cancellationToken);
+        Task.Run(() =>
+        {
+            using var load = Map.Core.Resources.BackgroundLoad.Enter(Map.Core.Resources.BackgroundProducer.AssetJanitor);
+            return Clean(cancellationToken);
+        }, cancellationToken);
 
     /// <summary>Synchronous form for a caller already on its own background thread (the store's maintenance).</summary>
     internal DerivedCacheJanitorReport Clean(CancellationToken cancellationToken) =>
@@ -216,7 +220,11 @@ public sealed class DerivedCacheJanitor
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(select);
-        return Task.Run(() => Purge(select, cancellationToken), cancellationToken);
+        return Task.Run(() =>
+        {
+            using var load = Map.Core.Resources.BackgroundLoad.Enter(Map.Core.Resources.BackgroundProducer.AssetJanitor);
+            return Purge(select, cancellationToken);
+        }, cancellationToken);
     }
 
     internal DerivedCacheJanitorReport Purge(Func<DerivedCacheEntry, bool> select, CancellationToken cancellationToken) =>

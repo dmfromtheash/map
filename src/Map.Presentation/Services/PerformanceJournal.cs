@@ -120,6 +120,7 @@ public sealed class PerformanceJournal : IDisposable
 
     private void DrainWithMemory(bool finish)
     {
+        using var load = Map.Core.Resources.BackgroundLoad.Enter(Map.Core.Resources.BackgroundProducer.Journal);
         var (resident, peak) = ReadWorkingSet();
         _processPeakWorkingSet = Math.Max(_processPeakWorkingSet, peak);
         if (finish) Finish(Stopwatch.GetTimestamp(), resident);

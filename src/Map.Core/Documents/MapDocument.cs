@@ -366,8 +366,10 @@ public sealed record MapDocument
         }
 
         var failures = new Exception?[areas.Length];
+        using (Resources.BackgroundLoad.Pause())
         Parallel.For(0, areas.Length, index =>
         {
+            using var load = Resources.BackgroundLoad.Enter(Resources.BackgroundProducer.Validation);
             try { areas[index].ValidateMembers(); }
             catch (Exception error) { failures[index] = error; }
         });

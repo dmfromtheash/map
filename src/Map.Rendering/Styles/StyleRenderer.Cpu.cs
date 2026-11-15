@@ -18,9 +18,11 @@ public static partial class StyleRenderer
         if (address == IntPtr.Zero) return null;
         pixels.Erase(SKColors.Transparent);
         var rowBytes = pixels.RowBytes;
+        using (Map.Core.Resources.BackgroundLoad.Pause())
         Parallel.For(0, (height + bandHeight - 1) / bandHeight,
             new ParallelOptions { MaxDegreeOfParallelism = Math.Min(4, Environment.ProcessorCount) }, band =>
             {
+                using var load = Map.Core.Resources.BackgroundLoad.Enter(Map.Core.Resources.BackgroundProducer.StylePaint);
                 var top = band * bandHeight;
                 var rows = Math.Min(bandHeight, height - top);
                 using var surface = SKSurface.Create(info.WithSize(width, rows),
