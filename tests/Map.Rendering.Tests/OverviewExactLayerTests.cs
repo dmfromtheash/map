@@ -47,10 +47,16 @@ public sealed class OverviewExactLayerTests(ITestOutputHelper output)
         foreach (var edit in after.Edits)
         {
             var worst = edit.Frames.MaxBy(f => f.Ms)!;
-            output.WriteLine($"{edit.Name}: settled={edit.Complete}, kinds={string.Join(',', edit.Frames.Select(f => f.Kind))}; max exact={worst.Ms:F2} ms ({worst.Direct} direct objects); worst direct={edit.Frames.Max(f => f.Direct)}; pixels max={edit.MaxDifference}/255");
+            output.WriteLine($"{edit.Name}: settled={edit.Complete}, kinds={string.Join(',', edit.Frames.Select(f => f.Kind))}; max exact={worst.Ms:F2} ms ({worst.Direct} direct objects); worst direct={edit.Frames.Max(f => f.Direct)}; pixels max={edit.MaxDifference}/255; resident patch pixels max={edit.PatchDifference}/255 ({edit.Patches} frames)");
+        }
+        foreach (var edit in after.Edits)
+        {
             Assert.True(edit.Complete, $"{edit.Name} did not settle");
             Assert.True(edit.Frames.Max(f => f.Direct) * 4 <= after.Exact,
                 $"{edit.Name} drew {edit.Frames.Max(f => f.Direct)} of {after.Exact} exact objects directly");
+            Assert.Contains(edit.Frames, frame => frame.Kind == 3);
+            Assert.True(edit.PatchDifference <= 4, $"{edit.Name}: patch pixels differ by {edit.PatchDifference}/255");
+            if (edit.Name is "move-large" or "delete-large") Assert.True(edit.Patches > 0, $"{edit.Name}: no resident patch checked");
             Assert.True(edit.MaxDifference <= 4, $"{edit.Name}: edited pixels differ by {edit.MaxDifference}/255");
             Assert.True(edit.ChangedPixels > 0, $"{edit.Name}: edited objects never reached the settled pixels");
         }
@@ -88,7 +94,7 @@ public sealed class OverviewExactLayerTests(ITestOutputHelper output)
     }
 
     private sealed record EditFrame(int Kind, double Ms, int Direct);
-    private sealed record EditResult(string Name, bool Complete, List<EditFrame> Frames, int MaxDifference, int ChangedPixels);
+    private sealed record EditResult(string Name, bool Complete, List<EditFrame> Frames, int MaxDifference, int ChangedPixels, int PatchDifference, int Patches);
 
     private static Result Run(int count, int distinct, bool layers, bool finalSettle)
     {
@@ -138,6 +144,12 @@ public sealed class OverviewExactLayerTests(ITestOutputHelper output)
             var lastStart = 0.0;
             var lastFrame = 16.7;
             RenderStats last = new();
+            byte[] Pixels()
+            {
+                using var snapshot = surface.Snapshot();
+                using var bitmap = SKBitmap.FromImage(snapshot);
+                return bitmap.Bytes;
+            }
 
             (bool Complete, double Ms) Frame(double cx, double cy, double scale, bool camMoving, bool synchronous = false)
             {
@@ -175,7 +187,8 @@ public sealed class OverviewExactLayerTests(ITestOutputHelper output)
             }
 
             // Real time for the background workers (overview chunks, mips in simulated credit, exact layers).
-            (bool Complete, int Frames) Settle(double cx, double cy, double scale, List<EditFrame>? frames = null, bool synchronous = false)
+            (bool Complete, int Frames) Settle(double cx, double cy, double scale, List<EditFrame>? frames = null,
+                bool synchronous = false, List<byte[]>? patches = null)
             {
                 var timeout = Stopwatch.StartNew();
                 for (var frame = 1; timeout.Elapsed < TimeSpan.FromSeconds(60); frame++)
@@ -183,6 +196,8 @@ public sealed class OverviewExactLayerTests(ITestOutputHelper output)
                     var rendered = Frame(cx, cy, scale, false, synchronous);
                     frames?.Add(new(last.OverviewExactLayer, last.OverviewExactMilliseconds,
                         last.OverviewExactLayer == 0 ? last.ExactObjects : last.OverviewExactPatched));
+                    if (last.OverviewExactLayer == 3 && last.UnresolvedImages == 0 && !source.ImageRequestsPending)
+                        patches?.Add(Pixels());
                     if (rendered.Complete) return (true, frame);
                     Thread.Sleep(5);
                 }
@@ -229,19 +244,32 @@ public sealed class OverviewExactLayerTests(ITestOutputHelper output)
                     return new SceneObject(ObjectId.New(), SceneObjectKind.Stamp, "Новый " + i, centre + i * 2500 - 12_000, centre - 4000 + i * 700,
                         width, width * record.Height / record.Width, 15 * i, "#FFFFFFFF", "#00000000", 0, true, false) { Stamp = new StampStyle(record.Sha) };
                 }).ToArray();
-                document = new Map.Core.Editing.AddObjectsCommand(layer.Id, placed).Apply(document);
-                preparation.UpdateDocument(document, source, static () => { });
-                var frames = new List<EditFrame>();
-                var edited = Settle(centre, centre, fit, frames);
-                byte[] editedPixels;
-                using (var snapshot = surface.Snapshot())
-                using (var bitmap = SKBitmap.FromImage(snapshot)) editedPixels = bitmap.Bytes;
-                var reference = Settle(centre, centre, fit, synchronous: true);
-                Assert.True(reference.Complete, "edited synchronous reference did not settle");
-                using var directSnapshot = surface.Snapshot();
-                using var directBitmap = SKBitmap.FromImage(directSnapshot);
-                edits.Add(new("place-10", edited.Complete, frames, Compare(editedPixels, directBitmap.Bytes).Max,
-                    Compare(pixels, editedPixels).Pixels));
+                void Edit(string name, Map.Core.Editing.IEditCommand command)
+                {
+                    Assert.True(Settle(centre, centre, fit).Complete);
+                    var oldPixels = Pixels();
+                    document = command.Apply(document);
+                    preparation.UpdateDocument(document, source, static () => { });
+                    var frames = new List<EditFrame>();
+                    var patches = new List<byte[]>();
+                    var edited = Settle(centre, centre, fit, frames, patches: patches);
+                    var editedPixels = Pixels();
+                    var reference = Settle(centre, centre, fit, synchronous: true);
+                    Assert.True(reference.Complete, "edited synchronous reference did not settle");
+                    var directPixels = Pixels();
+                    edits.Add(new(name, edited.Complete, frames, Compare(editedPixels, directPixels).Max,
+                        Compare(oldPixels, editedPixels).Pixels, patches.Count == 0 ? 0 : patches.Max(p => Compare(p, directPixels).Max), patches.Count));
+                }
+                Edit("place-10", new Map.Core.Editing.AddObjectsCommand(layer.Id, placed));
+                // A large rotated stamp crosses several chunk boundaries. Move it far enough that the old
+                // and new patches are disjoint; deletion must erase all its old pixels too.
+                var large = new SceneObject(placed[0].Id, SceneObjectKind.Stamp, "Large", placed[0].X, placed[0].Y,
+                    12_000, 9000, 43, "#FFFFFFFF", "#00000000", 0, true, false) { Stamp = placed[0].Stamp };
+                Edit("enlarge", new Map.Core.Editing.TransformObjectCommand(placed[0], large));
+                var moved = new SceneObject(large.Id, SceneObjectKind.Stamp, "Large", large.X + 42_000, large.Y - 32_000,
+                    large.Width, large.Height, large.RotationDegrees, "#FFFFFFFF", "#00000000", 0, true, false) { Stamp = large.Stamp };
+                Edit("move-large", new Map.Core.Editing.TransformObjectCommand(large, moved));
+                Edit("delete-large", new Map.Core.Editing.DeleteObjectsCommand(document, [moved.Id]));
             }
             var started = 0;
             var kinds = new int[4];
