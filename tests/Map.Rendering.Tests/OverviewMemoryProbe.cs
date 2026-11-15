@@ -15,12 +15,31 @@ public sealed class OverviewMemoryProbe
     }
 
     [Fact]
+    public void Cold_plan_uses_one_flat_slot_per_visible_object_with_bounded_allocation()
+    {
+        const int count = 10_000;
+        var objects = Enumerable.Range(0, count).Select(i => new SceneObject(ObjectId.New(), SceneObjectKind.Rectangle,
+            "probe", i % 100 * 40, i / 100 * 40, 20, 20, 0, "#FFFFFFFF", "#00000000", 0, true, false)).ToArray();
+        var layer = new ObjectLayer(LayerId.New(), "objects", true, false, 1, objects);
+        _ = new SceneRenderer.ObjectOverviewPlan(layer); // JIT and static initialization before measurement
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var plan = new SceneRenderer.ObjectOverviewPlan(layer);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Console.WriteLine($"PLAN_BYTES count={count} allocated={allocated} bytesPerObject={allocated / (double)count:F1}");
+        Assert.Equal(count, plan.Chunks.Values.Sum(chunk => chunk.Objects.Length));
+        Assert.Same(objects[0], plan.Chunks[(0, 0)].Objects[0].Item);
+        // Flat (long order, object reference) slots cost 16 B each; 32 B allows a full slot's headroom.
+        // A per-object tree, growing lists plus copies, or a duplicate plan no longer fits.
+        Assert.InRange(allocated, count * 16L, count * 32L);
+    }
+
+    [OptInProbe("MAP_DOC_MEM_PROBE", nameof(Cold_plan_uses_one_flat_slot_per_visible_object_with_bounded_allocation))]
     public void Measure()
     {
         var output = Environment.GetEnvironmentVariable("MAP_DOC_MEM_PROBE");
         if (string.IsNullOrWhiteSpace(output)) return;
         var planType = typeof(SceneRenderer).GetNestedType("ObjectOverviewPlan", BindingFlags.NonPublic)!;
-        var ctor = planType.GetConstructor([typeof(ObjectLayer)])!;
+        var ctor = planType.GetConstructors().Single();
         var report = new StringBuilder();
         foreach (var n in new[] { 100_000, 1_000_000 })
         {
@@ -38,7 +57,7 @@ public sealed class OverviewMemoryProbe
             objects = null!;
             var t0 = Retained();
             var before = GC.GetTotalAllocatedBytes(true);
-            var plan = ctor.Invoke([layer]);
+            var plan = ctor.Invoke([layer, CancellationToken.None, null]);
             var allocated = GC.GetTotalAllocatedBytes(true) - before;
             var retained = Retained() - t0;
             report.AppendLine($"{n,9} | ObjectOverviewPlan (Rendering, per layer)                  | {retained / (double)n,8:F1} B/obj | {retained / 1048576.0,8:F1} MB");
