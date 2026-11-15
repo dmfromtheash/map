@@ -1001,13 +1001,31 @@ public sealed class CatalogStampImageSource(
     /// </summary>
     public bool PrepareForPixelSizes(IEnumerable<(string Sha256, double Width, double Height)> stamps, Action ready)
     {
-        lock (_gate)
+        // The frame never queues behind a background raster pinning its plan under the same gate: trace of the
+        // wheel at 25 000 objects (PC, 2026-11-15) - 5 of 10 s of DrawObjects in Monitor.Enter here, 35-108 ms frames
+        // that drew nothing. Busy: this frame draws what is resident (the "not yet ready" path) and asks again.
+        var taken = false;
+        try
         {
+            Monitor.TryEnter(_gate, FrameGateWaitMilliseconds, ref taken);
+            if (!taken)
+            {
+                Interlocked.Increment(ref _frameGateMisses);
+                ready();
+                return false;
+            }
             if (_disposed) return true;
             Enter();
             return PrepareLocked(stamps, ready);
         }
+        finally { if (taken) Monitor.Exit(_gate); }
     }
+
+    /// <summary>How long a frame may wait for the source's gate before drawing what is resident instead.</summary>
+    internal const int FrameGateWaitMilliseconds = 1;
+    private long _frameGateMisses;
+    /// <summary>Frames that did not wait for a busy gate (diagnostics).</summary>
+    public long FrameGateMisses => Interlocked.Read(ref _frameGateMisses);
 
     private bool PrepareLocked(IEnumerable<(string Sha256, double Width, double Height)> stamps, Action ready)
     {
