@@ -73,10 +73,10 @@ public sealed class SeaStyleRenderingTests
     }
 
     /// <summary>MAP_SEA_PNG=&lt;folder&gt; writes the island in every manner for review.</summary>
-    [Fact]
+    [OptInProbe("MAP_SEA_PNG", "SeaStyleRenderingTests.Each_manner_changes_the_sea_and_leaves_the_land")]
     public void Sea_sheet_for_review()
     {
-        if (Environment.GetEnvironmentVariable("MAP_SEA_PNG") is not { Length: > 0 } folder) return;
+        var folder = Environment.GetEnvironmentVariable("MAP_SEA_PNG")!;
         Directory.CreateDirectory(folder);
         foreach (var (manner, _, _) in SeaStyle.Manners)
         {
