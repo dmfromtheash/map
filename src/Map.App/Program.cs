@@ -65,14 +65,25 @@ internal static class Program
             .UsePlatformDetect()
             .WithInterFont()
             .LogToTrace();
-        // Diagnostics only (DEC-050): MAP_WIN32_COMPOSITION=LowLatencyDxgiSwapChain|RedirectionSurface
-        // swaps the Win32 composition path. RenderDoc kills the process on the default WinUI
-        // composition path (Avalonia #15911); tools/ai/live/renderdoc-capture.ps1 sets this.
-        if (Enum.TryParse<Avalonia.Win32CompositionMode>(Environment.GetEnvironmentVariable("MAP_WIN32_COMPOSITION"), ignoreCase: true, out var composition))
-        {
-            builder = builder.With(new Avalonia.Win32PlatformOptions { CompositionMode = [composition] });
-        }
-
-        return builder;
+        return builder.With(new Avalonia.Win32PlatformOptions { CompositionMode = WindowComposition.Modes() });
     }
+}
+
+public static class WindowComposition
+{
+    /// <summary>
+    /// How the window reaches the screen. A DXGI flip swap chain first: on the owner's PC (laptop panel on the AMD
+    /// iGPU, rendering on the RTX) the default WinUI composition chained commit -> render -> commit with a
+    /// cross-adapter copy, and the canvas got a frame only every 2-3 display refreshes whatever the map
+    /// (10 000 objects at 0 ms per frame: 36-52 FPS). With the swap chain the same runs gave 142 FPS average and
+    /// a worst 1 % low of 60.5 on every route (PresentMon: Independent Flip, 143.6 FPS median; 2026-11-15).
+    /// The others follow as fallbacks where a swap chain is not available.
+    /// MAP_WIN32_COMPOSITION=WinUIComposition|DirectComposition|RedirectionSurface|LowLatencyDxgiSwapChain picks one
+    /// for diagnostics (RenderDoc kills the process on WinUI composition, Avalonia #15911).
+    /// </summary>
+    public static Avalonia.Win32CompositionMode[] Modes() =>
+        Enum.TryParse<Avalonia.Win32CompositionMode>(Environment.GetEnvironmentVariable("MAP_WIN32_COMPOSITION"), ignoreCase: true, out var chosen)
+            ? [chosen]
+            : [Avalonia.Win32CompositionMode.LowLatencyDxgiSwapChain, Avalonia.Win32CompositionMode.WinUIComposition,
+               Avalonia.Win32CompositionMode.DirectComposition, Avalonia.Win32CompositionMode.RedirectionSurface];
 }

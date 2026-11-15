@@ -178,9 +178,24 @@ internal static class NativeZoomAssetsSmoke
                 var builder = AppBuilder.Configure<ZoomAssetsApplication>().UsePlatformDetect().WithInterFont();
                 // Match the production diagnostic switch: otherwise the report measures the
                 // default compositor even when the caller explicitly requested a comparison.
-                if (Enum.TryParse<Avalonia.Win32CompositionMode>(System.Environment.GetEnvironmentVariable("MAP_WIN32_COMPOSITION"),
-                    ignoreCase: true, out var composition))
-                    builder = builder.With(new Avalonia.Win32PlatformOptions { CompositionMode = [composition] });
+                // The program's own choice (Map.App Program.CompositionModes, swap chain first; MAP_WIN32_COMPOSITION overrides).
+                builder = builder.With(new Avalonia.Win32PlatformOptions { CompositionMode = Map.App.WindowComposition.Modes() });
+                // Experiment (MAP_PERF_ADAPTER=amd|nvidia|intel): render on the adapter whose name contains it. The
+                // laptop panel is driven by the iGPU while Windows' adapter 0 may be the dGPU (cross-adapter copy).
+                if (System.Environment.GetEnvironmentVariable("MAP_PERF_ADAPTER") is { Length: > 0 } wanted)
+                    builder = builder.With(new Avalonia.Win32PlatformOptions
+                    {
+                        CompositionMode = Map.App.WindowComposition.Modes(),
+                        GraphicsAdapterSelectionCallback = adapters =>
+                        {
+                            for (var i = 0; i < adapters.Count; i++)
+                            {
+                                Console.WriteLine($"adapter {i}: {adapters[i].Description}");
+                                if (adapters[i].Description.Contains(wanted, StringComparison.OrdinalIgnoreCase)) return i;
+                            }
+                            return 0;
+                        },
+                    });
                 builder.StartWithClassicDesktopLifetime([], ShutdownMode.OnExplicitShutdown);
             }
             catch (Exception ex) { completion.TrySetException(ex); }
