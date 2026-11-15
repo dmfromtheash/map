@@ -28,8 +28,7 @@ public sealed record AppSettings
     public string DefaultExportFormat { get; init; } = "Png";
     public int DefaultExportScalePercent { get; init; } = 100;
     public bool DefaultExportIncludeGrid { get; init; }
-    /// <summary>Short synthesised sounds when the pointer reaches or presses a command.</summary>
-    public bool InterfaceSounds { get; init; } = true;
+    // Interface sound was removed (owner, 2026-11-15); an old file's "interfaceSounds" is skipped as an unknown field.
     /// <summary>Interface motion: drifting embers, unfolding ornaments, springy press, brass cursor.</summary>
     public bool InterfaceEffects { get; init; } = true;
     /// <summary>«Нажми сюда…» above the create buttons with a live picture of what they make (owner, 2026-10-31).</summary>

@@ -36,7 +36,6 @@ public sealed class AppSettingsWindow : Window
     private readonly ComboBox _exportFormat = Choice("SettingsExportFormat", ["PNG", "JPEG", "WebP"]);
     private readonly NumericUpDown _exportScale = Number("SettingsExportScale", 10, 800, 10);
     private readonly CheckBox _exportGrid = new() { Name = "SettingsExportGrid", Content = "Включать сетку по умолчанию" };
-    private readonly CheckBox _sounds = new() { Name = "SettingsInterfaceSounds", Content = "Звуки интерфейса: отклик при наведении и нажатии" };
     private readonly CheckBox _effects = new() { Name = "SettingsInterfaceEffects", Content = "Анимация интерфейса: искры, плавные кнопки, латунный курсор" };
     private readonly CheckBox _hints = new() { Name = "SettingsCreateHints", Content = "Подсказки «Нажми сюда…» с живой картинкой у кнопок создания" };
     private readonly TextBlock _diagnosticsText = new() { Name = "SettingsDiagnostics", TextWrapping = Avalonia.Media.TextWrapping.Wrap };
@@ -119,7 +118,6 @@ public sealed class AppSettingsWindow : Window
                             {
                                 Heading("Интерфейс"),
                                 Ui.PropertyRow("Тема", _theme, captionWidth: 220),
-                                Ui.PropertyRow("Звук", _sounds, captionWidth: 220),
                                 Ui.PropertyRow("Анимация", _effects, captionWidth: 220),
                                 Ui.PropertyRow("Подсказки", _hints, captionWidth: 220),
                                 new TextBlock
@@ -181,7 +179,6 @@ public sealed class AppSettingsWindow : Window
         _exportFormat.SelectedIndex = settings.DefaultExportFormat switch { "Jpeg" => 1, "Webp" => 2, _ => 0 };
         _exportScale.Value = settings.DefaultExportScalePercent;
         _exportGrid.IsChecked = settings.DefaultExportIncludeGrid;
-        _sounds.IsChecked = settings.InterfaceSounds;
         _effects.IsChecked = settings.InterfaceEffects;
         _hints.IsChecked = settings.CreateHints;
         if (Map.App.Services.UiFeel.SystemReducesMotion)
@@ -203,7 +200,6 @@ public sealed class AppSettingsWindow : Window
             DefaultExportFormat = _exportFormat.SelectedIndex switch { 1 => "Jpeg", 2 => "Webp", _ => "Png" },
             DefaultExportScalePercent = (int)(_exportScale.Value ?? 100),
             DefaultExportIncludeGrid = _exportGrid.IsChecked == true,
-            InterfaceSounds = _sounds.IsChecked == true,
             InterfaceEffects = _effects.IsChecked == true,
             CreateHints = _hints.IsChecked == true,
         });

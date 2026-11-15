@@ -176,8 +176,6 @@ public sealed class MainWindow : Window
         };
         _autosaveTimer.Tick += OnAutosaveTick;
 
-        // The sound button at the top of the library and the editor saves its choice here.
-        UiFeel.PersistSounds = on => _appSettings = _appSettingsStore.Save(_appSettings with { InterfaceSounds = on });
         UiFeel.PersistHints = on => _appSettings = _appSettingsStore.Save(_appSettings with { CreateHints = on });
         ApplySettings(_appSettings);
 
@@ -428,7 +426,7 @@ public sealed class MainWindow : Window
         }
         FontSize = 13;
         UpdateUiScale();
-        UiFeel.Apply(_appSettings.InterfaceSounds, _appSettings.InterfaceEffects);
+        UiFeel.Apply(_appSettings.InterfaceEffects);
         UiFeel.SetHints(_appSettings.CreateHints, persist: false);
         ApplyCursor();
         if (!TestMode.Enabled)

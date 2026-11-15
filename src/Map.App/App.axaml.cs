@@ -70,8 +70,6 @@ public partial class App : Application
                     break;
                 }
             }
-            // Sound on every button, switch, slider, list and menu - one switch silences it all.
-            UiSoundHooks.Install();
             // Dialogs grow with large screens like the main window does.
             UiScaling.Install();
         }

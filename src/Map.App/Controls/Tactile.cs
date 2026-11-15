@@ -19,8 +19,8 @@ namespace Map.App.Controls;
 /// Weight and touch for the commands a person meets first (2026-10-17). Timings were measured
 /// frame by frame on the game menu the owner pointed at - ornaments unfold beside the chosen
 /// item in ~0.2 s and fold away in ~0.15 s, a screen's items appear one after another - and are
-/// rebuilt here with Map's own brass flourish, a springy press and Map's own synthesised sounds.
-/// Nothing is copied: no art, no audio, no code.
+/// rebuilt here with Map's own brass flourish and a springy press.
+/// Nothing is copied: no art, no code.
 /// </summary>
 public static class Tactile
 {
@@ -50,7 +50,7 @@ public static class Tactile
     /// <summary>
     /// Makes a button tactile. With <paramref name="ornaments"/> its caption is framed by two
     /// flourishes that unfold under the pointer or keyboard focus; without them only the press,
-    /// the glow and the sounds are added, so a compact button keeps its size.
+    /// and the glow are added, so a compact button keeps its size.
     /// </summary>
     public static T Attach<T>(T button, bool ornaments = true) where T : Button
     {

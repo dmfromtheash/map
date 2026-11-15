@@ -207,7 +207,7 @@ public sealed partial class DashboardView : UserControl
 
     // ------------------------------------------------------------------ rail
 
-    /// <summary>Inkarnate's 80 px section rail: Create on top, the sections, then sound and settings at the foot.</summary>
+    /// <summary>Inkarnate's 80 px section rail: Create on top, the sections, then help and settings at the foot.</summary>
     private Control BuildRail()
     {
         Button Item(string name, string caption, string tip, MapIcons.SolidGlyph glyph, Action action, Section? section = null)
@@ -273,9 +273,6 @@ public sealed partial class DashboardView : UserControl
             () => PngMapWindow.ShowFor(TopLevel.GetTopLevel(this) as Window)));
 
         var bottom = new StackPanel { Spacing = 6, VerticalAlignment = VerticalAlignment.Bottom };
-        var sound = SoundToggle.Create("DashboardSoundButton", withCaption: false);
-        sound.HorizontalAlignment = HorizontalAlignment.Center;
-        bottom.Children.Add(sound);
         if (_helpRequested is not null)
             bottom.Children.Add(Item("LocalHelpButton", "Справка", "Справка", MapIcons.SolidHelp, _helpRequested));
         if (_settingsRequested is not null)

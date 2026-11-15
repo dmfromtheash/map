@@ -156,8 +156,6 @@ public sealed class HexWorkshopTests
         editor.HexTileId = HexStarterTiles.Prefix + "sea";
         var tick = System.Diagnostics.Stopwatch.Frequency / 60;
         var now = System.Diagnostics.Stopwatch.GetTimestamp();
-        var landed = 0;
-        editor.HexTileLanded += _ => landed++;
         var (cx, cy) = CenterOf(editor, 8, 7);
         var centre = Hexes(editor).Board.Layout.FromOffset(new HexOffset(8, 7));
         editor.BeginHexGesture(cx, cy);
@@ -168,7 +166,6 @@ public sealed class HexWorkshopTests
         Assert.Null(land.From);
         var frames = 0;
         while (editor.StepHexHover(now += tick)) Assert.True(++frames < 60);
-        Assert.Equal(1, landed);
         Assert.Null(editor.HexSettlesShown);
 
         // A fill: hexes far from the pressed one wait for their turn and still show what was there.

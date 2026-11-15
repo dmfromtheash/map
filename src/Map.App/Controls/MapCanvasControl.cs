@@ -523,7 +523,6 @@ public sealed partial class MapCanvasControl : Control
             _editor.SceneChanged -= OnSceneChanged;
             _editor.SceneInvalidated -= OnSceneInvalidated;
             _editor.CanvasGestureCancelled -= OnCanvasGestureCancelled;
-            _editor.HexTileLanded -= OnHexTileLanded;
         }
 
         _editor = editor;
@@ -531,12 +530,9 @@ public sealed partial class MapCanvasControl : Control
         _editor.SceneChanged += OnSceneChanged;
         _editor.SceneInvalidated += OnSceneInvalidated;
         _editor.CanvasGestureCancelled += OnCanvasGestureCancelled;
-        _editor.HexTileLanded += OnHexTileLanded;
         PrepareOverview();
         QueueVisualInvalidation();
     }
-
-    private static void OnHexTileLanded(double pitch) => Map.App.Services.UiSound.PlayPlace(pitch);
 
     /// <summary>
     /// The editor dropped an unfinished gesture (a tool switch today). The control drops its own

@@ -35,7 +35,6 @@ public sealed partial class EditorViewModel
         public HexSettleKind Kind { get; } = kind;
         public long Start { get; } = start;
         public double Milliseconds { get; } = milliseconds;
-        public bool Landed { get; set; }
     }
 
     private readonly List<HexSettleState> _hexSettles = [];
@@ -43,9 +42,6 @@ public sealed partial class EditorViewModel
 
     /// <summary>The hexes easing in this frame, for the canvas.</summary>
     public HexSettles? HexSettlesShown => _hexSettlesShown;
-
-    /// <summary>A tile touched down (0..1 picks a pitch per terrain); the app plays a soft tap.</summary>
-    public event Action<double>? HexTileLanded;
 
     /// <summary>
     /// Queues the hexes an edit is about to change (call before it is executed, while the board
@@ -91,8 +87,6 @@ public sealed partial class EditorViewModel
 
         var layerId = ActiveHexLayer?.Id;
         var items = new List<HexSettle>(_hexSettles.Count);
-        var landed = false;
-        double pitch = 0;
         for (var i = _hexSettles.Count - 1; i >= 0; i--)
         {
             var settle = _hexSettles[i];
@@ -103,19 +97,11 @@ public sealed partial class EditorViewModel
                 continue;
             }
 
-            if (!settle.Landed && t >= 0.6 && settle.Kind == HexSettleKind.Land)
-            {
-                settle.Landed = true;
-                landed = true;
-                pitch = (settle.To!.Terrain.GetHashCode() & 0xFFFF) / 65535.0;
-            }
-
             items.Add(new HexSettle(settle.Hex, settle.From, settle.To, settle.Kind, t));
         }
 
         items.Reverse();
         _hexSettlesShown = layerId is { } id && items.Count > 0 ? new HexSettles(id, items) : null;
-        if (landed) HexTileLanded?.Invoke(pitch);
         return _hexSettles.Count > 0;
     }
 

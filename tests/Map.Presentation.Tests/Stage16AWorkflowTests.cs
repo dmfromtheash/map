@@ -159,6 +159,29 @@ public sealed class Stage16AWorkflowTests : IDisposable
         Assert.Equal(new AppSettings(), store.Load());
     }
 
+    [Fact]
+    public void Settings_written_before_sound_was_removed_still_load()
+    {
+        Directory.CreateDirectory(_root);
+        var path = Path.Combine(_root, "settings.json");
+        File.WriteAllText(path, """
+            {
+              "uiScale": 1.25,
+              "autosaveIntervalSeconds": 120,
+              "interfaceSounds": false,
+              "interfaceEffects": false,
+              "createHints": true
+            }
+            """);
+
+        var loaded = new AppSettingsStore(path).Load();
+
+        Assert.Equal(1.25, loaded.UiScale);
+        Assert.Equal(120, loaded.AutosaveIntervalSeconds);
+        Assert.False(loaded.InterfaceEffects);
+        Assert.True(loaded.CreateHints);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_root)) Directory.Delete(_root, recursive: true);

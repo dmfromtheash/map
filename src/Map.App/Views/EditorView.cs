@@ -945,7 +945,7 @@ public sealed partial class EditorView : UserControl
 
         _saveButton = Ui.AsyncCommandButton(
             "SaveButton", "Сохранить", MapIcons.Save, () => _editor.SaveAsync(), "primary");
-        // Owner's pick (2026-10-29, variant A): a keyboard icon beside the sound toggle, always visible.
+        // Owner's pick (2026-10-29, variant A): a keyboard icon in the top bar, always visible.
         _shortcutSettingsButton = Ui.IconButton(
             "ShortcutSettingsButton", "Сочетания клавиш: посмотреть и изменить", MapIcons.Keyboard, requestShortcutSettings);
 
@@ -1028,7 +1028,7 @@ public sealed partial class EditorView : UserControl
         {
             Orientation = Orientation.Horizontal, Spacing = 14,
             VerticalAlignment = VerticalAlignment.Center,
-            Children = { ActionSearchButton(), _shortcutSettingsButton, SoundToggle.Create("EditorSoundButton", withCaption: false), historyActions, viewActions, file, export, _saveButton },
+            Children = { ActionSearchButton(), _shortcutSettingsButton, historyActions, viewActions, file, export, _saveButton },
             Margin = new Thickness(24, 0, 0, 0),
         }.Named("EditorHeaderActions");
         // Save and history stay in place; secondary commands retain their labelled menu entry.
