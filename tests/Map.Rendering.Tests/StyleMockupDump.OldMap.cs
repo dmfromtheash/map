@@ -17,12 +17,12 @@ public sealed partial class StyleMockupDump
     private sealed record OldMap(int Variant, string Paper, string Ink, string A, string B, string C, string D,
         float Laid, float Foxing, float Folds, float Edge, float Plate);
 
-    [Fact]
+    [OptInProbe("MAP_STYLE_OLDMAP,MAP_LIGHT_ASSETS", "StyleRenderingTests.Reviewed_presets_change_pixels_and_rebuild_after_a_local_edit")]
     public void Dump_old_map_variants_when_asked()
     {
         var output = Environment.GetEnvironmentVariable("MAP_STYLE_OLDMAP");
         var assets = Environment.GetEnvironmentVariable("MAP_LIGHT_ASSETS");
-        if (string.IsNullOrEmpty(output) || string.IsNullOrEmpty(assets) || !Directory.Exists(assets)) return;
+        Assert.True(Directory.Exists(assets), "opt-in asset directory is missing: " + assets);
         Directory.CreateDirectory(output);
         var images = Directory.GetFiles(assets, "*.png").Take(3)
             .ToDictionary(f => Path.GetFileNameWithoutExtension(f), f => SKImage.FromEncodedData(f)!);
