@@ -110,10 +110,10 @@ public sealed class CoverageCacheBenchmark
         File.WriteAllLines(output, lines);
     }
 
-    [Fact]
+    [OptInProbe("MAP_COVERAGE_PIXELS", "CoverageCacheTests.Cached_sea_relief_and_coast_are_byte_identical_to_uncached_renders")]
     public void Pixel_fixtures_against_original_renderer()
     {
-        if (Environment.GetEnvironmentVariable("MAP_COVERAGE_PIXELS") is not { Length: > 0 } output) return;
+        var output = Environment.GetEnvironmentVariable("MAP_COVERAGE_PIXELS")!;
         var document = Fixture(huge: false);
         using var tiles = new TileImageCache();
         var lines = new List<string>();
