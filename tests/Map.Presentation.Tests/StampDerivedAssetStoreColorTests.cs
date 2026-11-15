@@ -15,6 +15,27 @@ public sealed class StampDerivedAssetStoreColorTests : IDisposable
     private string Colors => Path.Combine(Cache, "v1", "overview-colors.bin");
 
     [Fact]
+    public async Task Remembered_source_validation_notifies_outside_the_request_gate()
+    {
+        await using var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));
+        var (record, _) = ColorCacheFixture.Seed(catalog, Cache);
+        await using var store = Store(catalog);
+        await Private<Task>(store, "_colorValidation");
+        Assert.NotNull(await store.Request(record.Sha256));
+        var requestGate = Private<object>(store, "_requestsGate");
+        var notices = 0;
+        store.SourceChanged = () =>
+        {
+            Assert.False(Monitor.IsEntered(requestGate), "SourceChanged can re-enter an image source that holds its own gate.");
+            notices++;
+        };
+        File.WriteAllBytes(catalog.SourcePath(record)!, [0, 1, 2, 3]);
+        Call(store, "ValidateKnownColorSources");
+        Assert.Equal(1, notices);
+        Assert.Null(store.KnownColor(record.Sha256));
+    }
+
+    [Fact]
     public async Task Shutdown_does_not_persist_a_portable_color_awaiting_source_verification()
     {
         await using var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));

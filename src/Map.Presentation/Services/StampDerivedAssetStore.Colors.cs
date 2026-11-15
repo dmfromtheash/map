@@ -114,10 +114,9 @@ public sealed partial class StampDerivedAssetStore
                 if (original is not null && working is not null && ColorSourceStamp(original, working) == remembered.Sources) continue;
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
-            lock (_requestsGate)
-                // A newer header may have repaired this entry while its files were being checked.
-                if (!_disposed && _knownColors.TryGetValue(sha, out var current) && current == remembered)
-                    InvalidateFile(path, cancelPixels: true);
+            // Compare under the invalidation gate, but notify after releasing it.
+            // A newer header may have repaired this entry while its files were being checked.
+            InvalidateFile(path, cancelPixels: true, expectedColor: remembered);
         }
     }
 

@@ -20,7 +20,9 @@ internal static class ColorCacheFixture
         var record = catalog.Import(Path.Combine(root.FullName, "tests", "fixtures", "assets", $"owner-mountain-{fixture:00}.png"),
             new(), DateTimeOffset.UnixEpoch);
         using var image = SKImage.FromEncodedData(catalog.SourcePath(record)!)!;
-        using var bitmap = SKBitmap.FromImage(image);
+        using var bitmap = new SKBitmap(new SKImageInfo(image.Width, image.Height, SKColorType.Rgba8888, SKAlphaType.Premul));
+        if (!image.ReadPixels(bitmap.Info, bitmap.GetPixels(), bitmap.RowBytes, 0, 0))
+            throw new InvalidOperationException("Owner fixture pixels could not be read.");
         using var raw = new MemoryStream();
         using (var writer = new BinaryWriter(raw, System.Text.Encoding.UTF8, leaveOpen: true))
         {

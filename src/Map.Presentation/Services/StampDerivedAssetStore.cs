@@ -128,6 +128,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
     public sealed record Mip(byte[]? Pixels, int Width, int Height, bool Reserved, bool Cancelled = false,
         SKImage? Image = null, bool LargeReserved = false);
     private readonly Task _workers;
+    private readonly Task _colorValidation;
     private Task? _shutdown;
     private readonly ConcurrentQueue<Task> _retirements = new();
     public Task Completion => _shutdown ?? _workers;
@@ -172,8 +173,9 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
         _janitor = CreateJanitor(diskBudgetBytes);
         _diskBudget = diskBudgetBytes ?? _policy.Budget.TotalBytes;
         LoadKnownColors();
+        _colorValidation = Task.Run(ValidateKnownColorSources);
         _workers = Task.WhenAll(Task.Run(Work), Task.Run(BuildWork), StartMaintenance(), Task.Run(TrustWork),
-            Task.Run(ValidateKnownColorSources));
+            _colorValidation);
     }
 
     public Task<Header?> Request(string sha)
@@ -620,11 +622,12 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
 
     private void FileChanged(string path) => InvalidateFile(path, cancelPixels: true);
 
-    private void InvalidateFile(string path, bool cancelPixels)
+    private void InvalidateFile(string path, bool cancelPixels, KnownOverviewColor? expectedColor = null)
     {
         if (_disposed || !_watchedFiles.TryGetValue(path, out var sha)) return;
         lock (_requestsGate)
         {
+            if (expectedColor is not null && (!_knownColors.TryGetValue(sha, out var known) || known != expectedColor)) return;
             // File events are only hints for terminal misses. A successful read by the
             // slow retry confirms recovery; repeated events must not wake the canvas.
             var quiet = _quietMissing.ContainsKey(sha)
