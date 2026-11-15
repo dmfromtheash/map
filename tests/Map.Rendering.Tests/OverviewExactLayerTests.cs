@@ -39,9 +39,11 @@ public sealed class OverviewExactLayerTests(ITestOutputHelper output)
         output.WriteLine($"settled fit pixels against the before run (valid only if it settled: {before.Complete}): max {beforeMax}/255, {beforeDiffering} pixels differ");
         var (maxDiff, differing, histogram) = Compare(after.Direct!, after.Pixels);
         output.WriteLine($"settled fit pixels, layer against the direct draw of the same settled view: max channel difference {maxDiff}/255, {differing} of {after.Pixels.Length / 4} pixels differ (by 1: {histogram[1]}, 2: {histogram[2]}, 3: {histogram[3]}, more: {histogram[4]})");
+        output.WriteLine($"zoom stop pixels against synchronous direct: transformed {after.ZoomBefore}/255 -> settled {after.ZoomAfter}/255; {after.ZoomFrames} refinement frames, {after.ZoomMs:F1} ms");
         Assert.True(after.Complete, "the layer run did not settle");
         Assert.True(after.Exact >= 128, $"only {after.Exact} exact objects: the model does not reach the layer");
         Assert.Equal(after.Settled.Count, after.Copied);
+        Assert.True(after.ZoomAfter <= 4, $"settled zoom pixels differ by {after.ZoomAfter}/255");
         foreach (var edit in before.Edits)
             output.WriteLine($"direct {edit.Name}: frames={edit.Frames.Count}; max exact={edit.Frames.Max(f => f.Ms):F2} ms; worst direct={edit.Frames.Max(f => f.Direct)}; pixels max={edit.MaxDifference}/255");
         foreach (var edit in after.Edits)
@@ -91,6 +93,10 @@ public sealed class OverviewExactLayerTests(ITestOutputHelper output)
         int Exact, int Started, int Copied, byte[] Pixels, string Log, List<double>[] ExactMs, byte[]? Direct)
     {
         public List<EditResult> Edits { get; init; } = [];
+        public int ZoomBefore { get; init; }
+        public int ZoomAfter { get; init; }
+        public int ZoomFrames { get; init; }
+        public double ZoomMs { get; init; }
     }
 
     private sealed record EditFrame(int Kind, double Ms, int Direct);
@@ -295,11 +301,24 @@ public sealed class OverviewExactLayerTests(ITestOutputHelper output)
                 for (var f = 0; f < 6; f++) { wheel.Add(Frame(centre, centre, scale, true).Ms); exactMs[2].Add(last.OverviewExactMilliseconds); started += last.OverviewExactLayerStarted; kinds[last.OverviewExactLayer]++; if (last.OverviewExactLayer == 0) directMs += last.OverviewExactMilliseconds; Thread.Sleep(5); }
             }
             log.Add($"wheel frames direct/1:1/stand-in={kinds[0]}/{kinds[1]}/{kinds[2]} directMs={directMs:F0}");
-            // Diagnostics only: after this wheel-out the fit view does not complete with or without the layer
-            // (16 overview rasters wait in the preparation handoff that no frame takes), so the default run skips it.
+            // Stop between bucket scales: the old raster must remain only a temporary stand-in. The completed
+            // view must be rastered at this exact screen matrix, never a stretched bucket-scale layer.
+            var stopScale = fit * 1.037;
+            Frame(centre, centre, stopScale, true);
+            Frame(centre, centre, stopScale, false);
+            var zoomBefore = Pixels();
+            var zoomWall = Stopwatch.StartNew();
+            var zoomSettle = Settle(centre, centre, stopScale);
+            var zoomMs = zoomWall.Elapsed.TotalMilliseconds;
+            Assert.True(zoomSettle.Complete, "stopped zoom did not settle");
+            if (layers) Assert.Equal(1, last.OverviewExactLayer);
+            var zoomAfter = Pixels();
+            Assert.True(Settle(centre, centre, stopScale, synchronous: true).Complete);
+            var zoomDirect = Pixels();
             if (finalSettle) log.Add($"final settle={Settle(centre, centre, fit).Complete}");
             return new Result(settled, pan, wheel, settle.Frames, settle.Complete, exact, started, copied, pixels, string.Join("; ", log), exactMs, direct)
-                { Edits = edits };
+                { Edits = edits, ZoomBefore = Compare(zoomBefore, zoomDirect).Max, ZoomAfter = Compare(zoomAfter, zoomDirect).Max,
+                    ZoomFrames = zoomSettle.Frames, ZoomMs = zoomMs };
         }
         finally
         {
