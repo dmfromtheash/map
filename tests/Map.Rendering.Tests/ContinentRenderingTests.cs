@@ -8,9 +8,46 @@ namespace Map.Rendering.Tests;
 public sealed class ContinentRenderingTests
 {
     [Fact]
+    public void Small_continent_steps_change_the_map_and_draw_reproducibly()
+    {
+        var bytes = new byte[TileMap.TileSize * TileMap.TileSize];
+        for (var y = 0; y < 256; y++)
+        for (var x = 0; x < 256; x++)
+            if ((x - 128) * (x - 128) + (y - 128) * (y - 128) < 110 * 110) bytes[y * 256 + x] = 255;
+        var land = new LandLayer(LayerId.New(), "land", true, false, 1,
+            TileMap.Empty(1).With(new TileKey(0, 0), bytes), LandEdgeStyle.SoftWatercolor());
+        var original = new MapDocument(DocumentId.New(), "small continent", DateTimeOffset.UnixEpoch,
+            new CanvasDefinition(256, 256, "px", "#FF8FB0BA"),
+            [new BaseColorLayer(LayerId.New(), "sea", true, false, 1, "#FF8FB0BA"), land,
+             new ObjectLayer(LayerId.New(), "objects", true, false, 1, [])]);
+        var current = original;
+        var settings = new ContinentSettings { Seed = 17, RiversPerMillion = 100, TownsPerMillion = 100 };
+        foreach (var step in Enum.GetValues<ContinentStep>())
+            current = ContinentGenerator.Run(current, land.Id, step, settings);
+        var generated = (LandLayer)current.FindLayer(land.Id)!;
+        Assert.True(generated.ReliefTiles.TileCount > 0);
+        Assert.True(generated.PaintTiles.TileCount > 0);
+        Assert.Same(land.GeometryTiles, generated.GeometryTiles);
+        Assert.Equal(0, land.ReliefTiles.TileCount);
+        using var a = Draw(current);
+        using var b = Draw(current);
+        using var before = Draw(original);
+        Assert.Equal(a.Bytes, b.Bytes);
+        Assert.False(a.GetPixelSpan().SequenceEqual(before.GetPixelSpan()), "generated continent never reached the renderer");
+
+        static SKBitmap Draw(MapDocument document)
+        {
+            using var surface = SKSurface.Create(new SKImageInfo(256, 256))!;
+            SceneRenderer.Render(surface.Canvas, document, new RenderOptions { IsExport = true });
+            using var image = surface.Snapshot();
+            return SKBitmap.FromImage(image);
+        }
+    }
+
+    [OptInProbe("MAP_CONTINENT_PNG", "ContinentRenderingTests.Small_continent_steps_change_the_map_and_draw_reproducibly")]
     public void Continent_sheet_for_review()
     {
-        if (Environment.GetEnvironmentVariable("MAP_CONTINENT_PNG") is not { Length: > 0 } folder) return;
+        var folder = Environment.GetEnvironmentVariable("MAP_CONTINENT_PNG")!;
         Directory.CreateDirectory(folder);
         var tiles = TileMap.Empty(1);
         for (var ty = 0; ty < 3; ty++)
