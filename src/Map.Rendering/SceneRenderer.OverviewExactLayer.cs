@@ -151,9 +151,11 @@ public static partial class SceneRenderer
         context.Layers.TryGetValue(layer.Id, out var state);
         if (pendingSets)
         {
-            // A new bucket: its sets arrive in a frame or two. Meanwhile a moving camera keeps the previous layer.
+            // A new bucket or edited chunk: its sets arrive in a frame or two. Keep the previous layer even
+            // while settled; returning false here drew the entire exact set on the snapshot handoff frame.
             if (options.Stats is { } waiting) waiting.DetailTilesPending++;
-            return state is not null && options.CameraMoving && DrawExactStandIn(canvas, state, matrix, clip, null, options);
+            refine();
+            return state is not null && DrawExactStandIn(canvas, state, matrix, clip, null, options);
         }
         if (count + extras.Count < ExactLayerMinimumObjects) return false;
         if (state is null) context.Layers[layer.Id] = state = new ExactLayerState();
@@ -208,41 +210,64 @@ public static partial class SceneRenderer
     {
         if (state.Ready is not { } shown || !shown.Key.Matrix.Equals(key.Matrix) || shown.Key.Extent != key.Extent
             || !ReferenceEquals(shown.Key.Foreground, key.Foreground)) return false;
-        WorldBounds? dirty = null;
+        var dirty = new List<WorldBounds>();
         var changed = 0;
         foreach (var (cell, now) in chunks.Map)
         {
             if (shown.Chunks.Map.TryGetValue(cell, out var was) && was.Hash == now.Hash) continue;
             if (++changed > ExactPatchMaximumChunks) return false;
-            dirty = Union(dirty, Expand(ChunkBounds(cell), Math.Max(now.MaxSide, was.MaxSide)));
+            dirty.Add(Expand(ChunkBounds(cell), Math.Max(now.MaxSide, was.MaxSide)));
         }
         foreach (var (cell, was) in shown.Chunks.Map)
         {
             if (chunks.Map.ContainsKey(cell)) continue;
             if (++changed > ExactPatchMaximumChunks) return false;
-            dirty = Union(dirty, Expand(ChunkBounds(cell), was.MaxSide));
+            dirty.Add(Expand(ChunkBounds(cell), was.MaxSide));
         }
         if (shown.Chunks.ExtrasHash != chunks.ExtrasHash)
         {
-            dirty = Union(dirty, shown.Chunks.ExtrasBounds);
-            dirty = Union(dirty, chunks.ExtrasBounds);
+            if (shown.Chunks.ExtrasBounds is { } oldExtras) dirty.Add(oldExtras);
+            if (chunks.ExtrasBounds is { } newExtras) dirty.Add(newExtras);
         }
-        if (dirty is not { } area) return false;
-        var device = key.Matrix.MapRect(ToRect(area));
-        var patch = new SKRectI((int)Math.Floor(device.Left), (int)Math.Floor(device.Top), (int)Math.Ceiling(device.Right), (int)Math.Ceiling(device.Bottom));
+        if (dirty.Count == 0) return false;
+        // Separate old/new places for a move: a bounding rectangle would redraw everything between them.
+        // Include filtering beyond object bounds and gather against the rounded device clip, not its smaller
+        // world rectangle. A large unchanged stamp in a neighbouring chunk may cross the patch as well.
+        using var patch = new SKRegion();
+        var areas = new List<WorldBounds>();
+        key.Matrix.TryInvert(out var inverse);
+        foreach (var area in dirty)
+        {
+            var device = key.Matrix.MapRect(ToRect(area));
+            var rect = new SKRectI((int)Math.Floor(device.Left) - 2, (int)Math.Floor(device.Top) - 2,
+                (int)Math.Ceiling(device.Right) + 2, (int)Math.Ceiling(device.Bottom) + 2);
+            patch.Op(rect, SKRegionOperation.Union);
+            var world = inverse.MapRect(rect);
+            areas.Add(new(world.Left, world.Top, world.Right, world.Bottom));
+        }
         // The previous layer outside the patch, pixel for pixel.
         canvas.Save();
         canvas.ResetMatrix();
-        canvas.ClipRect(patch, SKClipOperation.Difference);
+        canvas.ClipRegion(patch, SKClipOperation.Difference);
         canvas.DrawImage(shown.Image, shown.Key.Extent.Left, shown.Key.Extent.Top);
         canvas.Restore();
         // Inside the patch: every exact object that touches it, in the layer's order, drawn as the layer draws them.
         canvas.Save();
         canvas.ResetMatrix();
-        canvas.ClipRect(patch);
+        canvas.ClipRegion(patch);
         canvas.SetMatrix(key.Matrix);
-        var selected = extras.Where(extra => SceneGeometry.BoundsOf(extra).Intersects(area)).ToArray();
-        var objects = GatherExactObjects(plan, zoomBucket, area, selected);
+        var exact = new Dictionary<ObjectId, SceneObject>();
+        var reach = 2 / Math.Max(.000001, Math.Abs(key.Matrix.ScaleX));
+        foreach (var (cell, set) in chunks.Map)
+        {
+            if (!areas.Any(area => Expand(ChunkBounds(cell), set.MaxSide + reach).Intersects(area))
+                || !plan.TryGetChunk(cell.X, cell.Y, out var chunk) || chunk.TryGetExact(zoomBucket) is not { } current) continue;
+            foreach (var item in current.Objects)
+                if (areas.Any(area => Expand(SceneGeometry.BoundsOf(item), reach).Intersects(area))) exact.TryAdd(item.Id, item);
+        }
+        foreach (var extra in extras)
+            if (areas.Any(area => Expand(SceneGeometry.BoundsOf(extra), reach).Intersects(area))) exact[extra.Id] = extra;
+        var objects = exact.Values.OrderBy(item => item.Sublayer).ToArray();
         foreach (var sceneObject in objects) DrawObject(canvas, sceneObject, document.StampForeground, options);
         canvas.Restore();
         if (options.Stats is { } stats) { stats.OverviewExactPatched += objects.Length; stats.DrawCalls += objects.Length + 1; }
