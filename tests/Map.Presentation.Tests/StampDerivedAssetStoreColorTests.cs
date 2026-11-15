@@ -14,6 +14,48 @@ public sealed class StampDerivedAssetStoreColorTests : IDisposable
     private string Cache => Path.Combine(_root, "derived");
     private string Colors => Path.Combine(Cache, "v1", "overview-colors.bin");
 
+    [Fact]
+    public async Task Shutdown_does_not_persist_a_portable_color_awaiting_source_verification()
+    {
+        await using var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));
+        var (record, local) = ColorCacheFixture.Seed(catalog, Cache);
+        await using (var store = Store(catalog))
+        {
+            var completion = new TaskCompletionSource<StampDerivedAssetStore.Header?>();
+            Private<ConcurrentDictionary<string, TaskCompletionSource<StampDerivedAssetStore.Header?>>>(store, "_requests")[record.Sha256] = completion;
+            // The portable metadata worker can finish before its independent trust worker.
+            // Shutdown cancels queued verification, so this colour is provisional until proved.
+            Call(store, "CompleteHeader", record.Sha256, completion,
+                local with { PortablePath = Path.Combine(_root, "provisional.mapderived") });
+            Assert.NotNull(await completion.Task);
+            Assert.Equal(new SKColor(local.Color), store.KnownColor(record.Sha256));
+        }
+        await using var reopened = Store(catalog);
+        Assert.Null(reopened.KnownColor(record.Sha256));
+    }
+
+    [Fact]
+    public async Task Portable_color_becomes_persistent_when_its_source_verification_finishes()
+    {
+        await using var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));
+        var (record, local) = ColorCacheFixture.Seed(catalog, Cache);
+        await using (var store = Store(catalog))
+        {
+            var completion = new TaskCompletionSource<StampDerivedAssetStore.Header?>();
+            Private<ConcurrentDictionary<string, TaskCompletionSource<StampDerivedAssetStore.Header?>>>(store, "_requests")[record.Sha256] = completion;
+            Call(store, "CompleteHeader", record.Sha256, completion,
+                local with { PortablePath = Path.Combine(_root, "provisional.mapderived") });
+            Assert.NotNull(await completion.Task);
+            var trustType = typeof(StampDerivedAssetStore).GetNestedType("PortableTrust", BindingFlags.NonPublic)!;
+            var trust = Activator.CreateInstance(trustType,
+                new object[] { new[] { local.Original }, new[] { record.Sha256 } })!;
+            Call(store, "RememberPortableTrust", record.Sha256, trust);
+        }
+        await using var reopened = Store(catalog);
+        Assert.Equal(new SKColor(local.Color), reopened.KnownColor(record.Sha256));
+        Assert.Equal(0, reopened.MetadataEntries);
+    }
+
     [Theory]
     [InlineData(32)] // SHA payload: still a syntactically valid, different SHA.
     [InlineData(48)] // Colour payload: valid layout, wrong colour.

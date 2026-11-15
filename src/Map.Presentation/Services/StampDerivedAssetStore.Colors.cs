@@ -22,7 +22,7 @@ public sealed partial class StampDerivedAssetStore
     private const int ColorsFormat = 2;
     private const int ColorEntryBytes = 68; // SHA (32), colour (4), source-stamp fingerprint (32).
     private const int ColorsSaveEvery = 512;
-    private sealed record KnownOverviewColor(uint Color, string Sources);
+    private sealed record KnownOverviewColor(uint Color, string Sources, bool Verified);
     private readonly ConcurrentDictionary<string, KnownOverviewColor> _knownColors = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _colorsSaveGate = new();
     private int _colorsUnsaved;
@@ -55,7 +55,7 @@ public sealed partial class StampDerivedAssetStore
                 var offset = 16 + i * ColorEntryBytes;
                 var sha = Convert.ToHexStringLower(bytes, offset, 32);
                 _knownColors[sha] = new(BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(offset + 32)),
-                    Convert.ToHexStringLower(bytes, offset + 36, 32));
+                    Convert.ToHexStringLower(bytes, offset + 36, 32), true);
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or FormatException) { _knownColors.Clear(); }
@@ -65,7 +65,10 @@ public sealed partial class StampDerivedAssetStore
     // The caller saves outside that gate so file I/O cannot block a canvas request.
     private bool RememberColor(string sha, Header header)
     {
-        var color = new KnownOverviewColor(header.Color, ColorSourceStamp(header.Original, header.Working));
+        var sources = ColorSourceStamp(header.Original, header.Working);
+        var verified = header.PortablePath is null
+            || _portableTrust.TryGetValue(sha, out var trust) && ColorSourcesVerified(sources, trust);
+        var color = new KnownOverviewColor(header.Color, sources, verified);
         if (_knownColors.TryGetValue(sha, out var known) && known == color) return false;
         _knownColors[sha] = color;
         return Interlocked.Increment(ref _colorsUnsaved) >= ColorsSaveEvery
@@ -79,6 +82,19 @@ public sealed partial class StampDerivedAssetStore
 
     private static string ColorSourceStamp(FileStamp? original, FileStamp? working) =>
         Convert.ToHexStringLower(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new[] { original, working })));
+
+    private static bool ColorSourcesVerified(string sources, PortableTrust trust) => trust.Sources.Length > 0
+        && trust.Sources.Any(working => ColorSourceStamp(trust.Sources[0], working) == sources);
+
+    // Under _requestsGate: portable colours may be shown provisionally, but only a proved
+    // source may survive shutdown (the next run would otherwise bypass the trust queue).
+    private void ConfirmKnownColor(string sha, PortableTrust trust)
+    {
+        if (_disposed || !_knownColors.TryGetValue(sha, out var color) || color.Verified
+            || !ColorSourcesVerified(color.Sources, trust)) return;
+        _knownColors[sha] = color with { Verified = true };
+        Interlocked.Increment(ref _colorsUnsaved);
+    }
 
     // A remembered palette must not suppress source validation and watcher registration.
     // This startup pass only stats files; it never reads headers, decodes, or gates the overview.
@@ -112,7 +128,7 @@ public sealed partial class StampDerivedAssetStore
         {
             if (Interlocked.Exchange(ref _colorsUnsaved, 0) == 0) return;
             Interlocked.Exchange(ref _colorsSavedAt, System.Diagnostics.Stopwatch.GetTimestamp());
-            var entries = _knownColors.ToArray();
+            var entries = _knownColors.ToArray().Where(pair => pair.Value.Verified).ToArray();
             var bytes = new byte[48 + entries.Length * ColorEntryBytes];
             BinaryPrimitives.WriteUInt32LittleEndian(bytes, ColorsMagic);
             BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(4), ColorsFormat);

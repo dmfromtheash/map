@@ -266,6 +266,7 @@ public sealed partial class StampDerivedAssetStore
             if (!_portableTrust.ContainsKey(sha))
                 while (_portableTrust.Count >= _metadataCapacity) _portableTrust.Remove(_portableTrust.Keys.First());
             _portableTrust[sha] = trust;
+            ConfirmKnownColor(sha, trust);
         }
     }
 
