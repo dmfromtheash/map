@@ -126,10 +126,11 @@ public sealed class PixelBisectCatalogRepro
         }
     }
 
-    [Fact]
+    [OptInProbe("MAP_PIXREPRO_OUT,MAP_PIXREPRO_BASE", "PixelBisectCatalogRepro.Small_catalog_fit_and_edit_pixels_match_the_exact_reference")]
     public void Compare_catalog_to_base()
     {
-        if (Out is not { } outDir || Environment.GetEnvironmentVariable("MAP_PIXREPRO_BASE") is not { } baseLabel) return;
+        var outDir = Out!;
+        var baseLabel = Environment.GetEnvironmentVariable("MAP_PIXREPRO_BASE")!;
         var lines = new List<string>();
         var pairs = new[] { "fit", "edit" }.Select(n => (n, $"{baseLabel}-{n}", $"{Label}-{n}"))
             .Concat(new[] { "fit", "edit" }.Select(n => ($"{n} vs own exact", $"{Label}-{n}-exact", $"{Label}-{n}")))
@@ -139,7 +140,8 @@ public sealed class PixelBisectCatalogRepro
         {
             var a = Path.Combine(outDir, $"{left}.png");
             var b = Path.Combine(outDir, $"{right}.png");
-            if (!File.Exists(a) || !File.Exists(b)) { lines.Add($"{name}: missing"); continue; }
+            Assert.True(File.Exists(a), "comparison fixture missing: " + a);
+            Assert.True(File.Exists(b), "comparison fixture missing: " + b);
             using var ba = SKBitmap.Decode(a);
             using var bb = SKBitmap.Decode(b);
             int max = 0, over2 = 0, differ = 0;
