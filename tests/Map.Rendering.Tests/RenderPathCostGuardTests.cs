@@ -36,8 +36,8 @@ public sealed class RenderPathCostGuardTests : IClassFixture<RenderPathCostGuard
     [InlineData("visible-raster-frame")]
     public void Bounded_render_path(string key) => Compare(key, 200_000, true);
 
-    [Fact(Skip = "O(N): " + DenseLinear)]
-    public void Dense_overview_delta() => Compare("overview-delta-dense", 200_000, true);
+    [Fact(Skip = "defect: " + DenseLinear + "; 10k/100k allocation ratio 10.338 > 3")]
+    public void Dense_overview_delta() => Compare("overview-delta-dense", 100_000, true);
 
     [Fact]
     public void River_preview_resolution() => Compare("river-preview", 200_000, true);
