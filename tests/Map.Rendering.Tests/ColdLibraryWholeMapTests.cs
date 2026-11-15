@@ -54,7 +54,7 @@ public sealed class ColdLibraryWholeMapTests
         finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
     }
 
-    [ColdLibraryDefectTheory]
+    [Theory]
     [InlineData(50_000)]
     [InlineData(200_000)]
     public void Pending_fit_frames_have_bounded_direct_object_work(int count)
@@ -219,6 +219,7 @@ public sealed class ColdLibraryWholeMapTests
             finally { _tiles.EndFrame(); _atlas.EndFrame(); }
             Assert.Null(_preparation.Statistics.Error);
             var result = new FrameResult(stats, Images.FrameImageLookups);
+            Assert.InRange(result.DirectObjects, 0, DirectObjectLimit);
             if (log) Console.WriteLine($"OVGUARD {Count} {phase} frame={++_frame}: drawn={stats.ObjectsDrawn} overview={stats.OverviewObjects} exact={stats.ExactObjects} direct={result.DirectObjects} calls={stats.DrawCalls} layer={stats.OverviewExactLayer} kept={stats.LayerImagesKept} started={stats.OverviewExactLayerStarted} plans={Images.PreparationPlans} objectsMs={stats.ObjectsMilliseconds:F3} exactMs={stats.OverviewExactMilliseconds:F3} pending={stats.DetailTilesPending} unresolved={stats.UnresolvedImages} chunks={stats.OverviewChunks} frameLookups={result.FrameImageLookups}");
             return result;
         }
@@ -369,15 +370,6 @@ public sealed class ColdLibraryWholeMapTests
             public SKColor? TryGetOverviewColor(string sha256) => source.TryGetOverviewColor(sha256);
             public void Dispose() { }
         }
-    }
-}
-
-public sealed class ColdLibraryDefectTheoryAttribute : TheoryAttribute
-{
-    public ColdLibraryDefectTheoryAttribute()
-    {
-        if (Environment.GetEnvironmentVariable("MAP_OVGUARD_RED") != "1")
-            Skip = "defect: cold metadata keeps direct exact draws; SceneRenderer.cs:6482 / SceneRenderer.OverviewExactLayer.cs:214";
     }
 }
 
