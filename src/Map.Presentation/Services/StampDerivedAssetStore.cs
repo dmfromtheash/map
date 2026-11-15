@@ -172,7 +172,8 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
         _janitor = CreateJanitor(diskBudgetBytes);
         _diskBudget = diskBudgetBytes ?? _policy.Budget.TotalBytes;
         LoadKnownColors();
-        _workers =Task.WhenAll(Task.Run(Work), Task.Run(BuildWork), StartMaintenance(), Task.Run(TrustWork));
+        _workers = Task.WhenAll(Task.Run(Work), Task.Run(BuildWork), StartMaintenance(), Task.Run(TrustWork),
+            Task.Run(ValidateKnownColorSources));
     }
 
     public Task<Header?> Request(string sha)
@@ -255,7 +256,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
         {
             if (!_disposed && _requests.TryGetValue(sha, out var active) && ReferenceEquals(active, completion))
             {
-                if (header is not null) saveColors = RememberColor(sha, header.Color);
+                if (header is not null) saveColors = RememberColor(sha, header);
                 else ForgetColor(sha);
                 recovered = header is not null && _failedHeaders.ContainsKey(sha);
                 if (header is null)

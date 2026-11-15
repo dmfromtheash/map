@@ -14,6 +14,51 @@ public sealed class StampDerivedAssetStoreColorTests : IDisposable
     private string Cache => Path.Combine(_root, "derived");
     private string Colors => Path.Combine(Cache, "v1", "overview-colors.bin");
 
+    [Theory]
+    [InlineData(32)] // SHA payload: still a syntactically valid, different SHA.
+    [InlineData(48)] // Colour payload: valid layout, wrong colour.
+    public async Task Damaged_color_payload_is_rejected_before_any_entry_is_used(int offset)
+    {
+        await using var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));
+        var (record, _) = ColorCacheFixture.Seed(catalog, Cache);
+        await using (var writer = Store(catalog)) Assert.NotNull(await writer.Request(record.Sha256));
+        var bytes = File.ReadAllBytes(Colors);
+        bytes[offset] ^= 1;
+        File.WriteAllBytes(Colors, bytes);
+        await using var reader = Store(catalog);
+        Assert.Equal(0, reader.KnownColorCount);
+        Assert.Null(reader.KnownColor(record.Sha256));
+        Assert.Equal(0, reader.MetadataEntries);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Remembered_colors_validate_and_watch_sources_without_reading_headers(bool changedWhileClosed)
+    {
+        await using var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));
+        var (record, _) = ColorCacheFixture.Seed(catalog, Cache);
+        await using (var writer = Store(catalog)) Assert.NotNull(await writer.Request(record.Sha256));
+        var path = catalog.SourcePath(record)!;
+        if (changedWhileClosed) File.WriteAllBytes(path, [0, 1, 2, 3]);
+        await using (var reader = Store(catalog))
+        {
+            if (!changedWhileClosed)
+            {
+                Assert.NotNull(reader.KnownColor(record.Sha256));
+                await Eventually(() => Private<ConcurrentDictionary<string, string>>(reader, "_watchedFiles").ContainsKey(path));
+                File.WriteAllBytes(path, [0, 1, 2, 3]);
+                Call(reader, "FileChanged", path); // The same callback as a native watcher, deterministic on this Mac.
+            }
+            await Eventually(() => reader.KnownColor(record.Sha256) is null);
+            Assert.Equal(0, reader.MetadataEntries);
+            Assert.Equal(0, reader.DiskHits);
+            Assert.Equal(0, reader.Builds);
+        }
+        await using var reopened = Store(catalog);
+        Assert.Null(reopened.KnownColor(record.Sha256));
+    }
+
     [Fact]
     public async Task Invalidated_header_cannot_resurrect_a_remembered_color()
     {
@@ -104,6 +149,12 @@ public sealed class StampDerivedAssetStoreColorTests : IDisposable
     }
 
     private StampDerivedAssetStore Store(AssetCatalog catalog) => new(catalog, Cache, startWatcher: _ => { });
+    private static async Task Eventually(Func<bool> condition)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (!condition() && DateTime.UtcNow < deadline) await Task.Delay(5);
+        Assert.True(condition(), "The remembered source was never watched or invalidated.");
+    }
     private static T Private<T>(object target, string name) => (T)target.GetType()
         .GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(target)!;
     private static void Call(object target, string method, params object?[] args) => target.GetType()
