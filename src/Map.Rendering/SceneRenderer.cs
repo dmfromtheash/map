@@ -6530,11 +6530,18 @@ public static partial class SceneRenderer
             // synchronous reference/export path and unsupported layers fully exact.
             var viewCentreX = (view.Left + view.Right) / 2;
             var viewCentreY = (view.Top + view.Bottom) / 2;
-            exact = exact.Values.OrderBy(item =>
-                Math.Pow(item.X + item.Width / 2 - viewCentreX, 2)
-                + Math.Pow(item.Y + item.Height / 2 - viewCentreY, 2))
-                .ThenBy(item => item.Id.Value).Take(OverviewExactDirectBudget)
-                .ToDictionary(item => item.Id);
+            // The nearest K by a bounded max-heap: O(n log K) and no sort of every candidate on each moving frame.
+            var nearest = new PriorityQueue<SceneObject, (double Distance, Guid Id)>(OverviewExactDirectBudget + 1,
+                Comparer<(double Distance, Guid Id)>.Create(static (a, b) => b.CompareTo(a)));
+            foreach (var item in exact.Values)
+            {
+                var dx = item.X + item.Width / 2 - viewCentreX;
+                var dy = item.Y + item.Height / 2 - viewCentreY;
+                nearest.Enqueue(item, (dx * dx + dy * dy, item.Id.Value));
+                if (nearest.Count > OverviewExactDirectBudget) nearest.Dequeue();
+            }
+            exact = new Dictionary<ObjectId, SceneObject>(OverviewExactDirectBudget + extras.Count);
+            while (nearest.TryDequeue(out var near, out _)) exact[near.Id] = near;
             // What the user holds or edits is never cut by the budget.
             foreach (var extra in extras) exact[extra.Id] = extra;
             if (options.ObjectOverrides is { Count: > 0 } kept)
