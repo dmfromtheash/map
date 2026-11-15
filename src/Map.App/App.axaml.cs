@@ -41,6 +41,12 @@ public partial class App : Application
             if (TestMode.Enabled && Environment.GetEnvironmentVariable(AssetDriveLibraries.RootsVariable) is null)
                 Environment.SetEnvironmentVariable(AssetDriveLibraries.DisableVariable, "1");
             new Services.DriveLibraryWatcher(assetCatalog).Start();
+            // Attached drive libraries get their shared preparations in the background (DEC-106, DEC-110 p.1):
+            // the next machine that attaches the library opens its maps warm.
+            var libraryFiller = new Map.Presentation.Services.LibraryPreparationFiller(
+                assetCatalog, Path.Combine(profileRoot, "cache", "library-builder"));
+            libraryFiller.Start();
+            desktop.Exit += (_, _) => libraryFiller.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(5));
 
             var mainWindow = new MainWindow(
                 new ProjectStore(journal),
