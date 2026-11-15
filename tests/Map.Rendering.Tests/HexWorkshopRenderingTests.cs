@@ -234,10 +234,10 @@ public sealed class HexWorkshopRenderingTests
     }
 
     /// <summary>R21 review: one world per mode with flow rivers and states, written to the review folder.</summary>
-    [Fact]
+    [OptInProbe("MAP_HEX_PNG", "HexWorkshopRenderingTests.A_generated_world_draws_seas_land_rivers_and_towns")]
     public void Generated_worlds_of_every_mode_for_review()
     {
-        if (ReviewFolder is not { } folder) return;
+        var folder = ReviewFolder!;
         Directory.CreateDirectory(folder);
         foreach (var mode in Enum.GetValues<HexWorldMode>())
         {
