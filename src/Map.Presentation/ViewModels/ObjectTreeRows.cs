@@ -130,6 +130,15 @@ public sealed record ObjectTreeRow(
 /// </summary>
 public static class ObjectTreeRows
 {
+    /// <summary>Kind members tested during removals on this thread; diagnostics only.</summary>
+    internal static long KindRemovalChecksOnThisThread => _kindRemovalChecks;
+    [ThreadStatic] private static long _kindRemovalChecks;
+    private static bool IsRemovedMember(SceneObject member, ObjectId id)
+    {
+        _kindRemovalChecks++;
+        return member.Id == id;
+    }
+
     private sealed record GroupCount(int Value);
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<ObjectLayer, GroupCount> GroupCounts = [];
     private static int GroupedCount(ObjectLayer layer) => GroupCounts.GetValue(layer, static current =>
@@ -238,8 +247,9 @@ public static class ObjectTreeRows
     private sealed class KindIndex
     {
         private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<ObjectLayer, KindIndex> Cache = [];
-        public List<string> Order { get; private init; } = [];
-        public Dictionary<string, ImmutableList<SceneObject>> Kinds { get; private init; } = new(StringComparer.Ordinal);
+        public ImmutableList<string> Order { get; private set; } = [];
+        public ImmutableDictionary<string, ImmutableList<SceneObject>> Kinds { get; private set; }
+            = ImmutableDictionary.Create<string, ImmutableList<SceneObject>>(StringComparer.Ordinal);
 
         public static KindIndex For(ObjectLayer layer) => Cache.GetValue(layer, Build);
         public static bool IsPrepared(ObjectLayer layer) => Cache.TryGetValue(layer, out _);
@@ -265,6 +275,8 @@ public static class ObjectTreeRows
                 }
             }
             var index = new KindIndex();
+            var order = ImmutableList.CreateBuilder<string>();
+            var kinds = index.Kinds.ToBuilder();
             var builders = new Dictionary<string, ImmutableList<SceneObject>.Builder>(StringComparer.Ordinal);
             var ordered = StackOrder(layer);
             for (var i = ordered.Count - 1; i >= 0; i--)
@@ -272,33 +284,52 @@ public static class ObjectTreeRows
                 var sceneObject = ordered[i];
                 if (sceneObject.Kind != SceneObjectKind.Stamp) continue;
                 var key = AssetKeyOf(sceneObject);
-                if (!builders.TryGetValue(key, out var members)) { members = ImmutableList.CreateBuilder<SceneObject>(); builders.Add(key, members); index.Order.Add(key); }
+                if (!builders.TryGetValue(key, out var members)) { members = ImmutableList.CreateBuilder<SceneObject>(); builders.Add(key, members); order.Add(key); }
                 members.Add(sceneObject);
             }
-            foreach (var (key, members) in builders) index.Kinds.Add(key, members.ToImmutable());
+            foreach (var (key, members) in builders) kinds.Add(key, members.ToImmutable());
+            index.Order = order.ToImmutable();
+            index.Kinds = kinds.ToImmutable();
             return index;
         }
 
         private KindIndex Apply(ObjectLayerChange delta, ObjectLayer layer)
         {
-            var next = new KindIndex { Order = [.. Order], Kinds = new Dictionary<string, ImmutableList<SceneObject>>(Kinds, StringComparer.Ordinal) };
+            // Each edit shares untouched kind metadata, even with hundreds of thousands of
+            // different pictures. Copying these two directories was O(all kinds) per stamp.
+            var next = new KindIndex { Order = Order, Kinds = Kinds };
             foreach (var index in delta.Removed)
             {
                 var gone = delta.Source.Objects[index];
                 if (gone.Kind != SceneObjectKind.Stamp) continue;
                 var key = AssetKeyOf(gone);
                 if (!next.Kinds.ContainsKey(key)) continue;
-                var members = next.Kinds[key].RemoveAll(member => member.Id == gone.Id);
-                next.Kinds[key] = members;
-                if (members.Count == 0) { next.Kinds.Remove(key); next.Order.Remove(key); }
+                var previous = next.Kinds[key];
+                // Placement undo removes the newest copy, at the head of this persistent stack.
+                // RemoveAll traversed every copy of the picture even for that one removal.
+                var members = previous.Count > 0 && IsRemovedMember(previous[0], gone.Id)
+                    ? previous.RemoveAt(0)
+                    : previous.RemoveAll(member => IsRemovedMember(member, gone.Id));
+                if (members.Count == 0)
+                {
+                    next.Kinds = next.Kinds.Remove(key);
+                    // Undo of a newly introduced kind removes the last kind, without a scan.
+                    next.Order = next.Order.Count > 0 && next.Order[^1] == key
+                        ? next.Order.RemoveAt(next.Order.Count - 1) : next.Order.Remove(key);
+                }
+                else next.Kinds = next.Kinds.SetItem(key, members);
             }
             foreach (var index in delta.Added)
             {
                 var added = layer.Objects[index];
                 if (added.Kind != SceneObjectKind.Stamp) continue;
                 var key = AssetKeyOf(added);
-                if (!next.Kinds.ContainsKey(key)) { next.Kinds[key] = []; next.Order.Add(key); }
-                next.Kinds[key] = next.Kinds[key].Insert(0, added);
+                if (!next.Kinds.TryGetValue(key, out var members))
+                {
+                    members = [];
+                    next.Order = next.Order.Add(key);
+                }
+                next.Kinds = next.Kinds.SetItem(key, members.Insert(0, added));
             }
             return next;
         }
@@ -354,6 +385,51 @@ public static class ObjectTreeRows
         foreach (var layer in document.Layers.OfType<ObjectLayer>().Reverse())
             if (KindIndex.For(layer).Kinds.TryGetValue(key, out var members))
                 foreach (var member in members) yield return member;
+    }
+
+    /// <summary>
+    /// A placement or its undo changes a prefix of one picture's stack in one layer.
+    /// Describes that splice without comparing all the unchanged copies. Other edits ask the
+    /// view to replace its row source as usual. The index includes the kind's breadcrumb.
+    /// </summary>
+    public static bool TryAssetKindPrefixChange(MapDocument before, MapDocument after, string key,
+        out int index, out int removed, out int added)
+    {
+        index = 1; removed = 0; added = 0;
+        var oldLayers = before.Layers.OfType<ObjectLayer>().ToArray();
+        var newLayers = after.Layers.OfType<ObjectLayer>().ToArray();
+        if (oldLayers.Length != newLayers.Length) return false;
+        var changed = false;
+        var offset = 1;
+        for (var l = oldLayers.Length - 1; l >= 0; l--)
+        {
+            var oldLayer = oldLayers[l];
+            var newLayer = newLayers[l];
+            if (oldLayer.Id != newLayer.Id) return false;
+            var oldMembers = KindIndex.For(oldLayer).Kinds.GetValueOrDefault(key) ?? [];
+            if (!ReferenceEquals(oldLayer.Objects, newLayer.Objects))
+            {
+                if (changed || !ObjectLayerChanges.TryGet(newLayer, out var delta)
+                    || !ReferenceEquals(delta.Source.Objects, oldLayer.Objects) || delta.OrderCompacted
+                    || delta.Removed.Count > 0 && delta.Added.Count > 0) return false;
+                var newMembers = KindIndex.For(newLayer).Kinds.GetValueOrDefault(key) ?? [];
+                var removedIds = delta.Removed.Select(i => oldLayer.Objects[i])
+                    .Where(o => o.Kind == SceneObjectKind.Stamp && AssetKeyOf(o) == key).ToArray();
+                var addedIds = delta.Added.Select(i => newLayer.Objects[i])
+                    .Where(o => o.Kind == SceneObjectKind.Stamp && AssetKeyOf(o) == key).ToArray();
+                if (oldMembers.Count - removedIds.Length + addedIds.Length != newMembers.Count) return false;
+                var gone = removedIds.Select(o => o.Id).ToHashSet();
+                var fresh = addedIds.Select(o => o.Id).ToHashSet();
+                for (var i = 0; i < removedIds.Length; i++)
+                    if (!gone.Remove(oldMembers[i].Id)) return false;
+                for (var i = 0; i < addedIds.Length; i++)
+                    if (!fresh.Remove(newMembers[i].Id)) return false;
+                index = offset; removed = removedIds.Length; added = addedIds.Length;
+                changed = true;
+            }
+            offset += oldMembers.Count;
+        }
+        return changed;
     }
 
     /// <summary>O(selected IDs), independent of the number of copies in closed kind rows.</summary>

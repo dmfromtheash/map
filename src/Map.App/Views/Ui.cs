@@ -1385,6 +1385,11 @@ public static class Ui
         select.MinHeight = 34;
         if (select.Content is DockPanel label && meta.Length > 0)
         {
+            if (label.Children[0] is TextBlock current)
+            {
+                current.Text = meta;
+                return;
+            }
             label.Children.Insert(0, new TextBlock
             {
                 Text = meta, FontSize = 11, Margin = new Thickness(6, 0, 0, 0),

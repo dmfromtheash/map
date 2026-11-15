@@ -1302,6 +1302,13 @@ public sealed partial class EditorView
             if (_layerRows.TryGetValue(layer.Id, out var kept) && kept.Signature == signature)
             {
                 Ui.SetStructureSelected(kept.Row, layer.Id == _editor.ActiveLayerId);
+                Ui.SetStructureMeta(kept.Row, LayerMeta(layer));
+                if (kept.Row.Child is DockPanel panel && panel.Children[^1] is ToggleButton select)
+                {
+                    var tooltip = LayerRowTooltip(layer);
+                    AutomationProperties.SetName(select, tooltip);
+                    ToolTip.SetTip(select, tooltip);
+                }
                 rows.Add(kept.Row);
                 continue;
             }
@@ -1355,27 +1362,6 @@ public sealed partial class EditorView
                 actions.Add(locking);
             }
 
-            // The kind is a useful subtitle only when it adds something the name does not say.
-            // An object layer also says what it holds, so the stack can be read without opening
-            // each layer: how many objects, how many rivers and lakes.
-            var kind = EditorLabels.LayerKind(layer);
-            var secondary = EditorLabels.SecondaryKind(layer.Name, kind);
-            if (layer is ObjectLayer objectLayer)
-            {
-                var counts = new List<string>();
-                if (objectLayer.Objects.Count > 0) counts.Add(EditorLabels.Objects(objectLayer.Objects.Count));
-                if (objectLayer.Rivers.Length > 0) counts.Add(EditorLabels.Waters(objectLayer.Rivers.Length));
-                if (objectLayer.Roads.Length > 0) counts.Add(EditorLabels.RoadsCount(objectLayer.Roads.Length));
-                var held = counts.Count == 0 ? "пусто" : string.Join(" · ", counts);
-                secondary = secondary is null ? held : secondary + " · " + held;
-            }
-
-            var tooltip = $"{layer.Name} · {kind} · наложение: {EditorLabels.Blend(layer.Blend)}";
-            if (layer.Mask is { } mask)
-            {
-                tooltip += mask.Enabled ? " · маска включена" : " · маска выключена";
-            }
-
             var row = Ui.StructureRow(
                 "Layer_" + layer.Id,
                 LayerIcon(layer),
@@ -1388,7 +1374,7 @@ public sealed partial class EditorView
                     SyncSidePanels();
                     SyncContextArea();
                 },
-                tooltip + (secondary is null ? "" : " · " + secondary),
+                LayerRowTooltip(layer),
                 [.. actions]);
             Ui.SetStructureMeta(row, LayerMeta(layer));
 
@@ -1431,12 +1417,31 @@ public sealed partial class EditorView
         Timed("layer-level", SyncLayerAndLevel);
     }
 
-    /// <summary>Everything a layer row shows, as one string: name, kind, switches, counts, blend and mask state.</summary>
+    /// <summary>What requires new controls. Counts and their tooltip are updated in place.</summary>
     private static string LayerRowSignature(MapLayer layer)
     {
-        var counts = layer is ObjectLayer objects ? $"{objects.Objects.Count}/{objects.Rivers.Length}/{objects.Roads.Length}" : "";
+        var scope = layer is ObjectLayer { Rivers.Length: > 0 } or ObjectLayer { Roads.Length: > 0 };
         var mask = layer.Mask is { } m ? (m.Enabled ? "m+" : "m-") : "m0";
-        return $"{layer.GetType().Name}|{layer.Name}|{layer.Visible}|{layer.Locked}|{layer.Blend}|{mask}|{counts}|{LayerMeta(layer)}";
+        return $"{layer.GetType().Name}|{layer.Name}|{layer.Visible}|{layer.Locked}|{layer.Blend}|{mask}|{scope}";
+    }
+
+    private static string LayerRowTooltip(MapLayer layer)
+    {
+        var kind = EditorLabels.LayerKind(layer);
+        var secondary = EditorLabels.SecondaryKind(layer.Name, kind);
+        if (layer is ObjectLayer objects)
+        {
+            var counts = new List<string>();
+            if (objects.Objects.Count > 0) counts.Add(EditorLabels.Objects(objects.Objects.Count));
+            if (objects.Rivers.Length > 0) counts.Add(EditorLabels.Waters(objects.Rivers.Length));
+            if (objects.Roads.Length > 0) counts.Add(EditorLabels.RoadsCount(objects.Roads.Length));
+            var held = counts.Count == 0 ? "пусто" : string.Join(" · ", counts);
+            secondary = secondary is null ? held : secondary + " · " + held;
+        }
+        var tooltip = $"{layer.Name} · {kind} · наложение: {EditorLabels.Blend(layer.Blend)}";
+        if (layer.Mask is { } mask)
+            tooltip += mask.Enabled ? " · маска включена" : " · маска выключена";
+        return tooltip + (secondary is null ? "" : " · " + secondary);
     }
 
     private static string LayerIcon(MapLayer layer) => layer switch
@@ -1487,7 +1492,9 @@ public sealed partial class EditorView
 
         _objectEmptyStateHost.IsVisible = false;
         _objectList.IsVisible = true;
-        _objectList.ItemsSource = rows;
+        if (_objectList.ItemsSource is not LiveObjectRows live || !live.TryUpdate(_editor.Session.Document, rows))
+            _objectList.ItemsSource = rows[0].Kind == ObjectTreeRowKind.AssetKindBreadcrumb
+                ? new LiveObjectRows(_editor.Session.Document, rows) : rows;
         Dispatcher.UIThread.Post(() => { SyncObjectListSelection(); ScrollObjectListToSelection(); }, DispatcherPriority.Loaded);
     }
 
