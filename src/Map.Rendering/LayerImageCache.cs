@@ -171,6 +171,25 @@ public sealed class LayerImageCache : IDisposable
         a.ScaleX == b.ScaleX && a.SkewX == b.SkewX && a.SkewY == b.SkewY && a.ScaleY == b.ScaleY
         && a.Persp0 == 0 && a.Persp1 == 0 && b.Persp0 == 0 && b.Persp1 == 0 && a.Persp2 == b.Persp2;
 
+    /// <summary>Pan images not rebuilt because the camera was zooming (diagnostics and tests).</summary>
+    public long ZoomRebuildsSkipped { get; private set; }
+
+    private readonly Dictionary<LayerId, float> _lastPanScale = [];
+
+    /// <summary>
+    /// The scale changed since this layer's previous pan frame: the camera is zooming. The first frame at a scale
+    /// that then holds (a pan after the wheel, or the stop) builds the image as before.
+    /// </summary>
+    private bool ZoomedAwayFrom(LayerId layer, SKMatrix matrix)
+    {
+        lock (_gate)
+        {
+            var zooming = _lastPanScale.TryGetValue(layer, out var last) && Math.Abs(last - matrix.ScaleX) > 1e-6f * Math.Abs(matrix.ScaleX);
+            _lastPanScale[layer] = matrix.ScaleX;
+            return zooming;
+        }
+    }
+
     /// <summary>The kept pan image of a layer: device pixels of a wider area than the view, at one scale.</summary>
     private sealed record PanEntry(object[] Key, SKImage Image, SKMatrix Matrix, SKRectI Covered);
 
@@ -197,6 +216,7 @@ public sealed class LayerImageCache : IDisposable
         var matrix = canvas.TotalMatrix;
         if (device.Width <= 0 || device.Height <= 0 || device.Width + 2 * margin > 8192 || device.Height + 2 * margin > 8192) return false;
         if (!matrix.TryInvert(out var inverse)) return false;
+        var zooming = ZoomedAwayFrom(layer, matrix);
         var handle = context?.Handle ?? IntPtr.Zero;
         object[] key = [.. parts, handle];
         PanEntry? entry = null;
@@ -231,6 +251,10 @@ public sealed class LayerImageCache : IDisposable
             && Math.Abs(relative.TransY - MathF.Round(relative.TransY)) < 1e-3f;
         if (exact) relative = SKMatrix.CreateTranslation(MathF.Round(relative.TransX), MathF.Round(relative.TransY));
         if (reuseOnly && (entry is null || !exact)) return false;
+        // A zoom past the stand-in's limits: building a new image over the view and its margins, then flushing it,
+        // cost 7.5 s of draws and 3.6 s of GPU flush in the slow wheel frames at 10 000 objects (PC trace,
+        // 2026-11-15). A pan image pays off only for pans; while the scale keeps changing the layer is drawn directly.
+        if (entry is null && zooming) { ZoomRebuildsSkipped++; return false; }
         if (entry is null)
         {
             var covered = new SKRectI(device.Left - margin, device.Top - margin, device.Right + margin, device.Bottom + margin);
@@ -300,6 +324,7 @@ public sealed class LayerImageCache : IDisposable
         _entries.Clear();
         foreach (var entry in _pan.Values) entry.Image.Dispose();
         _pan.Clear();
+        _lastPanScale.Clear();
     }
 
     public void Dispose()
