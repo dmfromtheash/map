@@ -1127,9 +1127,8 @@ public sealed partial class CatalogStampImageSource(
             }
             if (IsCanvasThread)
             {
-                var queued = new FrameKey(FrameQuery.Pixels, sha256, width, height);
-                QueueFrameWork(queued);
-                resident &= CachedSample(sha256, width, height) is not null;
+                ResidentFrameImage(sha256, width, height);
+                resident &= !LastImageRequestPending;
                 continue;
             }
             if (record is null || AssetCatalog.DetailLadderDepth(record.Width, record.Height) is not (> 0 and var depth)) continue;

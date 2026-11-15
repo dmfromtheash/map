@@ -143,8 +143,10 @@ public sealed partial class CatalogStampImageSource
     // visible request, not per object. No path resolution, stat, read, hash or decode runs on the canvas thread.
     private readonly HashSet<FrameKey> _frameWork = [];
     private readonly HashSet<Task> _frameTasks = [];
+    private long _frameWorkSchedules;
+    internal long FrameWorkSchedules => Interlocked.Read(ref _frameWorkSchedules);
     private readonly Dictionary<FrameKey, long> _frameFailedUntil = [];
-    private SKImage? ResidentFrameImage(string sha, double width = 0, double height = 0, bool working = false)
+    private SKImage? ExactResidentFrameImage(string sha, double width, double height, bool working)
     {
         var image = working ? _cache.Get(sha + "@1", null) ?? _cache.Get(sha, null)
             : CachedSample(sha, width, height) ?? _cache.GetReadyForPixelSize(sha, width, height);
@@ -155,6 +157,12 @@ public sealed partial class CatalogStampImageSource
             var name = level == 0 ? sha : sha + "@" + level;
             image = CachedSample(name, width, height) ?? _cache.GetReadyForPixelSize(name, width, height);
         }
+        return image;
+    }
+
+    private SKImage? ResidentFrameImage(string sha, double width = 0, double height = 0, bool working = false)
+    {
+        var image = ExactResidentFrameImage(sha, width, height, working);
         var exact = image is not null;
         image ??= _cache.Get(sha, null);
         LastImageRequestPending = !exact && QueueFrameWork(new(working ? FrameQuery.Image : FrameQuery.Pixels, sha, width, height));
@@ -167,6 +175,7 @@ public sealed partial class CatalogStampImageSource
         if (_frameFailedUntil.TryGetValue(key, out var retry) && _retryClock.GetUtcNow().ToUnixTimeMilliseconds() < retry) return false;
         if (IsCanvasThread && !_requestedFrameWork.Add(key)) return true;
         if (!_frameWork.Add(key)) return true;
+        Interlocked.Increment(ref _frameWorkSchedules);
         var revision = SourceRevision;
         var task = Task.Run(() =>
         {
@@ -190,7 +199,10 @@ public sealed partial class CatalogStampImageSource
                     _frameWork.Remove(key);
                     if (!_disposed && revision == SourceRevision)
                     {
-                        if (result is null)
+                        // A tight cache can hold the original but not its mip pyramid. Preserve the same
+                        // original fallback as the synchronous policy and retry later, rather than refining
+                        // and queueing a worker on every frame forever.
+                        if (result is null || ExactResidentFrameImage(key.Sha, key.Width, key.Height, key.Query == FrameQuery.Image) is null)
                         {
                             _frameFailedUntil[key] = _retryClock.GetUtcNow().ToUnixTimeMilliseconds() + 2100;
                             _ = Task.Delay(TimeSpan.FromMilliseconds(2100), _retryClock, _retryStop.Token).ContinueWith(completed =>
