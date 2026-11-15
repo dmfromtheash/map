@@ -22,9 +22,40 @@ public sealed class PixelBisectRepro
     private static string Label => Environment.GetEnvironmentVariable("MAP_PIXREPRO_LABEL") ?? "run";
 
     [Fact]
+    public void Small_fit_and_edit_pixels_match_the_synchronous_overview()
+    {
+        using var source = new SyntheticSource(8);
+        var document = BuildDocument(source, objectCount: 600, assetCount: 8);
+        var layer = document.Layers.OfType<ObjectLayer>().Single();
+        var original = SceneObjectClone.At(layer.Objects[0], 8000, 8000, 512, 512);
+        document = DocumentEditor.ReplaceObject(document, original);
+        const double scale = 1d / 32;
+        using var frame = new FrameHarness(source, scale, 0, 0);
+        var first = frame.Settle(document, null, null).Png;
+        Check(document, first);
+        var session = new EditingSession(document);
+        session.Execute(new ReplaceObjectsCommand([original], [SceneObjectClone.At(original, 14000, 14000)], "move"));
+        var changed = frame.Settle(session.Document, null, null).Png;
+        Check(session.Document, changed);
+        using (var a = SKBitmap.Decode(first))
+        using (var b = SKBitmap.Decode(changed))
+            Assert.False(a.GetPixelSpan().SequenceEqual(b.GetPixelSpan()), "the edit never changed the fit frame");
+        session.Undo(); Check(session.Document, frame.Settle(session.Document, null, null).Png);
+        session.Redo(); Check(session.Document, frame.Settle(session.Document, null, null).Png);
+
+        void Check(MapDocument current, byte[] png)
+        {
+            using var actual = SKBitmap.Decode(png);
+            using var expected = SKBitmap.Decode(Reference(current, source, scale, 0, 0));
+            Assert.True(actual.Pixels.Distinct().Take(8).Count() == 8, "the fit frame is empty");
+            Assert.Equal(expected.Bytes, actual.Bytes);
+        }
+    }
+
+    [OptInProbe("MAP_PIXREPRO_OUT", "PixelBisectRepro.Small_fit_and_edit_pixels_match_the_synchronous_overview")]
     public void Render_scenarios()
     {
-        if (Out is not { } outDir) return;
+        var outDir = Out!;
         Directory.CreateDirectory(outDir);
         var log = new List<string>();
         using var source = new SyntheticSource(Assets);
@@ -146,7 +177,9 @@ public sealed class PixelBisectRepro
         {
             _source = source; _scale = scale; _ox = ox; _oy = oy;
             if (PreparationType is not null && Environment.GetEnvironmentVariable("MAP_PIXREPRO_NOPREP") != "1")
-                _preparation = Activator.CreateInstance(PreparationType);
+                _preparation = PreparationType.GetConstructor(Type.EmptyTypes) is not null
+                    ? Activator.CreateInstance(PreparationType)
+                    : Activator.CreateInstance(PreparationType, [null]);
         }
 
         public void Prepare(MapDocument document) =>
@@ -216,13 +249,13 @@ public sealed class PixelBisectRepro
         }
     }
 
-    private static MapDocument BuildDocument(SyntheticSource source)
+    private static MapDocument BuildDocument(SyntheticSource source, int objectCount = Objects, int assetCount = Assets)
     {
         var random = new Random(20261114);
-        var objects = new SceneObject[Objects];
-        for (var i = 0; i < Objects; i++)
-            objects[i] = Stamp(random, source.Sha(random.Next(Assets)), random.NextDouble() * Canvas, random.NextDouble() * Canvas, random.Next(4));
-        var assets = Enumerable.Range(0, Assets).Select(i => new MapAssetReference(source.Sha(i), $"Синтетика {i}", "image/png", "png",
+        var objects = new SceneObject[objectCount];
+        for (var i = 0; i < objectCount; i++)
+            objects[i] = Stamp(random, source.Sha(random.Next(assetCount)), random.NextDouble() * Canvas, random.NextDouble() * Canvas, random.Next(4));
+        var assets = Enumerable.Range(0, assetCount).Select(i => new MapAssetReference(source.Sha(i), $"Синтетика {i}", "image/png", "png",
             ProjectAssetStorage.Linked, DateTimeOffset.UnixEpoch, "synthetic", "user-owned", catalogId: source.Sha(i))).ToArray();
         return new MapDocument(new DocumentId(new Guid(Bytes(new Random(1)))), "Pixel bisect", DateTimeOffset.UnixEpoch,
             new CanvasDefinition(Canvas, Canvas, "px", "#FFF3EBDD"),
