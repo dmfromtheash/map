@@ -52,6 +52,7 @@ public sealed class ObjectOverviewCache : IDisposable
     private readonly List<SKImage> _retired = [];
     private sealed record DetailView(int Zoom, int Left, int Top, int Right, int Bottom, long Frame);
     private readonly Dictionary<LayerId, DetailView> _refiningViews = [];
+    private readonly List<LayerId> _expiredViews = [];
     private readonly Map.Core.Resources.WorkingMemoryBudget _memory;
     private long _frame;
     private bool _disposeRequested;
@@ -175,6 +176,18 @@ public sealed class ObjectOverviewCache : IDisposable
     internal ObjectOverviewCacheResult GetOrCreateOverview(LayerId layer, int x, int y, int zoom, ulong hash,
         SceneRenderer.OverviewVariant variant, StampForegroundSurface? foreground, RenderOptions options, SKImage? prepared = null)
     {
+        if (prepared is null && TryGet(layer, x, y, zoom, hash, out var cached))
+        {
+            Hits++;
+            SetOverview(layer, x, y, zoom, hash, variant);
+            return cached;
+        }
+        return BuildOverview(layer, x, y, zoom, hash, variant, foreground, options, prepared);
+    }
+
+    private ObjectOverviewCacheResult BuildOverview(LayerId layer, int x, int y, int zoom, ulong hash,
+        SceneRenderer.OverviewVariant variant, StampForegroundSurface? foreground, RenderOptions options, SKImage? prepared)
+    {
         var adopted = false;
         ObjectOverviewCacheResult result;
         try
@@ -187,13 +200,18 @@ public sealed class ObjectOverviewCache : IDisposable
             });
         }
         finally { if (!adopted) prepared?.Dispose(); }
+        SetOverview(layer, x, y, zoom, hash, variant);
+        return result;
+    }
+
+    private void SetOverview(LayerId layer, int x, int y, int zoom, ulong hash, SceneRenderer.OverviewVariant variant)
+    {
         if (_entries.TryGetValue(new(new(layer, x, y, zoom), hash), out var entry))
         {
             entry.Overview = variant;
             if (!_overviewZooms.TryGetValue((layer, x, y), out var levels)) _overviewZooms[(layer, x, y)] = levels = [];
             levels.Add(zoom);
         }
-        return result;
     }
 
     internal bool TryGetPreviousOverview(LayerId layer, int x, int y, int zoom,
@@ -259,8 +277,10 @@ public sealed class ObjectOverviewCache : IDisposable
     {
         _frameOpen = false;
         _framePins.Clear();
-        foreach (var layer in _refiningViews.Where(pair => pair.Value.Frame != _frame).Select(pair => pair.Key).ToArray())
-            _refiningViews.Remove(layer);
+        foreach (var pair in _refiningViews)
+            if (pair.Value.Frame != _frame) _expiredViews.Add(pair.Key);
+        foreach (var layer in _expiredViews) _refiningViews.Remove(layer);
+        _expiredViews.Clear();
         if (_disposeRequested) { Dispose(); return; }
         Trim(null);
         foreach (var image in _retired) { image.Dispose(); Disposals++; }

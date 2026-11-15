@@ -1422,6 +1422,11 @@ public static partial class SceneRenderer
 
     private static void DrawTerrain(SKCanvas canvas, MapDocument document, WorldBounds view, RenderOptions options)
     {
+        var hasTerrain = options.RiverOverrides is { Count: > 0 } || options.RoadOverrides is { Count: > 0 };
+        for (var i = 0; i < document.Layers.Count && !hasTerrain; i++)
+            hasTerrain = document.Layers[i] is LandLayer
+                || document.Layers[i] is ObjectLayer objects && (!objects.Rivers.IsEmpty || !objects.Roads.IsEmpty);
+        if (!hasTerrain) return;
         var lands = TerrainOrder.Lands(document)
             .Where(land => land.Visible && land.Opacity > 0
                 && (land.GeometryTiles.TileCount > 0 || HasLandShapePreview(land, options)))
@@ -1993,8 +1998,11 @@ public static partial class SceneRenderer
         List<Surface> surfaces, WorldBounds view, RenderOptions options)
     {
         DrawSea(canvas, document, lands, view, options);
-        var levels = lands.Select(land => land.Level).Concat(surfaces.Select(surface => surface.Level))
-            .Distinct().OrderBy(level => level).ToList();
+        using var scratch = TerrainPassScratch.Rent(view, options);
+        var levels = scratch.Levels;
+        foreach (var land in lands) if (!levels.Contains(land.Level)) levels.Add(land.Level);
+        foreach (var surface in surfaces) if (!levels.Contains(surface.Level)) levels.Add(surface.Level);
+        levels.Sort();
         foreach (var level in levels)
         {
             foreach (var land in lands)
@@ -2006,31 +2014,75 @@ public static partial class SceneRenderer
                 if (options.Stats is { } landStats) landStats.LandMilliseconds += Stopwatch.GetElapsedTime(landStarted).TotalMilliseconds;
             }
 
-            var atLevel = surfaces.Where(surface => surface.Level == level).ToList();
+            var atLevel = scratch.AtLevel;
+            var below = scratch.Below;
+            var owners = scratch.Owners;
+            atLevel.Clear(); below.Clear(); owners.Clear(); scratch.SeenOwners.Clear();
+            foreach (var surface in surfaces)
+                if (surface.Level == level)
+                {
+                    atLevel.Add(surface);
+                    if (scratch.SeenOwners.Add(surface.Owner)) owners.Add(surface.Owner);
+                }
             if (atLevel.Count == 0) continue;
-            var below = lands.Where(land => land.Level <= level).ToList();
-            var water = atLevel.Where(surface => surface.River is not null).ToList();
-            foreach (var group in atLevel.GroupBy(surface => surface.Owner))
+            foreach (var land in lands) if (land.Level <= level) below.Add(land);
+            foreach (var owner in owners)
             {
-                var owner = group.Key;
-                var run = group.OrderBy(surface => surface.Order).ToList();
+                var run = scratch.Run;
+                run.Clear();
+                foreach (var surface in atLevel) if (surface.Owner == owner) run.Add(surface);
+                // LayerSurfaces assigns a unique Order inside each owner.
+                run.Sort(static (a, b) => a.Order.CompareTo(b.Order));
                 // Only unmasked, opaque neighbours can safely remove a shared bank. Hidden
                 // portions of another layer must never erase the outline of this layer.
-                var neighbours = SeamCompatible(owner)
-                    ? water.Where(surface => surface.Owner.Id != owner.Id && SeamCompatible(surface.Owner))
-                        .Select(surface => surface.River!).ToArray()
-                    : [];
+                var neighbours = scratch.Neighbours;
+                neighbours.Clear();
+                if (SeamCompatible(owner))
+                    foreach (var surface in atLevel)
+                        if (surface.River is { } river && surface.Owner.Id != owner.Id && SeamCompatible(surface.Owner))
+                            neighbours.Add(river);
                 var waterStarted = Stopwatch.GetTimestamp();
                 DrawLayer(canvas, document, owner, LowerLayer(document, owner), view, options,
-                    contentOverride: target => DrawSurfaceRun(target, run, view, options,
-                        below.Count > 0 ? (coverage, paint) => DrawLandCoverage(coverage, below, view, options, paint) : null,
-                        neighbours));
+                    contentOverride: scratch.DrawRun);
                 if (options.Stats is { } waterStats) waterStats.WaterMilliseconds += Stopwatch.GetElapsedTime(waterStarted).TotalMilliseconds;
             }
         }
 
         static bool SeamCompatible(ObjectLayer layer) => layer.Opacity == 1 && layer.Blend == "Normal"
             && layer.Mask is not { Enabled: true } && !layer.Effects.ClippingEnabled;
+    }
+
+    [ThreadStatic] private static TerrainPassScratch? _terrainPassScratch;
+    private sealed class TerrainPassScratch : IDisposable
+    {
+        public readonly List<int> Levels = [];
+        public readonly List<Surface> AtLevel = [], Run = [];
+        public readonly List<LandLayer> Below = [];
+        public readonly List<ObjectLayer> Owners = [];
+        public readonly HashSet<ObjectLayer> SeenOwners = [];
+        public readonly List<River> Neighbours = [];
+        public readonly Action<SKCanvas> DrawRun;
+        private readonly Action<SKCanvas, SKPaint> _coverage;
+        private WorldBounds _view;
+        private RenderOptions? _options;
+        private TerrainPassScratch()
+        {
+            _coverage = (canvas, paint) => DrawLandCoverage(canvas, Below, _view, _options!, paint);
+            DrawRun = canvas => DrawSurfaceRun(canvas, Run, _view, _options!, Below.Count > 0 ? _coverage : null, Neighbours);
+        }
+        public static TerrainPassScratch Rent(WorldBounds view, RenderOptions options)
+        {
+            var result = _terrainPassScratch ?? new();
+            _terrainPassScratch = null;
+            result._view = view; result._options = options;
+            return result;
+        }
+        public void Dispose()
+        {
+            Levels.Clear(); AtLevel.Clear(); Run.Clear(); Below.Clear(); Owners.Clear(); SeenOwners.Clear(); Neighbours.Clear();
+            _options = null;
+            if (AtLevel.Capacity <= 16384 && Below.Capacity <= 4096 && Owners.Capacity <= 4096) _terrainPassScratch = this;
+        }
     }
 
     private static MapLayer? LowerLayer(MapDocument document, MapLayer layer)
@@ -3731,11 +3783,16 @@ public static partial class SceneRenderer
             if (_plans.Count >= 512) _plans.Clear();
             return _plans[(x, y, zoom)] = plan;
         }
-        public ulong Version(int x, int y, int zoom, WorldBounds bounds, long missingRevision = 0) => _versions.GetOrAdd((x, y, zoom), key =>
+        public ulong Version(int x, int y, int zoom, WorldBounds bounds, long missingRevision = 0)
+        {
+            if (!_versions.TryGetValue((x, y, zoom), out var version)) version = AddVersion(x, y, zoom, bounds);
+            return version ^ unchecked((ulong)missingRevision * 0x9e3779b97f4a7c15UL);
+        }
+        private ulong AddVersion(int x, int y, int zoom, WorldBounds bounds) => _versions.GetOrAdd((x, y, zoom), key =>
         {
             if (_parent is not null && !_changed.Any(b => b.Intersects(bounds))) return _parent.Version(x, y, zoom, bounds);
             return unchecked((ulong)System.Threading.Interlocked.Increment(ref _detailRevision));
-        }) ^ unchecked((ulong)missingRevision * 0x9e3779b97f4a7c15UL);
+        });
         private static bool Neutral(SceneObject o) => o.Kind == SceneObjectKind.Stamp
             && o.Stamp is { Blur: 0, ShadowOpacity: 0, ClipMaskEnabled: false, Blend: "Normal" };
     }
@@ -6376,8 +6433,9 @@ public static partial class SceneRenderer
         var cacheHitsBefore = cache.Hits;
         var cacheMissesBefore = cache.Misses;
         var cacheInvalidationsBefore = cache.Invalidations;
-        var exact = new Dictionary<ObjectId, SceneObject>();
-        var exactVariants = new List<OverviewVariant>();
+        using var scratch = OverviewFrameScratch.Rent();
+        var exact = scratch.Exact;
+        var exactVariants = scratch.Variants;
         var exactCandidates = 0;
         var overviewObjects = 0;
         var overviewChunks = 0;
@@ -6388,19 +6446,28 @@ public static partial class SceneRenderer
         // can overlap. The cache retains the variant together with its old raster, including
         // its bounds and exact objects, even when another render context advances the plan.
         cache.BeginOverviewPass();
-        var visible = new List<(int X, int Y, OverviewChunk Chunk)>();
+        var visible = scratch.Visible;
         for (var y = minY; y <= maxY; y++)
             for (var x = minX; x <= maxX; x++)
                 if (plan.TryGetChunk(x, y, out var chunk)) visible.Add((x, y, chunk));
-        var drawn = new Dictionary<(int, int), (OverviewVariant Variant, ObjectOverviewCacheResult Cached)>();
+        var drawn = scratch.Drawn;
         // Pin all resident images before any build can evict a deferred chunk's fallback.
         foreach (var item in visible)
             cache.TryGetPreviousOverview(layer.Id, item.X, item.Y, zoomBucket, out _, out _);
         var centreX = (view.Left + view.Right) / (2 * OverviewChunkSize) - .5;
         var centreY = (view.Top + view.Bottom) / (2 * OverviewChunkSize) - .5;
         var deferred = false;
-        foreach (var item in visible.OrderBy(item =>
-            Math.Pow(item.X - centreX, 2) + Math.Pow(item.Y - centreY, 2)))
+        var work = scratch.Work;
+        foreach (var item in visible)
+            work.Add((item.X, item.Y, item.Chunk, Math.Pow(item.X - centreX, 2) + Math.Pow(item.Y - centreY, 2)));
+        work.Sort(static (a, b) =>
+        {
+            var distance = a.Distance.CompareTo(b.Distance);
+            if (distance != 0) return distance;
+            var row = a.Y.CompareTo(b.Y);
+            return row != 0 ? row : a.X.CompareTo(b.X);
+        });
+        foreach (var item in work)
         {
             // Checking a new palette can itself be expensive when every chunk uses a
             // large part of the library. Include that work in the same refinement budget.
@@ -6513,7 +6580,7 @@ public static partial class SceneRenderer
         // Far zoom keeps spatial density cheap, but anything the user is manipulating remains an
         // exact object over the aggregate representation. The immutable base picture stays hot.
         var exactStarted = Stopwatch.GetTimestamp();
-        var extras = new List<SceneObject>();
+        var extras = scratch.Extras;
         if (options.SelectedObjectId is { } selected
             && DocumentRevisionIndex.For(document).TryFind(selected, out var primary)
             && primary.LayerId == layer.Id)
@@ -6567,8 +6634,7 @@ public static partial class SceneRenderer
             var viewCentreX = (view.Left + view.Right) / 2;
             var viewCentreY = (view.Top + view.Bottom) / 2;
             // The nearest K by a bounded max-heap: O(n log K) and no sort of every candidate on each moving frame.
-            var nearest = new PriorityQueue<SceneObject, (double Distance, Guid Id)>(OverviewExactDirectBudget + 1,
-                Comparer<(double Distance, Guid Id)>.Create(static (a, b) => b.CompareTo(a)));
+            var nearest = scratch.Nearest;
             foreach (var item in exact.Values)
             {
                 var dx = item.X + item.Width / 2 - viewCentreX;
@@ -6576,7 +6642,7 @@ public static partial class SceneRenderer
                 nearest.Enqueue(item, (dx * dx + dy * dy, item.Id.Value));
                 if (nearest.Count > OverviewExactDirectBudget) nearest.Dequeue();
             }
-            exact = new Dictionary<ObjectId, SceneObject>(OverviewExactDirectBudget + extras.Count);
+            exact.Clear();
             while (nearest.TryDequeue(out var near, out _)) exact[near.Id] = near;
             // What the user holds or edits is never cut by the budget.
             foreach (var extra in extras) exact[extra.Id] = extra;
@@ -6625,6 +6691,33 @@ public static partial class SceneRenderer
             stats.ObjectCacheHits += cache.Hits - cacheHitsBefore;
             stats.ObjectCacheMisses += cache.Misses - cacheMissesBefore;
             stats.ObjectCacheInvalidations += cache.Invalidations - cacheInvalidationsBefore;
+        }
+    }
+
+    // Borrowed only for this pass. Nested renders rent a separate instance; Clear releases
+    // every document/image reference before the thread keeps the empty buffers for reuse.
+    [ThreadStatic] private static OverviewFrameScratch? _overviewFrameScratch;
+    private sealed class OverviewFrameScratch : IDisposable
+    {
+        public readonly Dictionary<ObjectId, SceneObject> Exact = [];
+        public readonly List<OverviewVariant> Variants = [];
+        public readonly List<(int X, int Y, OverviewChunk Chunk)> Visible = [];
+        public readonly List<(int X, int Y, OverviewChunk Chunk, double Distance)> Work = [];
+        public readonly Dictionary<(int, int), (OverviewVariant Variant, ObjectOverviewCacheResult Cached)> Drawn = [];
+        public readonly List<SceneObject> Extras = [];
+        public readonly PriorityQueue<SceneObject, (double Distance, Guid Id)> Nearest = new(
+            OverviewExactDirectBudget + 1, Comparer<(double Distance, Guid Id)>.Create(static (a, b) => b.CompareTo(a)));
+        public static OverviewFrameScratch Rent()
+        {
+            var result = _overviewFrameScratch ?? new();
+            _overviewFrameScratch = null;
+            return result;
+        }
+        public void Dispose()
+        {
+            Exact.Clear(); Variants.Clear(); Visible.Clear(); Work.Clear(); Drawn.Clear(); Extras.Clear(); Nearest.Clear();
+            // A huge export must not make a frame thread retain unbounded backing arrays.
+            if (Exact.EnsureCapacity(0) <= 65536 && Visible.Capacity <= 4096) _overviewFrameScratch = this;
         }
     }
 

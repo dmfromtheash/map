@@ -16,7 +16,7 @@ public sealed class CatalogStampImageSource(
     DerivedCacheMaintenancePolicy? derivedMaintenance = null) : IStampImageSource, IDisposable, IAsyncDisposable
 {
     private readonly StampDerivedAssetStore? _derived = derivedRoot is null ? null : new(catalog, derivedRoot,
-        retryClock: retryClock, startWatcher: startWatcher, maintenance: derivedMaintenance);
+        retryClock: retryClock, startWatcher: startWatcher, maintenance: derivedMaintenance, nativeMipImages: true);
 
     /// <summary>True when this source keeps the machine cache of preparations (and runs its janitor).</summary>
     public bool HasDerivedCache => _derived is not null;
@@ -60,6 +60,12 @@ public sealed class CatalogStampImageSource(
         }
     }
     private readonly HashSet<StampDerivedAssetStore.PixelKey> _wantedMips = [];
+    private readonly HashSet<(string, int)> _prepareSeen = [];
+    private readonly HashSet<StampDerivedAssetStore.PixelKey> _prepareSeenPixels = [];
+    private bool _preparing;
+    private readonly List<StampDerivedAssetStore.PixelKey> _readyPixels = [];
+    private readonly Dictionary<StampDerivedAssetStore.PixelKey, string> _pixelNames = [];
+    private readonly Queue<StampDerivedAssetStore.PixelKey> _pixelNameOrder = new();
     private readonly HashSet<StampDerivedAssetStore.PixelKey> _latePixels = [];
     private readonly Dictionary<string, long> _pixelRetryAt = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, int> _pixelFailures = new(StringComparer.OrdinalIgnoreCase);
@@ -664,8 +670,10 @@ public sealed class CatalogStampImageSource(
                 // max 55 ms). Bound the bytes per frame as well as the CPU time; one mip always passes.
                 var byteBudget = FrameMoving ? GestureAdoptedMipBytesPerFrame : AdoptedMipBytesPerFrame;
                 long adoptedBytes = 0;
-                foreach (var key in _derived.ReadyPixels)
+                _derived.CopyReadyPixels(_readyPixels);
+                for (var i = 0; i < _readyPixels.Count; i++)
                 {
+                    var key = _readyPixels[i];
                     if (_derived.TryTakePixels(key, out var mip))
                     {
                         AdoptDerivedMip(key, mip);
@@ -675,10 +683,11 @@ public sealed class CatalogStampImageSource(
                         || byteBudget > 0 && adoptedBytes >= byteBudget)
                     {
                         if (adoptedBytes >= byteBudget) _byteLimitedFrames++;
-                        if (_derived.ReadyPixels.Any()) _derivedReady?.Invoke();
+                        if (i + 1 < _readyPixels.Count) _derivedReady?.Invoke();
                         break;
                     }
                 }
+                _readyPixels.Clear();
                 if (MeasureTimings) _adoptTicks += System.Diagnostics.Stopwatch.GetTimestamp() - started;
             }
             return new FrameScope(this);
@@ -1033,42 +1042,62 @@ public sealed class CatalogStampImageSource(
         if (_derived is not null) _derived.SourceChanged = ready;
         AdoptDecoded();
         var resident = true;
-        var seen = new HashSet<(string, int)>();
-        var seenPixels = new HashSet<StampDerivedAssetStore.PixelKey>();
-        AssetRecord? record = null;
-        foreach (var (sha256, width, height) in stamps)
+        // The public enumerable may reenter this source on the same thread while the gate
+        // is held. Only the outer call borrows the reusable sets.
+        var nested = _preparing;
+        var seen = nested ? new HashSet<(string, int)>() : _prepareSeen;
+        var seenPixels = nested ? new HashSet<StampDerivedAssetStore.PixelKey>() : _prepareSeenPixels;
+        _preparing = true;
+        try
         {
-            if (record?.Sha256 != sha256) record = catalog.Find(sha256);
-            if (_derived is not null && record is not null)
+            AssetRecord? record = null;
+            foreach (var (sha256, width, height) in stamps)
             {
-                var pixel = PixelKey(record, width, height);
-                if (!seenPixels.Add(pixel)) continue;
-                _wantedMips.Add(pixel);
-                if (ReadyPixels(pixel) is null && !_decodeFailed.Contains(PixelName(pixel)))
-                    resident &= QueuePixels(pixel, ready);
-                continue;
+                if (record?.Sha256 != sha256) record = catalog.Find(sha256);
+                if (_derived is not null && record is not null)
+                {
+                    var pixel = PixelKey(record, width, height);
+                    if (!seenPixels.Add(pixel)) continue;
+                    _wantedMips.Add(pixel);
+                    if (ReadyPixels(pixel) is null && !_decodeFailed.Contains(PixelName(pixel)))
+                        resident &= QueuePixels(pixel, ready);
+                    continue;
+                }
+                if (record is null || AssetCatalog.DetailLadderDepth(record.Width, record.Height) is not (> 0 and var depth)) continue;
+                var ratio = Math.Min(record.Width / Math.Max(1, width), record.Height / Math.Max(1, height));
+                var level = Math.Min(depth, (int)Math.Floor(Math.Log2(Math.Max(1, ratio))));
+                if (!seen.Add((sha256, level))) continue;
+                var key = level == 0 ? sha256 : sha256 + "@" + level;
+                ValidateRetained(sha256);
+                if (CachedSample(key, width, height) is not null) continue;
+                if (_cache.Contains(key) || _decodeFailed.Contains(key) || _missingSteps.Contains(key)) continue;
+                if (_decoding.Contains(key)) { resident = false; continue; }
+                if (level == 0)
+                {
+                    // The original is hashed against its content id, as the synchronous path does.
+                    if (HasEmbeddedContent(sha256)
+                        || ResolveCatalog(record) is not { } original) continue;
+                    resident = false;
+                    StartDecode(key, original, sha256, record.MediaType, record.Extension, ready);
+                }
+                else if (catalog.TryDetailLevelPath(record, level, out var step)) { resident = false; StartDecode(key, step, null, null, null, ready); }
+                else _missingSteps.Add(key);
             }
-            if (record is null || AssetCatalog.DetailLadderDepth(record.Width, record.Height) is not (> 0 and var depth)) continue;
-            var ratio = Math.Min(record.Width / Math.Max(1, width), record.Height / Math.Max(1, height));
-            var level = Math.Min(depth, (int)Math.Floor(Math.Log2(Math.Max(1, ratio))));
-            if (!seen.Add((sha256, level))) continue;
-            var key = level == 0 ? sha256 : sha256 + "@" + level;
-            ValidateRetained(sha256);
-            if (CachedSample(key, width, height) is not null) continue;
-            if (_cache.Contains(key) || _decodeFailed.Contains(key) || _missingSteps.Contains(key)) continue;
-            if (_decoding.Contains(key)) { resident = false; continue; }
-            if (level == 0)
-            {
-                // The original is hashed against its content id, as the synchronous path does.
-                if (document().Assets.Any(asset => asset.Sha256 == sha256 && asset.EmbeddedContent is not null)
-                    || ResolveCatalog(record) is not { } original) continue;
-                resident = false;
-                StartDecode(key, original, sha256, record.MediaType, record.Extension, ready);
-            }
-            else if (catalog.TryDetailLevelPath(record, level, out var step)) { resident = false; StartDecode(key, step, null, null, null, ready); }
-            else _missingSteps.Add(key);
+            return resident;
         }
-        return resident;
+        finally
+        {
+            seen.Clear(); seenPixels.Clear();
+            if (!nested) _preparing = false;
+        }
+    }
+
+    private bool HasEmbeddedContent(string sha)
+    {
+        var assets = document().Assets;
+        for (var i = 0; i < assets.Count; i++)
+            if (assets[i].Sha256 == sha && assets[i].EmbeddedContent is not null) return true;
+        return false;
     }
 
     /// <summary>The sampled-image shelf: a frame asks for at most this many bytes of tile images at once.</summary>
@@ -1249,7 +1278,15 @@ public sealed class CatalogStampImageSource(
     }
 
     private static string SourceName(StampDerivedAssetStore.PixelKey key) => key.Step == 0 ? key.Sha : key.Sha + "@" + key.Step;
-    private static string PixelName(StampDerivedAssetStore.PixelKey key) => SourceName(key) + "#" + key.Level;
+    private string PixelName(StampDerivedAssetStore.PixelKey key)
+    {
+        if (_pixelNames.TryGetValue(key, out var name)) return name;
+        // Names are immutable. Retire one old name at a time rather than clearing all
+        // names at the limit and causing an allocation burst in a later frame.
+        if (_pixelNames.Count >= 65536) _pixelNames.Remove(_pixelNameOrder.Dequeue());
+        _pixelNameOrder.Enqueue(key);
+        return _pixelNames[key] = SourceName(key) + "#" + key.Level;
+    }
     private SKImage? ReadyPixels(StampDerivedAssetStore.PixelKey key) => ReadyPixels(PixelName(key));
 
     private SKImage? ReadyPixels(string name)
@@ -1484,6 +1521,7 @@ public sealed class CatalogStampImageSource(
     {
         if (_leases > 0 || _frameThread != 0) return;
         while (_decoded.TryDequeue(out var item)) item.Image?.Dispose();
+        _pixelNames.Clear(); _pixelNameOrder.Clear();
         _cache.Dispose();
         _samples.Dispose();
     }
