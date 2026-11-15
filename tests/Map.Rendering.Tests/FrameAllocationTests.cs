@@ -6,6 +6,7 @@ using SkiaSharp;
 
 namespace Map.Rendering.Tests;
 
+[Collection(RealTimeSettleCollection.Name)]
 public sealed class FrameAllocationTests
 {
     [Theory]
