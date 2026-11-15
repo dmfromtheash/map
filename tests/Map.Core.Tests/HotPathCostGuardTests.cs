@@ -37,8 +37,8 @@ public sealed class HotPathCostGuardTests : IClassFixture<HotPathCostGuardTests.
     [InlineData("derived-index-delta")]
     public void Bounded_hot_path(string key) => Compare(key, 200_000, true);
 
-    [Fact(Skip = "O(N): " + LabelsLinear)]
-    public void Label_clearance_bounds() => Compare("label-bounds", 200_000, true);
+    [Fact(Skip = "defect: " + LabelsLinear + "; 10k/100k time ratio 9.401 > 3")]
+    public void Label_clearance_bounds() => Compare("label-bounds", 100_000, true);
 
     [Fact(Skip = "O(N): " + RulesLinear)]
     public void Placement_rules_with_many_features() => Compare("placement-features", 200_000, true);
