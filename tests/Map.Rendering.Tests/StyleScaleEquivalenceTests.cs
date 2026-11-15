@@ -108,7 +108,7 @@ public sealed class StyleScaleEquivalenceTests
             var document = Document([.. items]) with { Style = MapStyle.For(preset) };
             DocumentRevisionIndex.For(document);
             var view = new WorldBounds(500, 500, 1012, 884);
-            using (Draw(document, view, stamps)) { }
+            using var before = Draw(document, view, stamps);
             var layerId = document.Layers[1].Id;
             var inView = ObjectSpatialIndex.For((ObjectLayer)document.Layers[1]).Query(view).Where(o => o.Kind == SceneObjectKind.Stamp).ToArray();
             // A move in the view, the largest mountain grows, a name becomes part of the map, new mountains, an undo.
@@ -129,6 +129,7 @@ public sealed class StyleScaleEquivalenceTests
                     "#FFFFFFFF", "#00000000", 0, true, false) { Stamp = new StampStyle(shas[1]) }],
             });
             using var edited = Draw(document, view, stamps);
+            Assert.NotEqual(Hash(before), Hash(edited)); // two equally empty frames must never satisfy the cold/warm check
             var fresh = Document([.. ((ObjectLayer)document.Layers[1]).Objects]) with { Style = MapStyle.For(preset) };
             using var expected = Draw(fresh, view, stamps);
             Assert.Equal(Hash(expected), Hash(edited));
