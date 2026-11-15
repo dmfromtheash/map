@@ -153,7 +153,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
     /// </param>
     /// <param name="maintenance">When and how the janitor runs; null is <see cref="DerivedCacheMaintenancePolicy.Default"/>.</param>
     public StampDerivedAssetStore(AssetCatalog catalog, string root, long? diskBudgetBytes = null,
-        int metadataCapacity = 8192, int pixelCapacity = 4096, long preparedSourceByteCapacity = 64L * 1024 * 1024,
+        int metadataCapacity = 65536, int pixelCapacity = 4096, long preparedSourceByteCapacity = 64L * 1024 * 1024,
         TimeProvider? retryClock = null, Action<FileSystemWatcher>? startWatcher = null,
         DerivedCacheMaintenancePolicy? maintenance = null)
     {
@@ -171,7 +171,8 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
         _policy = maintenance ?? DerivedCacheMaintenancePolicy.Default;
         _janitor = CreateJanitor(diskBudgetBytes);
         _diskBudget = diskBudgetBytes ?? _policy.Budget.TotalBytes;
-        _workers = Task.WhenAll(Task.Run(Work), Task.Run(BuildWork), StartMaintenance(), Task.Run(TrustWork));
+        LoadKnownColors();
+        _workers =Task.WhenAll(Task.Run(Work), Task.Run(BuildWork), StartMaintenance(), Task.Run(TrustWork));
     }
 
     public Task<Header?> Request(string sha)
@@ -268,6 +269,8 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
                     { _requests.TryRemove(oldest.Sha, out _); _previews.TryRemove(oldest.Sha, out _); }
             }
         }
+        if (header is not null && !_disposed) RememberColor(sha, header.Color);
+        else if (header is null) ForgetColor(sha); // a missing or changed source is not shown with its old colour next time
         completion.TrySetResult(header);
         OverviewColorChanged(header is not null && !recovered);
     }
@@ -632,6 +635,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
             SignalCapacity();
             if (quiet) return;
             _deliveredPreviews.TryRemove(sha, out _);
+            ForgetColor(sha);
             _invalidated[sha] = 0;
         }
         Interlocked.Increment(ref _overviewColorRevision);
@@ -945,6 +949,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
             _shutdown = Task.Run(async () =>
             {
                 await Task.WhenAll(retiring.Append(_workers)).ConfigureAwait(false);
+                SaveKnownColors();
                 ClearPreparedSource();
                 lock (_memoryGate) { _memoryPixels.Clear(); _memoryBytes = 0; }
                 _mipReader.Dispose(); _mipSlots.Dispose(); _largeLanes.Dispose(); _pressureLane.Dispose(); _stop.Dispose();

@@ -89,6 +89,49 @@ public sealed class StampDerivedAssetStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task Reopened_program_has_every_overview_colour_at_once_without_reading_headers()
+    {
+        // Live 2026-11-15 (PC, 2M objects, 16 208 assets, warm cache): every open re-read each asset's header on one
+        // worker before the whole-map layer could start - two minutes of 130-200 ms frames. Colours survive now.
+        await using var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));
+        var records = Enumerable.Range(1, 4).Select(n => ImportOwner(catalog, n)).ToArray();
+        var root = Path.Combine(_root, "derived");
+        var expected = new Dictionary<string, SKColor>();
+        await using (var store = new StampDerivedAssetStore(catalog, root))
+            foreach (var record in records)
+            {
+                var header = await store.Request(record.Sha256).WaitAsync(TimeSpan.FromSeconds(30));
+                Assert.NotNull(header);
+                expected[record.Sha256] = new SKColor(header.Color);
+            }
+
+        var document = new MapDocument(DocumentId.New(), "Colours", DateTimeOffset.UnixEpoch,
+            new CanvasDefinition(1024, 1024, "px", "#FFFFFFFF"),
+            [new BaseColorLayer(LayerId.New(), "Base", true, false, 1, "#FFFFFFFF")], []);
+        await using var reopened = new CatalogStampImageSource(catalog, () => document, () => null, derivedRoot: root);
+        var ready = 0;
+        Assert.True(reopened.PrepareOverview(records.Select(r => r.Sha256), () => Interlocked.Increment(ref ready)),
+            "the overview waited for headers although every colour was prepared in the previous run");
+        foreach (var record in records) Assert.Equal(expected[record.Sha256], reopened.TryGetOverviewColor(record.Sha256));
+        Assert.Equal((0, 0, 0), reopened.TryReadPerformanceQueues(out var queues) ? (queues.Metadata, queues.Builds, queues.Pixels) : (-1, -1, -1));
+    }
+
+    [Fact]
+    public async Task A_missing_source_forgets_its_remembered_overview_colour()
+    {
+        await using var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));
+        var record = ImportOwner(catalog, 1);
+        var root = Path.Combine(_root, "derived");
+        await using (var store = new StampDerivedAssetStore(catalog, root)) Assert.NotNull(await store.Request(record.Sha256));
+        await using (var known = new StampDerivedAssetStore(catalog, root)) Assert.NotNull(known.KnownColor(record.Sha256));
+        // The imported test copy only; the owner's fixture remains untouched.
+        File.WriteAllBytes(catalog.SourcePath(record)!, [0, 1, 2, 3]);
+        await using (var store = new StampDerivedAssetStore(catalog, root)) Assert.Null(await store.Request(record.Sha256));
+        await using var reopened = new StampDerivedAssetStore(catalog, root);
+        Assert.Null(reopened.KnownColor(record.Sha256));
+    }
+
+    [Fact]
     public async Task Changed_original_does_not_reuse_the_persisted_color()
     {
         await using var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));
