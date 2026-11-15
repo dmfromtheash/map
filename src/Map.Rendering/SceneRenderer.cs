@@ -1121,6 +1121,38 @@ public static partial class SceneRenderer
 
     private static readonly ConditionalWeakTable<ObjectLayer, LayerImageSupport> KeptLayerSupport = [];
 
+    /// <summary>How far the "every asset has a known size" check got, per image source and asset list.</summary>
+    private sealed class AssetSizeProgress { public long Revision = long.MinValue; public int Next; public long Calls; }
+    private static readonly ConditionalWeakTable<IStampImageSource, ConditionalWeakTable<IReadOnlyList<MapAssetReference>, AssetSizeProgress>> AssetSizes = [];
+
+    /// <summary>
+    /// Whether every asset of the document has a known image size. It was asked for all 16 208 assets on every
+    /// frame past the dense-tile scale, each lookup under the image source's gate: 6.2 of 16.6 s of the slow wheel
+    /// frames at 10 000 objects (PC trace, 2026-11-15). Sizes only become known, so the check resumes at the first
+    /// unknown asset; a changed source (revisions) starts it again.
+    /// </summary>
+    internal static bool AllAssetSizesKnown(MapDocument document, IStampImageSource? stamps)
+    {
+        if (stamps is null) return document.Assets.Count == 0;
+        var progress = AssetSizes.GetValue(stamps, static _ => []).GetValue(document.Assets, static _ => new());
+        lock (progress)
+        {
+            var revision = stamps.SourceRevision * 31 + stamps.MissingRevision;
+            if (progress.Revision != revision) { progress.Revision = revision; progress.Next = 0; }
+            while (progress.Next < document.Assets.Count)
+            {
+                progress.Calls++;
+                if (stamps.TryGetImageSize(document.Assets[progress.Next].Sha256) is null) return false;
+                progress.Next++;
+            }
+            return true;
+        }
+    }
+
+    /// <summary>Tests: size lookups the check made for this source and list.</summary>
+    internal static long AssetSizeChecks(IStampImageSource stamps, IReadOnlyList<MapAssetReference> assets) =>
+        AssetSizes.TryGetValue(stamps, out var lists) && lists.TryGetValue(assets, out var progress) ? progress.Calls : 0;
+
     /// <summary>Tests: whether a layer may keep its image, and how many full object counts that took so far.</summary>
     internal static bool KeptLayerSupported(ObjectLayer layer) => KeptLayerSupport.GetValue(layer, static l => new(l)).Supported;
     internal static long KeptLayerSupportFullCounts => LayerImageSupport.FullCounts;
@@ -3470,7 +3502,7 @@ public static partial class SceneRenderer
             && options.ObjectOverrides is not { Count: > 0 } && layer.Objects.Count >= DenseTileMinimumObjects
             && ObjectSpatialIndex.For(layer).MayContainAtLeast(view, DenseTileMinimumVisible)
             && RevisionsFor(layer).CanCache
-            && document.Assets.All(asset => options.Stamps?.TryGetImageSize(asset.Sha256) is not null))
+            && AllAssetSizesKnown(document, options.Stamps))
         {
             DrawDetailedStampTiles(canvas, document, layer, view, options);
             return;
