@@ -24,7 +24,6 @@ public sealed class RenderPathCostGuardTests : IClassFixture<RenderPathCostGuard
     public RenderPathCostGuardTests(Maps maps) => _maps = maps;
     private const string RiverLinear = "RiverRenderer.cs:39-45, live override Resolve copies/scans every river for one local edit";
     private const string RoadLinear = "RoadRenderer.cs:39-45, live override Resolve copies/scans every road for one local edit";
-    private const string DenseLinear = "SceneRenderer.cs:6540-6552, overview delta rebuilds every object in the affected 8192-unit chunk, including off-view objects";
     // The internal plan is test-visible, but the shared plan registry is private. Use the same
     // registry as Render so the constructor really takes its incremental branch. Reflection is
     // done once, outside measurements; no product API is added for a benchmark.
@@ -38,7 +37,7 @@ public sealed class RenderPathCostGuardTests : IClassFixture<RenderPathCostGuard
     [InlineData("visible-raster-frame")]
     public void Bounded_render_path(string key) => Compare(key, 200_000, true);
 
-    [Fact(Skip = "defect: " + DenseLinear + "; 10k/100k allocation ratio 10.338 > 3")]
+    [Fact]
     public void Dense_overview_delta() => Compare("overview-delta-dense", 100_000, true);
 
     [Fact(Skip = "defect: " + RiverLinear + "; 10k/100k allocation ratio 9.998 > 3")]
