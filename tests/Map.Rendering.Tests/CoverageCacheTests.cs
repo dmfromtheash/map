@@ -155,6 +155,7 @@ public sealed class CoverageCacheTests
         TerrainFieldCache.Bypass = true;
         try { direct = CoverageCacheBenchmark.Render(document, view, scale, tiles); }
         finally { TerrainFieldCache.Bypass = false; }
+        Assert.True(direct.Distinct().Take(9).Count() == 9, "the reference terrain frame is empty or flat");
         Assert.Equal(direct, CoverageCacheBenchmark.Render(document, view, scale, tiles));
         Assert.Equal(direct, CoverageCacheBenchmark.Render(document, view, scale, tiles));
     }
