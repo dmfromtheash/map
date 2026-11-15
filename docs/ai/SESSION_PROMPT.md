@@ -27,11 +27,12 @@ USER и Mac велено довести текущий шаг и останов�
      hot-cache open1/2/3 если успел, его `sol/*` ветки и HEAD, неудалённые папки с размерами). Есть ли
      `D:\MapChecks\astra\sol-session-stop`. Папки, которые Sol не смог удалить («blocked by policy»), удалить самому
      после проверки, что это его временное (не `D:\MapLibrary\*\derived` и не тёплые кэши, которые он назвал).
-   - **Mac:** `~/MapWork/agents/framegate` — `SOL_REPORT.md`, `framegate.bundle` (база pc/claude/hot-cache = fc324b0).
-     Забрать: `scp ... framegate.bundle %TEMP%\map-mac-in\`, `git fetch <bundle> claude/frame-gate:claude/frame-gate`,
-     прочитать diff (только src/tests, без CHANGELOG/journal), прогнать тесты Presentation+Rendering по фильтру, влить в
-     `claude/hot-cache` (merge --no-ff, правила DEC-116). Затем `find <dir> -mindepth 1 -delete && rmdir <dir>`
-     для папок `allocfree`, `framegate` (после того как бандлы на ПК).
+   - **Mac `framegate` — уже забран:** ветка `claude/frame-gate` в origin (4 коммита на fc324b0; Mac CPU: худший кадр
+     600,5 → 2,5 мс, обращений к диску из кадра 0; Windows/GPU не проверены). **До влития в `claude/hot-cache`:** она
+     удаляет сторож `tests/Map.Rendering.Tests/AssetSizeCheckTests.cs` и меняет `DetailLadderTests` — выяснить почему
+     (DEC-116: ослабление/удаление теста только с `test-change:` и причиной; сторож вернуть, если замены нет), прочитать
+     diff (`CatalogStampImageSource.Frame.cs` новый, 331 строка), прогнать Presentation+Rendering, затем merge --no-ff.
+     Папки агентов Mac убраны.
 
 ## 1. Что сделано 15.11 (FACT) — коротко
 - Ветка `claude/hot-cache` (origin 20624454, 30 коммитов на первом родителе над main) — всё в ней, main не трогали.
