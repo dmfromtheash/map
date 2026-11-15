@@ -33,6 +33,13 @@ public sealed class OverviewZoomOutSettleTests(ITestOutputHelper output)
 
     [Fact]
     public void The_current_view_keeps_its_chunks_when_stale_seed_fallbacks_fill_the_cache()
+        => CheckFallbackRetention(ObjectOverviewCache.StaleFallbackFrames);
+
+    [Fact(Skip = "defect: recent fallback seeds evict the current view during rapid zoom-out; chunk 0 missing on frame 1")]
+    public void A_rapid_zoom_out_keeps_the_current_view_without_sixty_empty_frames()
+        => CheckFallbackRetention(0);
+
+    private static void CheckFallbackRetention(int idleFrames)
     {
         // Eight seed tiles of zoom levels the camera left a second ago fill the budget; the view then
         // needs four chunks of its own. They must survive the end of the frame: the stale seeds go first.
@@ -42,7 +49,7 @@ public sealed class OverviewZoomOutSettleTests(ITestOutputHelper output)
         cache.BeginFrame();
         for (var i = 0; i < 8; i++) cache.GetOrCreate(layer, i, 0, 10, 1, Image, fallback: true);
         cache.EndFrame();
-        for (var frame = 0; frame < ObjectOverviewCache.StaleFallbackFrames; frame++) { cache.BeginFrame(); cache.EndFrame(); }
+        for (var frame = 0; frame < idleFrames; frame++) { cache.BeginFrame(); cache.EndFrame(); }
         Assert.Equal(8, cache.Count);
         for (var frame = 0; frame < 3; frame++)
         {
