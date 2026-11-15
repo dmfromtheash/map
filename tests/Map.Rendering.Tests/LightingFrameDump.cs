@@ -11,12 +11,12 @@ namespace Map.Rendering.Tests;
 /// </summary>
 public sealed class LightingFrameDump
 {
-    [Fact]
+    [OptInProbe("MAP_LIGHT_FRAMES,MAP_LIGHT_ASSETS", "LightingRenderingTests.Night_is_darker_and_a_light_lifts_the_ground_around_it")]
     public void Dump_every_light_variation_when_asked()
     {
         var output = Environment.GetEnvironmentVariable("MAP_LIGHT_FRAMES");
         var assets = Environment.GetEnvironmentVariable("MAP_LIGHT_ASSETS");
-        if (string.IsNullOrEmpty(output) || string.IsNullOrEmpty(assets) || !Directory.Exists(assets)) return;
+        Assert.True(Directory.Exists(assets), "opt-in asset directory is missing: " + assets);
         Directory.CreateDirectory(output);
         var files = Directory.GetFiles(assets, "*.png").Take(3).ToArray();
         var images = files.ToDictionary(f => Path.GetFileNameWithoutExtension(f), f => SKImage.FromEncodedData(f)!);
