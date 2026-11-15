@@ -102,7 +102,10 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
     // under its 2 ms budget, about a hundred per frame; eight slots let a dense view take only eight per frame.
     private const int CompactMipSide = 256;
     private readonly SemaphoreSlim _mipSlots = new(64);
-    private readonly SemaphoreSlim _mipReader = new(1);
+    // Small mips were read strictly one at a time: a zoom into 10 000 stamps queued 1 851 requests and assets
+    // arrived seconds late (PC ladder, 2026-11-15). Same lanes as the large rasters; memory stays bounded by the slots.
+    internal static readonly int SmallReaderCount = Math.Clamp(Environment.ProcessorCount - 2, 1, 4);
+    private readonly SemaphoreSlim _mipReader = new(SmallReaderCount);
     // Large rasters: several lanes prepare them at once (a lane is free again as soon as its raster is ready,
     // not when the canvas takes it), and finished ones waiting for the canvas share one byte budget. One raster
     // always passes, so a master larger than the budget cannot wait for ever. Small results keep their slots.
