@@ -458,15 +458,15 @@ public sealed class ObjectOverviewCache : IDisposable
     internal const int StaleFallbackFrames = 60;
 
     /// <summary>
-    /// Lower ranks go first. 0 - an ordinary entry the last frame did not use; 1 - a stale fallback
-    /// (<see cref="StaleFallbackFrames"/>); 2 - an older overview level the last frame drew in place of a
+    /// Lower ranks go first. 0 - an ordinary entry the last frame did not use; 1 - a fallback
+    /// the current frame did not use; 2 - an older overview level the last frame drew in place of a
     /// chunk still on its way; 3 - the other ordinary entries, the view's own tiles and chunks among them;
-    /// 4 - a recent fallback (as before: it covers cold tiles while a view larger than the cache churns, and
+    /// 4 - a current fallback (it covers cold tiles while a view larger than the cache churns, and
     /// a refining view completes only with its seed kept). Without frames nothing is stale or a stand-in.
     /// </summary>
     private int EvictionRank(Key key, Entry entry)
     {
-        if (entry.Fallback) return _frame - entry.LastFrame >= StaleFallbackFrames ? 1 : 4;
+        if (entry.Fallback) return _frame == 0 || entry.LastFrame == _frame ? 4 : 1;
         if (_frame == 0 || entry.LastFrame != _frame) return 0;
         return _standIns.Contains(key) ? 2 : 3;
     }

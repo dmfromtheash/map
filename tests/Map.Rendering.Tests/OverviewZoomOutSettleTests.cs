@@ -36,7 +36,7 @@ public sealed class OverviewZoomOutSettleTests(ITestOutputHelper output)
     public void The_current_view_keeps_its_chunks_when_stale_seed_fallbacks_fill_the_cache()
         => CheckFallbackRetention(ObjectOverviewCache.StaleFallbackFrames);
 
-    [Fact(Skip = "defect: recent fallback seeds evict the current view during rapid zoom-out; chunk 0 missing on frame 1")]
+    [Fact]
     public void A_rapid_zoom_out_keeps_the_current_view_without_sixty_empty_frames()
         => CheckFallbackRetention(0);
 
