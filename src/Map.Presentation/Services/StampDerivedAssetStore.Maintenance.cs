@@ -9,8 +9,13 @@ namespace Map.Presentation.Services;
 public sealed record DerivedCacheMaintenancePolicy
 {
     public static DerivedCacheMaintenancePolicy Default { get; } = new();
-    /// <summary>The first cleanup waits until the opened map has drawn: startup reads compete with it otherwise.</summary>
+    /// <summary>Earliest startup cleanup; the view must also stay idle before automatic work starts.</summary>
     public TimeSpan StartupDelay { get; init; } = TimeSpan.FromSeconds(30);
+    public TimeSpan IdleDelay { get; init; } = TimeSpan.FromSeconds(5);
+    public TimeSpan MaximumDeferral { get; init; } = TimeSpan.FromMinutes(10);
+    public TimeSpan ActivityPollInterval { get; init; } = TimeSpan.FromMilliseconds(100);
+    /// <summary>Optional additional view-completion signal. Store metadata, builds and unconsumed pixels always count as busy.</summary>
+    public Func<bool>? IsViewIdle { get; init; }
     public TimeSpan Period { get; init; } = TimeSpan.FromMinutes(30);
     /// <summary>A cleanup also follows this many new preparations or this many bytes written since the last one.</summary>
     public int BuildsBetweenCleanups { get; init; } = 64;
@@ -36,7 +41,7 @@ public sealed record DerivedCachePurgeResult(int Entries, long Files, long Bytes
 
 public sealed partial class StampDerivedAssetStore
 {
-    private enum JobKind { Ledger, Clean, Purge }
+    private enum JobKind { Ledger, Clean, Purge, AutomaticClean }
     private sealed record Job(JobKind Kind, Func<DerivedCacheEntry, bool>? Select = null,
         TaskCompletionSource<DerivedCacheJanitorReport>? Done = null);
 
@@ -47,8 +52,9 @@ public sealed partial class StampDerivedAssetStore
     private DerivedMountLedger? _ledger;
     private volatile LedgerView? _ledgerView;
     private volatile DerivedCacheJanitorReport? _lastCleanup;
-    private ITimer? _maintenanceTimer, _retryTimer;
-    private int _cleanQueued;
+    private ITimer? _maintenanceTimer, _retryTimer, _idleTimer;
+    private int _cleanQueued, _automaticQueued, _urgentJobs;
+    private long? _automaticSince, _idleSince;
     private long _buildsSinceClean, _bytesSinceClean, _ceilingKnown, _cleanups;
 
     private sealed record LedgerView(Dictionary<string, DateTimeOffset> Seen, HashSet<string> Mounted, DateTimeOffset Now);
@@ -58,14 +64,20 @@ public sealed partial class StampDerivedAssetStore
     public long Cleanups => Interlocked.Read(ref _cleanups);
     public DerivedCacheMaintenancePolicy MaintenancePolicy => _policy;
 
-    private DerivedCacheJanitor CreateJanitor(long? explicitBudget) => new(_root, new DerivedCacheJanitorOptions
+    private DerivedCacheJanitor CreateJanitor(long? explicitBudget)
     {
-        CurrentVersion = Version,
-        MaximumBytes = explicitBudget ?? PreparedDataBudget.DefaultTotalBytes,
-        Budget = explicitBudget is null ? _policy.Budget : null,
-        Share = PreparedDataBudget.DerivedAssets,
-        Classify = ClassifyEntry,
-    }, _policy.AvailableFreeBytes);
+        if (_policy.IdleDelay < TimeSpan.Zero || _policy.MaximumDeferral < TimeSpan.Zero
+            || _policy.ActivityPollInterval <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(_policy));
+        return new(_root, new DerivedCacheJanitorOptions
+        {
+            CurrentVersion = Version,
+            MaximumBytes = explicitBudget ?? PreparedDataBudget.DefaultTotalBytes,
+            Budget = explicitBudget is null ? _policy.Budget : null,
+            Share = PreparedDataBudget.DerivedAssets,
+            Classify = ClassifyEntry,
+        }, _policy.AvailableFreeBytes);
+    }
 
     // One low-priority thread per store: the janitor never runs on the canvas, UI or preparation workers.
     private Task StartMaintenance()
@@ -84,7 +96,7 @@ public sealed partial class StampDerivedAssetStore
         thread.Start();
         _jobs.Writer.TryWrite(new Job(JobKind.Ledger));
         if (_policy.Automatic)
-            _maintenanceTimer = _policy.Clock.CreateTimer(_ => RequestCleanup(), null, _policy.StartupDelay,
+            _maintenanceTimer = _policy.Clock.CreateTimer(_ => RequestAutomaticCleanup(), null, _policy.StartupDelay,
                 _policy.Period > TimeSpan.Zero ? _policy.Period : Timeout.InfiniteTimeSpan);
         return finished.Task;
     }
@@ -95,6 +107,7 @@ public sealed partial class StampDerivedAssetStore
         _catalog.MountsChanged -= OnMountsChanged;
         _maintenanceTimer?.Dispose();
         _retryTimer?.Dispose();
+        _idleTimer?.Dispose();
         _jobs.Writer.TryComplete();
     }
 
@@ -109,7 +122,64 @@ public sealed partial class StampDerivedAssetStore
     public void RequestCleanup()
     {
         if (_disposed || Interlocked.Exchange(ref _cleanQueued, 1) != 0) return;
-        if (!_jobs.Writer.TryWrite(new Job(JobKind.Clean))) Volatile.Write(ref _cleanQueued, 0);
+        if (!QueueImmediate(new Job(JobKind.Clean))) Volatile.Write(ref _cleanQueued, 0);
+    }
+
+    private bool QueueImmediate(Job job)
+    {
+        Interlocked.Increment(ref _urgentJobs);
+        if (_jobs.Writer.TryWrite(job)) return true;
+        Interlocked.Decrement(ref _urgentJobs);
+        return false;
+    }
+
+    private void RequestAutomaticCleanup()
+    {
+        if (_disposed || Interlocked.Exchange(ref _automaticQueued, 1) != 0) return;
+        if (!_jobs.Writer.TryWrite(new Job(JobKind.AutomaticClean))) Volatile.Write(ref _automaticQueued, 0);
+    }
+
+    private bool ViewIdle()
+    {
+        var pending = PerformanceQueueLengths;
+        return pending.Metadata == 0 && pending.Builds == 0 && pending.Pixels == 0
+            && (_policy.IsViewIdle?.Invoke() ?? true);
+    }
+
+    private bool AutomaticReady()
+    {
+        var now = _policy.Clock.GetTimestamp();
+        _automaticSince ??= now;
+        if (ViewIdle()) _idleSince ??= now;
+        else _idleSince = null;
+        return _policy.Clock.GetElapsedTime(_automaticSince.Value, now) >= _policy.MaximumDeferral
+            || _idleSince is { } idle && _policy.Clock.GetElapsedTime(idle, now) >= _policy.IdleDelay;
+    }
+
+    private void DeferAutomaticCleanup()
+    {
+        var timer = _policy.Clock.CreateTimer(_ =>
+        {
+            if (!_disposed) _jobs.Writer.TryWrite(new Job(JobKind.AutomaticClean));
+        }, null, _policy.ActivityPollInterval, Timeout.InfiniteTimeSpan);
+        Interlocked.Exchange(ref _idleTimer, timer)?.Dispose();
+    }
+
+    // Called between filesystem operations, never during a paired-file mutation. An explicit command
+    // promotes the current pass so it cannot sit behind an automatic pass waiting for the view.
+    private Action AutomaticCheckpoint()
+    {
+        var promoted = false;
+        return () =>
+        {
+            while (!promoted)
+            {
+                promoted = Volatile.Read(ref _urgentJobs) > 0;
+                if (promoted || AutomaticReady()) return;
+                _stop.Token.ThrowIfCancellationRequested();
+                _stop.Token.WaitHandle.WaitOne(_policy.ActivityPollInterval);
+            }
+        };
     }
 
     /// <summary>Runs one full pass now (after queued work) and returns its report.</summary>
@@ -140,7 +210,7 @@ public sealed partial class StampDerivedAssetStore
     private Task<DerivedCacheJanitorReport> Enqueue(JobKind kind, Func<DerivedCacheEntry, bool>? select)
     {
         var done = new TaskCompletionSource<DerivedCacheJanitorReport>(TaskCreationOptions.RunContinuationsAsynchronously);
-        if (_disposed || !_jobs.Writer.TryWrite(new Job(kind, select, done))) done.TrySetCanceled();
+        if (_disposed || !QueueImmediate(new Job(kind, select, done))) done.TrySetCanceled();
         return done.Task;
     }
 
@@ -148,10 +218,16 @@ public sealed partial class StampDerivedAssetStore
     {
         var builds = Interlocked.Increment(ref _buildsSinceClean);
         var bytes = Interlocked.Add(ref _bytesSinceClean, Math.Max(0, written));
+        CheckCleanupPressure(DiskBytes, builds, bytes);
+    }
+
+    internal void CheckCleanupPressure(long cacheBytes, long builds, long bytes)
+    {
         // Over 90 % of the last known ceiling is the janitor's own trigger line: always clean then.
-        if (DiskBytes > Volatile.Read(ref _ceilingKnown) * 0.9
-            || _policy.Automatic && (builds >= _policy.BuildsBetweenCleanups || bytes >= _policy.BytesBetweenCleanups))
+        if (cacheBytes > Volatile.Read(ref _ceilingKnown) * 0.9)
             RequestCleanup();
+        else if (_policy.Automatic && (builds >= _policy.BuildsBetweenCleanups || bytes >= _policy.BytesBetweenCleanups))
+            RequestAutomaticCleanup();
     }
 
     private void OnRecordRemoved(string sha)
@@ -159,7 +235,7 @@ public sealed partial class StampDerivedAssetStore
         // The same content may still be listed by another library: then its preparation stays.
         if (_disposed || _catalog.Find(sha) is not null) return;
         var key = sha.ToLowerInvariant();
-        _jobs.Writer.TryWrite(new Job(JobKind.Purge, entry => entry.Sha == key && _catalog.Find(key) is null));
+        QueueImmediate(new Job(JobKind.Purge, entry => entry.Sha == key && _catalog.Find(key) is null));
     }
 
     private void OnMountsChanged(object? sender, EventArgs e)
@@ -170,8 +246,15 @@ public sealed partial class StampDerivedAssetStore
     private void Execute(Job job)
     {
         if (_disposed) { job.Done?.TrySetCanceled(); return; }
+        var deferred = false;
         try
         {
+            if (job.Kind == JobKind.AutomaticClean && !AutomaticReady())
+            {
+                DeferAutomaticCleanup();
+                deferred = true;
+                return;
+            }
             Directory.CreateDirectory(_root);
             switch (job.Kind)
             {
@@ -179,13 +262,15 @@ public sealed partial class StampDerivedAssetStore
                     TouchLedger();
                     break;
                 case JobKind.Clean:
+                case JobKind.AutomaticClean:
                 {
-                    Volatile.Write(ref _cleanQueued, 0);
+                    if (job.Kind == JobKind.Clean) Volatile.Write(ref _cleanQueued, 0);
                     Interlocked.Exchange(ref _buildsSinceClean, 0);
                     Interlocked.Exchange(ref _bytesSinceClean, 0);
                     TouchLedger();
                     RetryPurges();
-                    var report = _janitor.Clean(_stop.Token);
+                    var report = _janitor.Clean(_stop.Token,
+                        job.Kind == JobKind.AutomaticClean ? AutomaticCheckpoint() : null);
                     if (report.LockAcquired)
                     {
                         Interlocked.Exchange(ref _diskBytes, report.BytesKept);
@@ -215,6 +300,15 @@ public sealed partial class StampDerivedAssetStore
             ReportFailure("derived cache maintenance", ex);
             job.Done?.TrySetException(ex);
         }
+        finally
+        {
+            if (job.Kind is JobKind.Clean or JobKind.Purge) Interlocked.Decrement(ref _urgentJobs);
+            if (job.Kind == JobKind.AutomaticClean && !deferred)
+            {
+                _automaticSince = _idleSince = null;
+                Volatile.Write(ref _automaticQueued, 0);
+            }
+        }
     }
 
     // A reader held an entry, or another window's janitor held the lock: try again shortly, a few times.
@@ -224,7 +318,7 @@ public sealed partial class StampDerivedAssetStore
         if (job.Done is null && job.Select is { } select && _purgeRetry.IsEmpty)
         {
             // An automatic purge that found the lock busy has no SHA list: requeue it once after the delay.
-            var timer = _policy.Clock.CreateTimer(_ => { if (!_disposed) _jobs.Writer.TryWrite(new Job(JobKind.Purge, select)); },
+            var timer = _policy.Clock.CreateTimer(_ => { if (!_disposed) QueueImmediate(new Job(JobKind.Purge, select)); },
                 null, _policy.PurgeRetryDelay, Timeout.InfiniteTimeSpan);
             Interlocked.Exchange(ref _retryTimer, timer)?.Dispose();
             return;

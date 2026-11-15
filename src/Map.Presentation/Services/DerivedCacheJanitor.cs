@@ -148,7 +148,7 @@ public sealed class DerivedCacheJanitor
         Task.Run(() => Clean(cancellationToken), cancellationToken);
 
     /// <summary>Synchronous form for a caller already on its own background thread (the store's maintenance).</summary>
-    internal DerivedCacheJanitorReport Clean(CancellationToken cancellationToken) =>
+    internal DerivedCacheJanitorReport Clean(CancellationToken cancellationToken, Action? beforeWork = null) =>
         Run(cancellationToken, (pass, before) =>
         {
             // Obsolete versions, stale interrupted writes and stale singletons are maintenance,
@@ -158,7 +158,7 @@ public sealed class DerivedCacheJanitor
             var removedFolders = 0;
             foreach (var folder in before.Folders.Where(f => f.Version < _options.CurrentVersion))
             {
-                cancellationToken.ThrowIfCancellationRequested();
+                pass.Checkpoint();
                 try
                 {
                     CheckPath(folder.Path, directory: true);
@@ -205,7 +205,7 @@ public sealed class DerivedCacheJanitor
                 EvictedUnreferenced = evicted[0], EvictedUnmounted = evicted[1], EvictedLive = evicted[2],
                 Errors = pass.Errors
             };
-        });
+        }, beforeWork);
 
     /// <summary>
     /// Removes exactly the selected entries (header + pixels of every owned version), whatever the ceiling.
@@ -245,19 +245,19 @@ public sealed class DerivedCacheJanitor
     private long MinimumFree => _options.Budget?.MinimumFreeBytes ?? _options.MinimumFreeBytes;
 
     private DerivedCacheJanitorReport Run(CancellationToken cancellationToken,
-        Func<Pass, Snapshot, DerivedCacheJanitorReport> body)
+        Func<Pass, Snapshot, DerivedCacheJanitorReport> body, Action? beforeWork = null)
     {
-        var pass = new Pass(this, cancellationToken);
+        var pass = new Pass(this, cancellationToken, beforeWork);
         FileStream? cleanerLock = null;
         try
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            pass.Checkpoint();
             CheckPath(_root, directory: true);
             var watch = Stopwatch.StartNew();
             var lockPath = Path.Combine(_root, LockFileName);
             while (cleanerLock is null)
             {
-                cancellationToken.ThrowIfCancellationRequested();
+                pass.Checkpoint();
                 CheckPath(_root, directory: true);
                 CheckOptionalFile(lockPath);
                 try
@@ -288,13 +288,19 @@ public sealed class DerivedCacheJanitor
         }
     }
 
-    private sealed class Pass(DerivedCacheJanitor owner, CancellationToken cancellationToken)
+    private sealed class Pass(DerivedCacheJanitor owner, CancellationToken cancellationToken, Action? beforeWork)
     {
         private readonly HashSet<string> _errors = new(StringComparer.Ordinal);
         public bool Complete = true;
         public long DeletedFiles, DeletedBytes;
         public string[] Errors => _errors.ToArray();
         private DerivedCacheJanitorOptions Options => owner._options;
+
+        public void Checkpoint()
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            beforeWork?.Invoke();
+        }
 
         public void Error(string path, Exception ex) => _errors.Add(path + ": " + ex.Message);
 
@@ -305,10 +311,11 @@ public sealed class DerivedCacheJanitor
         {
             var entries = new List<Entry>();
             var folders = new List<VersionFolder>();
+            Checkpoint();
             CheckPath(owner._root, directory: true);
             foreach (var directory in Directory.EnumerateFileSystemEntries(owner._root))
             {
-                cancellationToken.ThrowIfCancellationRequested();
+                Checkpoint();
                 if (!TryVersion(Path.GetFileName(directory), out var version) || version > Options.CurrentVersion) continue;
                 try
                 {
@@ -318,7 +325,7 @@ public sealed class DerivedCacheJanitor
                     var blocked = new HashSet<string>(StringComparer.Ordinal);
                     foreach (var path in Directory.EnumerateFileSystemEntries(directory))
                     {
-                        cancellationToken.ThrowIfCancellationRequested();
+                        Checkpoint();
                         var name = Path.GetFileName(path);
                         if (!OwnedName(name, out var temporary)) continue;
                         try
@@ -333,6 +340,7 @@ public sealed class DerivedCacheJanitor
                     var staleBefore = DateTime.UtcNow - Options.TemporaryFileGrace;
                     foreach (var group in files.GroupBy(f => f.Sha, StringComparer.Ordinal))
                     {
+                        Checkpoint();
                         var active = blocked.Contains(group.Key) || group.Any(f => f.Temporary && f.Written > staleBefore);
                         foreach (var temporary in group.Where(f => f.Temporary))
                             entries.Add(new(version, new[] { temporary }, !active, true));
@@ -349,7 +357,7 @@ public sealed class DerivedCacheJanitor
 
         public long Delete(Entry entry)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            Checkpoint();
             if (!entry.Eligible) return 0;
             var handles = new List<FileStream>();
             var staged = new List<(CacheFile File, string Staged)>();
