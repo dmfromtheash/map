@@ -879,6 +879,8 @@ public sealed partial class ZoomAssetsApplication : Application
     /// pointer; frames are counted while the burst runs and the last input is timed to the frame
     /// that follows it. Scene times are those of the frames that did get drawn.
     /// </summary>
+    private static readonly bool PacedInput = Environment.GetEnvironmentVariable("MAP_PERF_INPUT") == "paced";
+
     private async Task BurstRoute(ZoomScenarioReport scenario, string name, int steps, Action<int> step)
     {
         TraceMark(name);
@@ -917,8 +919,25 @@ public sealed partial class ZoomAssetsApplication : Application
                 {
                     // Absolute deadlines avoid accumulating the Windows timer's rounding on
                     // every delay (which otherwise turns a nominal 60 Hz input into 35 Hz).
-                    var remaining = i * 16.0 - schedule.Elapsed.TotalMilliseconds;
-                    if (remaining > 0) await Task.Delay(TimeSpan.FromMilliseconds(remaining));
+                    if (PacedInput && i > 0)
+                    {
+                        // Capacity mode (MAP_PERF_INPUT=paced): the next input as soon as the previous one is on a
+                        // frame. A fixed 60 Hz input against a 144 Hz compositor beats (2 or 3 ticks per input,
+                        // two inputs sometimes in one tick), so the fixed cadence can never show 60 fresh frames
+                        // even when a frame costs 0 ms (PC 2026-11-15: intervals 13.9/20.8 ms, ~50 FPS at 10k).
+                        var waited = Stopwatch.StartNew();
+                        while (waited.ElapsedMilliseconds < 200)
+                        {
+                            var previous = Volatile.Read(ref inputStamps[i - 1].Revision);
+                            if (previous != 0) { lock (sceneTimes) { if (frameStamps.Count > 0 && frameStamps[^1].Revision >= previous) break; } }
+                            Thread.Sleep(0);
+                        }
+                    }
+                    else
+                    {
+                        var remaining = i * 16.0 - schedule.Elapsed.TotalMilliseconds;
+                        if (remaining > 0) await Task.Delay(TimeSpan.FromMilliseconds(remaining));
+                    }
                     var index = i;
                     var stamp = Stopwatch.GetTimestamp();
                     Dispatcher.UIThread.Post(() =>

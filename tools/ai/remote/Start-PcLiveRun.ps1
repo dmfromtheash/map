@@ -9,7 +9,10 @@ param(
     [string]$Base = "$env:TEMP\map-pclive",
     [int]$Side = 131072,
     [int]$Count = 2000000,
-    [switch]$Trace
+    [switch]$Trace,
+    # Avalonia window composition for an experiment (WinUIComposition, DirectComposition, LowLatencyDxgiSwapChain,
+    # RedirectionSurface); empty keeps the platform default the program uses.
+    [string]$Composition = ''
 )
 $ErrorActionPreference = 'Stop'
 $run = Join-Path $Base "runs\$Tag"; $shots = Join-Path $Base "shots\$Tag"; $profiles = Join-Path $Base 'profiles'
@@ -24,6 +27,7 @@ $env:MAP_PERF_RETAIN_SAMPLES = '1'; $env:MAP_PERF_SETTLE_SECONDS = '180'; $env:M
 $env:MAP_PERF_PROFILE_ROOT = $profiles; $env:MAP_PERF_SHOTS = $shots; $env:MAP_MILLION_CASE = 'giant'
 $env:MAP_FRAME_TRACE = Join-Path $run 'frames.tsv'
 foreach ($n in 'MAP_MEASURE_GPU_FLUSH','MAP_PERF_BLUR_REVIEW','MAP_WIN32_COMPOSITION','MAP_MILLION_FUNCTIONS','MAP_PERF_PRESENTMON_GATE','MAP_PERF_GRID_RESUME_EDITS') { Remove-Item "Env:$n" -ErrorAction SilentlyContinue }
+if ($Composition) { $env:MAP_WIN32_COMPOSITION = $Composition }
 Set-Location $Tree
 $exe = '.\tools\Map.Performance\bin\Release\net10.0\win-x64\Map.Performance.exe'
 if ($Trace) {
