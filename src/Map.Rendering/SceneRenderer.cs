@@ -6331,6 +6331,8 @@ public static partial class SceneRenderer
                 ? value.ContentHash ^ (ulong)(document.StampForeground?.GetHashCode() ?? 0) : value.ContentHash;
             if (variant is not null && cache.TryGet(layer.Id, item.X, item.Y, zoomBucket, ImageHash(variant), out _))
             {
+                // A raster the worker made for a picture the cache keeps would block its handoff.
+                preparation?.ReleaseDuplicate(layer, item.Chunk, palette, zoomBucket, document.StampForeground);
                 drawn[(item.X, item.Y)] = (variant, cache.GetOrCreateOverview(layer.Id, item.X, item.Y,
                     zoomBucket, ImageHash(variant), variant, document.StampForeground, options));
                 continue;

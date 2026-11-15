@@ -243,6 +243,27 @@ public static partial class SceneRenderer
             }
         }
 
+        /// <summary>
+        /// The frame already holds this chunk's picture (same content hash), so a raster the worker made for it is
+        /// a duplicate: free it. Otherwise it would stay in the bounded handoff forever - after an edit or a zoom
+        /// the frame asks for chunks whose tint for the new palette it does not know yet, the worker builds them,
+        /// the next frame finds the variant and its kept image and never takes the raster; sixteen such fill the
+        /// handoff and the worker stops before the chunks the view still waits for.
+        /// </summary>
+        [SuppressMessage("IDisposableAnalyzers.Correctness", "IDISP007:Don't dispose injected",
+            Justification = "Ready rasters are owned by this worker until a render cache adopts them.")]
+        internal void ReleaseDuplicate(ObjectLayer layer, OverviewChunk chunk, OverviewPalette palette,
+            int zoom, StampForegroundSurface? foreground)
+        {
+            lock (_gate)
+            {
+                if (_ready.Count == 0 || !_layers.TryGetValue(layer.Id, out var state)) return;
+                if (!_ready.Remove(new Work(state, chunk, palette, zoom, foreground, ViewToken: state.ViewStop.Token), out var raster)) return;
+                raster.Image.Dispose();
+                StartWorker();
+            }
+        }
+
         private void Enqueue(Work work)
         {
             if (work.Layer.Token.IsCancellationRequested || _queued.Contains(work)) return;
