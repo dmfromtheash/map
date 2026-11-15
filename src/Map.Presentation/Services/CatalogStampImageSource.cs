@@ -9,7 +9,7 @@ namespace Map.Presentation.Services;
 /// Resolves project assets lazily and makes missing/hash-mismatched links visible. The canvas draws from it on the
 /// render thread; style preparation, the pictures of «Вид» and the panels take images through a <see cref="Lease"/>.
 /// </summary>
-public sealed class CatalogStampImageSource(
+public sealed partial class CatalogStampImageSource(
     AssetCatalog catalog, Func<MapDocument> document, Func<string?> projectPath, int imageCapacity = 4096,
     long cacheBytes = 512L * 1024 * 1024, bool retainSamples = true, string? derivedRoot = null,
     TimeProvider? retryClock = null, Action<FileSystemWatcher>? startWatcher = null,
@@ -44,20 +44,18 @@ public sealed class CatalogStampImageSource(
     public bool LastImageRequestCacheableMissing => _lastImageRequestCacheableMissing;
     public bool IsMissingCacheable(string sha256)
     {
+        if (IsFrameQuery) return ReadFrame(new(FrameQuery.Missing, sha256)).Missing;
         lock (_gate) return _derived?.IsTerminalMissing(sha256) == true
             || _cacheableMissingShas.ContainsKey(sha256);
     }
     private int _overviewNotification;
     private int _previewNotification;
     private readonly HashSet<string> _derivedNotifications = new(StringComparer.OrdinalIgnoreCase);
-    private Action? _derivedReady;
+    private volatile Action? _derivedReady;
     public void SetFrameReady(Action ready)
     {
-        lock (_gate)
-        {
-            _derivedReady = ready;
-            if (_derived is not null) { _derived.SourceChanged = ready; _derived.OverviewChanged = ready; }
-        }
+        _derivedReady = ready;
+        if (_derived is not null) { _derived.SourceChanged = ready; _derived.OverviewChanged = ready; }
     }
     private readonly HashSet<StampDerivedAssetStore.PixelKey> _wantedMips = [];
     private readonly HashSet<StampDerivedAssetStore.PixelKey> _latePixels = [];
@@ -72,7 +70,19 @@ public sealed class CatalogStampImageSource(
     public bool LastImageRequestPending { get => _lastImageRequestPending; private set => _lastImageRequestPending = value; }
     private long _unresolvedRequestVersion;
     public long UnresolvedRequestVersion => _unresolvedRequestVersion;
-    public bool ImageRequestsPending { get { lock (_gate) return !_disposed && _latePixels.Count > 0; } }
+    public bool ImageRequestsPending
+    {
+        get
+        {
+            if (IsCanvasThread && !Monitor.TryEnter(_gate)) return true;
+            if (IsCanvasThread)
+            {
+                try { return !_disposed && _latePixels.Count > 0; }
+                finally { Monitor.Exit(_gate); }
+            }
+            lock (_gate) return !_disposed && _latePixels.Count > 0;
+        }
+    }
     /// <summary>Never waits for a loader/lease. A false result means the journal should keep its previous snapshot.</summary>
     public bool TryReadPerformanceQueues(out PerformanceQueues queues)
     {
@@ -93,6 +103,20 @@ public sealed class CatalogStampImageSource(
     public StampDerivedAssetStore.IoSnapshot DerivedIoDiagnostics => _derived?.IoDiagnostics ?? default;
 
     public bool PrepareOverview(IEnumerable<string> assets, Action ready)
+    {
+        if (!IsCanvasThread) return PrepareOverviewCore(assets, ready);
+        if (!Monitor.TryEnter(_gate)) { _frameContended = true; ready(); return false; }
+        var derivedTaken = false;
+        try
+        {
+            if (_derived is not null && !(derivedTaken = _derived.TryEnterFrameGate()))
+            { _frameContended = true; ready(); return false; }
+            return PrepareOverviewCore(assets, ready);
+        }
+        finally { if (derivedTaken) _derived!.ExitFrameGate(); Monitor.Exit(_gate); }
+    }
+
+    private bool PrepareOverviewCore(IEnumerable<string> assets, Action ready)
     {
         if (_derived is null) return true;
         _derived.SourceChanged = ready;
@@ -254,7 +278,7 @@ public sealed class CatalogStampImageSource(
     private bool _planning;
     private Fetch? _plan;
     private HashSet<string>? _planFailed;
-    private sealed record Fetch(string Key, string? Path, byte[]? Embedded, string? Sha256, string? MediaType, string? Extension);
+    private sealed record Fetch(string Key, string? Path, byte[]? Embedded, string? Sha256, string? MediaType, string? Extension, long Revision);
 
     /// <summary>
     /// The working image of an asset. For an original with a detail ladder this is its first
@@ -290,6 +314,7 @@ public sealed class CatalogStampImageSource(
 
     public SKImage? TryGetImage(string sha256)
     {
+        if (IsFrameQuery) return ReadFrame(new(FrameQuery.Image, sha256)).Image;
         lock (_gate)
         {
             if (_disposed) return null;
@@ -300,6 +325,7 @@ public sealed class CatalogStampImageSource(
 
     public SKImage? TryGetImageForOcclusion(string sha256)
     {
+        if (IsFrameQuery) return ReadFrame(new(FrameQuery.Occlusion, sha256)).Image;
         lock (_gate)
         {
             if (_disposed) return null;
@@ -328,6 +354,7 @@ public sealed class CatalogStampImageSource(
             if (ready is null && !_lastImageRequestCacheableMissing) _unresolvedRequestVersion++;
             return ready;
         }
+        if (!_planning && IsCanvasThread) return ResidentFrameImage(sha256, working: true);
         var image = TryGetLadderStep(sha256, 1) ?? (_plan is null ? TryGetOriginal(sha256) : null);
         if (image is not null) _workingDimensions[sha256] = (image.Width, image.Height);
         return image;
@@ -335,6 +362,7 @@ public sealed class CatalogStampImageSource(
 
     public (int Width, int Height)? TryGetImageSize(string sha256)
     {
+        if (IsFrameQuery) return ReadFrame(new(FrameQuery.Size, sha256)).Size;
         lock (_gate)
         {
             if (_disposed) return null;
@@ -364,6 +392,7 @@ public sealed class CatalogStampImageSource(
 
     public SKColor? TryGetOverviewColor(string sha256)
     {
+        if (IsFrameQuery) return ReadFrame(new(FrameQuery.Color, sha256)).Color ?? SKColors.Transparent;
         if (_derived is not null && catalog.Find(sha256) is not null)
         {
             lock (_gate)
@@ -399,19 +428,13 @@ public sealed class CatalogStampImageSource(
 
     private void ValidateRetained(string sha256)
     {
+        if (IsCanvasThread && !_planning) return;
         if (_frameThread != 0 && !_validatedThisFrame.Add(sha256)) return;
         if (!_resolved.TryGetValue(sha256, out var held)) return;
+        TouchFile("validate/stat");
         var file = new FileInfo(held.Path);
         if (file.Exists && file.Length == held.Length && file.LastWriteTimeUtc == held.LastWriteUtc) return;
-        _workingDimensions.Remove(sha256);
-        _overviewColors.Remove(sha256);
-        foreach (var key in _sampleDimensions.Keys.Where(k => k == sha256 || k.StartsWith(sha256 + "@", StringComparison.OrdinalIgnoreCase)).ToArray())
-        {
-            for (var level = 0; level <= 15; level++) _samples.Remove(key + "#" + level);
-            _sampleDimensions.Remove(key);
-        }
-        _cache.Remove(sha256);
-        _resolved.Remove(sha256);
+        InvalidateDerived(sha256);
     }
 
     /// <summary>Called under the lock by every entry: only a frame's own thread may free what it evicts at once.</summary>
@@ -437,9 +460,11 @@ public sealed class CatalogStampImageSource(
         if (reference is { Storage: ProjectAssetStorage.Linked, RelativePath: { } relative }
             && projectPath() is { } mapPath)
         {
+            TouchFile("linked/resolve");
             if (ProjectLinkedAssetPath.TryResolve(mapPath, relative, out var candidate)
                 && ProjectLinkedAssetPath.IsExistingFileWithoutReparsePoints(mapPath, candidate))
             {
+                WatchSource(sha256, candidate);
                 return Load(sha256, candidate, null, sha256, reference.MediaType, reference.Extension);
             }
         }
@@ -448,8 +473,8 @@ public sealed class CatalogStampImageSource(
     }
 
     /// <summary>
-    /// A cached image, or — on the render thread — the image read and decoded now. While a lease plans, the miss is
-    /// noted as its fetch and null returned.
+    /// A non-frame caller may read/decode here. Canvas lookups use only resident pixels; a worker lease notes a
+    /// cache miss as its fetch and decodes it outside the source gate.
     /// </summary>
     private SKImage? Load(string key, string? path, byte[]? embedded, string? sha256, string? mediaType, string? extension)
     {
@@ -457,11 +482,14 @@ public sealed class CatalogStampImageSource(
         try
         {
             if (!_planning)
+            {
+                if (embedded is null && path is not null && !_cache.Contains(key)) TouchFile("cache/load");
                 return embedded is not null ? _cache.GetEncoded(key, embedded, mediaType, extension)
                     : sha256 is not null ? _cache.GetVerified(key, path, sha256, mediaType, extension)
                     : _cache.Get(key, path);
+            }
             if (_cache.Get(key, null) is { } held) return held;
-            if (_plan is null && _planFailed?.Contains(key) != true) _plan = new(key, path, embedded, sha256, mediaType, extension);
+            if (_plan is null && _planFailed?.Contains(key) != true) _plan = new(key, path, embedded, sha256, mediaType, extension, SourceRevision);
             return null;
         }
         finally
@@ -478,6 +506,7 @@ public sealed class CatalogStampImageSource(
     /// </summary>
     public SKImage? TryGetImageForPixelSize(string sha256, double width, double height)
     {
+        if (IsFrameQuery) return ReadFrame(new(FrameQuery.Pixels, sha256, width, height)).Image;
         lock (_gate)
         {
             if (_disposed) return null;
@@ -488,6 +517,7 @@ public sealed class CatalogStampImageSource(
 
     public SKImage? TryGetReadyImageForPixelSize(string sha256, double width, double height)
     {
+        if (IsFrameQuery) return ReadFrame(new(FrameQuery.Ready, sha256, width, height)).Image;
         lock (_gate)
         {
             if (_disposed) return null;
@@ -570,6 +600,7 @@ public sealed class CatalogStampImageSource(
         }
         // Prepared raw pixels have already passed the worker's source-stamp and SHA checks.
         // Do not reopen/stat the original merely to draw a resident derived sample.
+        if (!_planning && IsCanvasThread) return ResidentFrameImage(sha256, width, height);
         if (_derived is not null && CachedSample(sha256, width, height) is { } prepared) return prepared;
         ValidateRetained(sha256);
         if (catalog.Find(sha256) is { } record && AssetCatalog.DetailLadderDepth(record.Width, record.Height) is > 0 and var depth)
@@ -644,10 +675,29 @@ public sealed class CatalogStampImageSource(
     /// <summary>The canvas frame on the render thread: evictions by other threads wait until it ends.</summary>
     public IDisposable? BeginFrame()
     {
-        lock (_gate)
+        _frameContended = false;
+        _frameBeganUnderGate = false;
+        _frameAnswersRotated = false;
+        _requestedFrameWork.Clear();
+        Volatile.Write(ref _frameThread, Environment.CurrentManagedThreadId);
+        if (!Monitor.TryEnter(_gate, FrameGateWaitMilliseconds))
         {
-            if (_disposed) return null;
-            _frameThread = Environment.CurrentManagedThreadId;
+            Interlocked.Increment(ref _frameGateMisses);
+            _frameContended = true;
+            return new FrameScope(this);
+        }
+        var derivedTaken = false;
+        try
+        {
+            if (_disposed) { Volatile.Write(ref _frameThread, 0); return null; }
+            if (_derived is not null && !(derivedTaken = _derived.TryEnterFrameGate()))
+            {
+                Interlocked.Increment(ref _frameGateMisses);
+                _frameContended = true;
+                return new FrameScope(this);
+            }
+            _frameBeganUnderGate = true;
+            RotateFrameAnswers();
             _derived?.ObserveCanvasThread();
             _validatedThisFrame.Clear();
             _wantedMips.Clear();
@@ -683,37 +733,55 @@ public sealed class CatalogStampImageSource(
             }
             return new FrameScope(this);
         }
+        finally { if (derivedTaken) _derived!.ExitFrameGate(); Monitor.Exit(_gate); }
     }
 
     private void EndFrame()
     {
-        lock (_gate)
+        Volatile.Write(ref _frameThread, 0);
+        if (_frameContended) _derivedReady?.Invoke();
+        if (!Monitor.TryEnter(_gate))
         {
-            _frameThread = 0;
-            // A frame that asked for no stamp pixels at all (a moving camera shown from its kept frame, a scene
-            // drawn from kept layer images) says nothing about what the view needs: cancelling then dropped every
-            // sharp request of the gesture, and the sharp level started only ~135 ms after the camera stopped
-            // (the blur the owner saw on wheel, 2026-11-15).
-            if (_wantedMips.Count > 0)
-            {
-                // A late request can still be waiting for metadata when the camera leaves it;
-                // then no pixel task exists to deliver a cancellation back to BeginFrame.
-                _latePixels.RemoveWhere(key => !_wantedMips.Contains(key));
-                _wantedMips.UnionWith(_cacheableMissing);
-                // Kept overview rasters wait for these exact keys: a frame that did not draw them must not cancel them.
-                _wantedMips.UnionWith(_leaseWanted.Keys);
-                _derived?.CancelUnwantedPixels(_wantedMips);
-            }
-            if (_disposed) { DisposeIfUnused(); return; }
-            _cache.DeferDisposal = false;
-            _samples.DeferDisposal = false;
-            _cache.DisposeRetired();
-            _samples.DisposeRetired();
-            // Only while Windows is short of memory: images nobody drew for two seconds, on the frame's own thread
-            // after it, within 2 ms together. Sampled steps (cheap to remake) go before decoded sources.
-            _samples.TrimForMemoryPressure(1);
-            _cache.TrimForMemoryPressure(1);
+            // The worker owning the gate must never turn scope disposal into a frame wait either.
+            QueueFrameCleanup();
+            _derivedReady?.Invoke();
+            return;
         }
+        var derivedTaken = false;
+        try
+        {
+            if (_derived is not null && !(derivedTaken = _derived.TryEnterFrameGate()))
+            { QueueFrameCleanup(); _derivedReady?.Invoke(); return; }
+            FinishFrame();
+        }
+        finally { if (derivedTaken) _derived!.ExitFrameGate(); Monitor.Exit(_gate); }
+    }
+
+    private void FinishFrame(bool cancelRequests = true)
+    {
+        // A frame that asked for no stamp pixels at all (a moving camera shown from its kept frame, a scene
+        // drawn from kept layer images) says nothing about what the view needs: cancelling then dropped every
+        // sharp request of the gesture, and the sharp level started only ~135 ms after the camera stopped
+        // (the blur the owner saw on wheel, 2026-11-15).
+        if (cancelRequests && _frameBeganUnderGate && _wantedMips.Count > 0)
+        {
+            // A late request can still be waiting for metadata when the camera leaves it;
+            // then no pixel task exists to deliver a cancellation back to BeginFrame.
+            _latePixels.RemoveWhere(key => !_wantedMips.Contains(key));
+            _wantedMips.UnionWith(_cacheableMissing);
+            // Kept overview rasters wait for these exact keys: a frame that did not draw them must not cancel them.
+            _wantedMips.UnionWith(_leaseWanted.Keys);
+            _derived?.CancelUnwantedPixels(_wantedMips);
+        }
+        if (_disposed) { DisposeIfUnused(); return; }
+        _cache.DeferDisposal = false;
+        _samples.DeferDisposal = false;
+        _cache.DisposeRetired();
+        _samples.DisposeRetired();
+        // Only while Windows is short of memory: images nobody drew for two seconds, on the frame's own thread
+        // after it, within 2 ms together. Sampled steps (cheap to remake) go before decoded sources.
+        _samples.TrimForMemoryPressure(1);
+        _cache.TrimForMemoryPressure(1);
     }
 
     private void InvalidateDerived(string sha)
@@ -722,6 +790,8 @@ public sealed class CatalogStampImageSource(
         Enter();
         _latePixels.RemoveWhere(key => string.Equals(key.Sha, sha, StringComparison.OrdinalIgnoreCase));
         _overviewColors.Remove(sha); _workingDimensions.Remove(sha); _resolved.Remove(sha);
+        foreach (var key in _frameFailedUntil.Keys.Where(key => string.Equals(key.Sha, sha, StringComparison.OrdinalIgnoreCase)).ToArray())
+            _frameFailedUntil.Remove(key);
         foreach (var key in _pixelFailures.Keys.Where(key => key.StartsWith(sha + "#", StringComparison.OrdinalIgnoreCase)
             || key.StartsWith(sha + "@", StringComparison.OrdinalIgnoreCase)).ToArray())
         { _pixelFailures.Remove(key); _pixelRetryAt.Remove(key); _decodeFailed.Remove(key); }
@@ -731,7 +801,11 @@ public sealed class CatalogStampImageSource(
             for (var level = 0; level <= 15; level++) { _samples.Remove(key + "#" + level); _cache.Remove(key + "#" + level); _decodeFailed.Remove(key + "#" + level); }
             _sampleDimensions.Remove(key);
         }
-        for (var level = 0; level <= 15; level++) _cache.Remove(level == 0 ? sha : sha + "@" + level);
+        for (var level = 0; level <= 15; level++)
+        {
+            var key = level == 0 ? sha : sha + "@" + level;
+            _cache.Remove(key); _missingSteps.Remove(key); _decodeFailed.Remove(key);
+        }
     }
 
     private SKImage? LeaseGet(ImageLease lease, Func<SKImage?> resolve)
@@ -760,7 +834,7 @@ public sealed class CatalogStampImageSource(
             var (encoded, decoded) = Decode(fetch);
             lock (_gate)
             {
-                if (_disposed || lease.Closed) { decoded?.Dispose(); return null; }
+                if (_disposed || lease.Closed || fetch.Revision != SourceRevision) { decoded?.Dispose(); return null; }
                 Enter();
                 if (decoded is null || encoded is null
                     || _cache.Adopt(fetch.Key, encoded, decoded, fetch.MediaType, fetch.Extension) is null && !_cache.Contains(fetch.Key))
@@ -771,7 +845,7 @@ public sealed class CatalogStampImageSource(
     }
 
     /// <summary>The same checks as the cache's own read: size, content hash, format, then the decode.</summary>
-    private static (byte[]? Encoded, SKImage? Image) Decode(Fetch fetch)
+    private (byte[]? Encoded, SKImage? Image) Decode(Fetch fetch)
     {
         try
         {
@@ -779,8 +853,10 @@ public sealed class CatalogStampImageSource(
             if (encoded is null)
             {
                 if (string.IsNullOrWhiteSpace(fetch.Path)) return (null, null);
+                TouchFile("decode/stat");
                 var file = new FileInfo(fetch.Path);
                 if (!file.Exists || file.Length is <= 0 or > AssetImagePolicy.MaxEncodedBytes) return (null, null);
+                TouchFile("decode/read");
                 encoded = AssetImagePolicy.ReadEncodedFile(file.FullName);
             }
             if (fetch.Sha256 is not null && !string.Equals(Convert.ToHexStringLower(
@@ -799,17 +875,15 @@ public sealed class CatalogStampImageSource(
 
     private void EndLease(ImageLease lease)
     {
+        SKImage[] held;
         lock (_gate)
         {
             if (lease.Closed) return;
             lease.Closed = true;
-            _leases--;
-            if (_disposed) { DisposeIfUnused(); return; }
-            foreach (var image in lease.Held) { _cache.Unpin(image); _samples.Unpin(image); }
+            held = [.. lease.Held];
             lease.Held.Clear();
-            Enter();
-            if (!_cache.DeferDisposal) { _cache.DisposeRetired(); _samples.DisposeRetired(); }
         }
+        EndPinnedPlan(held);
     }
 
     /// <inheritdoc cref="IStampImageSource.ExactLease"/>
@@ -991,7 +1065,7 @@ public sealed class CatalogStampImageSource(
     private readonly System.Collections.Concurrent.ConcurrentQueue<Decoded> _decoded = new();
     private readonly HashSet<string> _decoding = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _decodeFailed = new(StringComparer.OrdinalIgnoreCase);
-    private sealed record Decoded(string Key, byte[]? Encoded, SKImage? Image, string? MediaType, string? Extension);
+    private sealed record Decoded(string Key, byte[]? Encoded, SKImage? Image, string? MediaType, string? Extension, long Revision);
 
     /// <summary>
     /// The first frame of a closer zoom used to decode the larger ladder steps of every mountain
@@ -1005,20 +1079,23 @@ public sealed class CatalogStampImageSource(
         // wheel at 25 000 objects (PC, 2026-11-15) - 5 of 10 s of DrawObjects in Monitor.Enter here, 35-108 ms frames
         // that drew nothing. Busy: this frame draws what is resident (the "not yet ready" path) and asks again.
         var taken = false;
+        var derivedTaken = false;
         try
         {
-            Monitor.TryEnter(_gate, FrameGateWaitMilliseconds, ref taken);
+            Monitor.TryEnter(_gate, IsCanvasThread ? 0 : FrameGateWaitMilliseconds, ref taken);
             if (!taken)
             {
                 Interlocked.Increment(ref _frameGateMisses);
                 ready();
                 return false;
             }
+            if (IsCanvasThread && _derived is not null && !(derivedTaken = _derived.TryEnterFrameGate()))
+            { _frameContended = true; ready(); return false; }
             if (_disposed) return true;
             Enter();
             return PrepareLocked(stamps, ready);
         }
-        finally { if (taken) Monitor.Exit(_gate); }
+        finally { if (derivedTaken) _derived!.ExitFrameGate(); if (taken) Monitor.Exit(_gate); }
     }
 
     /// <summary>How long a frame may wait for the source's gate before drawing what is resident instead.</summary>
@@ -1048,6 +1125,13 @@ public sealed class CatalogStampImageSource(
                     resident &= QueuePixels(pixel, ready);
                 continue;
             }
+            if (IsCanvasThread)
+            {
+                var queued = new FrameKey(FrameQuery.Pixels, sha256, width, height);
+                QueueFrameWork(queued);
+                resident &= CachedSample(sha256, width, height) is not null;
+                continue;
+            }
             if (record is null || AssetCatalog.DetailLadderDepth(record.Width, record.Height) is not (> 0 and var depth)) continue;
             var ratio = Math.Min(record.Width / Math.Max(1, width), record.Height / Math.Max(1, height));
             var level = Math.Min(depth, (int)Math.Floor(Math.Log2(Math.Max(1, ratio))));
@@ -1065,7 +1149,7 @@ public sealed class CatalogStampImageSource(
                 resident = false;
                 StartDecode(key, original, sha256, record.MediaType, record.Extension, ready);
             }
-            else if (catalog.TryDetailLevelPath(record, level, out var step)) { resident = false; StartDecode(key, step, null, null, null, ready); }
+            else if (DetailPath(record, level, out var step)) { resident = false; StartDecode(key, step, null, null, null, ready); }
             else _missingSteps.Add(key);
         }
         return resident;
@@ -1081,7 +1165,7 @@ public sealed class CatalogStampImageSource(
     /// </summary>
     public IStampPreparationPlan? CreatePreparationPlan()
     {
-        lock (_gate) return _disposed || _derived is null ? null : new PreparationPlan(this, SourceRevision);
+        return _disposed || _derived is null ? null : new PreparationPlan(this, SourceRevision);
     }
 
     private sealed class PreparationPlan(CatalogStampImageSource source, long revision) : IStampPreparationPlan
@@ -1105,44 +1189,81 @@ public sealed class CatalogStampImageSource(
     /// </summary>
     private IStampImageLease? PinPlan(PreparationPlan plan, bool resident = false)
     {
+        (StampDerivedAssetStore.PixelKey Key, string Name)[] names;
+        AssetRecord[] records;
         lock (_gate)
         {
             if (_disposed || plan.SourceRevision != SourceRevision) return null;
-            Enter();
-            var images = new Dictionary<StampDerivedAssetStore.PixelKey, SKImage>();
-            foreach (var (pixel, name) in plan.Names ??= [.. plan.Keys.Select(key => (key, PixelName(key)))])
-            {
-                if (ReadyPixels(name) is { } image) images[pixel] = image;
-                // A stand-in: the resident level the frame's own fallback would draw, or nothing (pending) for now.
-                else if (resident)
-                {
-                    if (plan.Records.TryGetValue(pixel.Sha, out var record) && ResidentLevel(record, pixel) is { } other) images[pixel] = other.Image;
-                }
-                // A failed key stays out: the raster comes back incomplete and the frame draws that tile as before.
-                else if (!_decodeFailed.Contains(name)) return null;
-            }
-            var sizes = new Dictionary<string, (int Width, int Height)>(StringComparer.OrdinalIgnoreCase);
-            var occlusion = new Dictionary<string, SKImage>(StringComparer.OrdinalIgnoreCase);
-            foreach (var record in plan.Records.Values)
-            {
-                if (TryGetImageSize(record.Sha256) is { } size) sizes[record.Sha256] = size;
-                // The same resident shape TryGetImageForOcclusion gives the frame, so culling is unchanged.
-                if ((_cache.Get(record.Sha256 + "@1", null) ?? _cache.Get(record.Sha256, null)) is { } shape) occlusion[record.Sha256] = shape;
-            }
-            var held = images.Values.Concat(occlusion.Values).Distinct().ToArray();
-            foreach (var image in held) { _cache.Pin(image); _samples.Pin(image); }
+            names = plan.Names ??= [.. plan.Keys.Select(key => (key, PixelName(key)))];
+            records = [.. plan.Records.Values];
             _leases++;
-            return new PinnedPlan(this, plan.Records, images, sizes, occlusion, held);
         }
+        var images = new Dictionary<StampDerivedAssetStore.PixelKey, SKImage>();
+        var sizes = new Dictionary<string, (int Width, int Height)>(StringComparer.OrdinalIgnoreCase);
+        var occlusion = new Dictionary<string, SKImage>(StringComparer.OrdinalIgnoreCase);
+        var held = new HashSet<SKImage>();
+        var complete = false;
+        try
+        {
+            for (var offset = 0; offset < names.Length; offset += 256)
+            {
+                lock (_gate)
+                {
+                    if (_disposed || plan.SourceRevision != SourceRevision) return null;
+                    Enter();
+                    for (var i = offset; i < Math.Min(names.Length, offset + 256); i++)
+                    {
+                        var (pixel, name) = names[i];
+                        var image = ReadyPixels(name);
+                        if (image is null && resident && plan.Records.TryGetValue(pixel.Sha, out var record))
+                            image = ResidentLevel(record, pixel)?.Image;
+                        if (image is not null)
+                        {
+                            images[pixel] = image;
+                            if (held.Add(image)) { _cache.Pin(image); _samples.Pin(image); }
+                        }
+                        else if (!resident && !_decodeFailed.Contains(name)) return null;
+                    }
+                }
+            }
+            for (var offset = 0; offset < records.Length; offset += 256)
+            {
+                lock (_gate)
+                {
+                    if (_disposed || plan.SourceRevision != SourceRevision) return null;
+                    Enter();
+                    for (var i = offset; i < Math.Min(records.Length, offset + 256); i++)
+                    {
+                        var record = records[i];
+                        if (TryGetImageSize(record.Sha256) is { } size) sizes[record.Sha256] = size;
+                        if ((_cache.Get(record.Sha256 + "@1", null) ?? _cache.Get(record.Sha256, null)) is not { } shape) continue;
+                        occlusion[record.Sha256] = shape;
+                        if (held.Add(shape)) { _cache.Pin(shape); _samples.Pin(shape); }
+                    }
+                }
+            }
+            // Invalidations can interleave the batches: never publish a mixture of source revisions.
+            lock (_gate)
+            {
+                if (_disposed || plan.SourceRevision != SourceRevision) return null;
+                var result = new PinnedPlan(this, plan.Records, images, sizes, occlusion, [.. held]);
+                complete = true;
+                return result;
+            }
+        }
+        finally { if (!complete) EndPinnedPlan([.. held]); }
     }
 
     private void EndPinnedPlan(SKImage[] held)
     {
+        for (var offset = 0; offset < held.Length; offset += 256)
+            lock (_gate)
+                for (var i = offset; i < Math.Min(held.Length, offset + 256); i++)
+                { _cache.Unpin(held[i]); _samples.Unpin(held[i]); }
         lock (_gate)
         {
             _leases--;
             if (_disposed) { DisposeIfUnused(); return; }
-            foreach (var image in held) { _cache.Unpin(image); _samples.Unpin(image); }
             Enter();
             if (!_cache.DeferDisposal) { _cache.DisposeRetired(); _samples.DisposeRetired(); }
         }
@@ -1176,10 +1297,11 @@ public sealed class CatalogStampImageSource(
 
     private void AddToPlan(PreparationPlan plan, IEnumerable<(string Sha256, double Width, double Height)> stamps)
     {
+        foreach (var batch in stamps.Chunk(256))
         lock (_gate)
         {
             AssetRecord? record = null;
-            foreach (var (sha256, width, height) in stamps)
+            foreach (var (sha256, width, height) in batch)
             {
                 if (record?.Sha256 != sha256) record = catalog.Find(sha256);
                 // As in PrepareLocked: a stamp without a catalog record has nothing to prepare.
@@ -1197,8 +1319,15 @@ public sealed class CatalogStampImageSource(
     /// <summary>The <see cref="PrepareLocked"/> contract over a plan's distinct keys.</summary>
     private bool PreparePlan(PreparationPlan plan, Action ready)
     {
-        lock (_gate)
+        var taken = false;
+        var derivedTaken = false;
+        try
         {
+            if (IsCanvasThread) Monitor.TryEnter(_gate, 0, ref taken);
+            else Monitor.Enter(_gate, ref taken);
+            if (!taken) { _frameContended = true; ready(); return false; }
+            if (IsCanvasThread && _derived is not null && !(derivedTaken = _derived.TryEnterFrameGate()))
+            { _frameContended = true; ready(); return false; }
             if (_disposed) return true;
             Enter();
             _derivedReady = ready;
@@ -1227,6 +1356,7 @@ public sealed class CatalogStampImageSource(
             if (stillMissing.Count == 0) plan.ReadyAt = plan.CheckedAt;
             return stillMissing.Count == 0;
         }
+        finally { if (derivedTaken) _derived!.ExitFrameGate(); if (taken) Monitor.Exit(_gate); }
     }
 
     private void NotifyDerived(string key, Task task, Action ready)
@@ -1383,14 +1513,17 @@ public sealed class CatalogStampImageSource(
     private void StartDecode(string key, string path, string? sha256, string? mediaType, string? extension, Action ready)
     {
         _decoding.Add(key);
+        var revision = SourceRevision;
         _ = Task.Run(() =>
         {
             byte[]? encoded = null; SKImage? image = null;
             try
             {
+                TouchFile("start-decode/stat");
                 var file = new FileInfo(path);
                 if (file.Exists && file.Length is > 0 and <= AssetImagePolicy.MaxEncodedBytes)
                 {
+                    TouchFile("start-decode/read");
                     encoded = AssetImagePolicy.ReadEncodedFile(file.FullName);
                     if (sha256 is null || string.Equals(Convert.ToHexStringLower(
                         System.Security.Cryptography.SHA256.HashData(encoded)), sha256, StringComparison.OrdinalIgnoreCase))
@@ -1398,7 +1531,7 @@ public sealed class CatalogStampImageSource(
                 }
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException) { }
-            _decoded.Enqueue(new(key, encoded, image, mediaType, extension));
+            _decoded.Enqueue(new(key, encoded, image, mediaType, extension, revision));
             ready();
         });
     }
@@ -1408,6 +1541,7 @@ public sealed class CatalogStampImageSource(
         while (_decoded.TryDequeue(out var item))
         {
             _decoding.Remove(item.Key);
+            if (item.Revision != SourceRevision) { item.Image?.Dispose(); continue; }
             if (item.Image is null || item.Encoded is null
                 || _cache.Adopt(item.Key, item.Encoded, item.Image, item.MediaType, item.Extension) is null && !_cache.Contains(item.Key))
                 _decodeFailed.Add(item.Key);
@@ -1419,7 +1553,7 @@ public sealed class CatalogStampImageSource(
         var key = sha256 + "@" + level;
         if (_cache.Get(key, null) is { } held) return held;
         if (_missingSteps.Contains(key) || catalog.Find(sha256) is not { } record) return null;
-        if (catalog.TryDetailLevelPath(record, level, out var path) && Load(key, path, null, null, null, null) is { } image)
+        if (DetailPath(record, level, out var path) && Load(key, path, null, null, null, null) is { } image)
             return image;
         // A lease that is about to read the step has not found it missing.
         if (_plan is not null) return null;
@@ -1429,6 +1563,7 @@ public sealed class CatalogStampImageSource(
 
     private string? ResolveCatalog(AssetRecord record)
     {
+        TouchFile("catalog/resolve-stat");
         if (_resolved.TryGetValue(record.Sha256, out var cached) && File.Exists(cached.Path))
         {
             var info = new FileInfo(cached.Path);
@@ -1458,7 +1593,16 @@ public sealed class CatalogStampImageSource(
         var resolvedInfo = new FileInfo(resolution.Path);
         _resolved[record.Sha256] =
             (resolution.Path, resolvedInfo.Length, resolvedInfo.LastWriteTimeUtc);
+        WatchSource(record.Sha256, resolution.Path);
         return resolution.Path;
+    }
+
+    private bool DetailPath(AssetRecord record, int level, out string? path)
+    {
+        TouchFile("catalog/detail-exists");
+        var found = catalog.TryDetailLevelPath(record, level, out path);
+        if (path is not null) WatchSource(record.Sha256, path);
+        return found;
     }
 
     /// <summary>The editor closed: images still held by a lease or a frame in progress are freed when those end.</summary>
@@ -1467,6 +1611,8 @@ public sealed class CatalogStampImageSource(
         lock (_gate)
         {
             _disposed = true;
+            foreach (var watcher in _sourceWatchers.Values) watcher.Dispose();
+            _sourceWatchers.Clear(); _watchedSources.Clear();
             _retryStop.Cancel();
             _derived?.Dispose();
             DisposeIfUnused();
@@ -1476,6 +1622,11 @@ public sealed class CatalogStampImageSource(
     public async ValueTask DisposeAsync()
     {
         Dispose();
+        Task[] frameTasks;
+        lock (_gate) frameTasks = [.. _frameTasks];
+        await Task.WhenAll(frameTasks).ConfigureAwait(false);
+        if (_frameCleanup is not null) await _frameCleanup.ConfigureAwait(false);
+        if (_sourceValidation is not null) await _sourceValidation.ConfigureAwait(false);
         if (_derived is not null) await _derived.Completion.ConfigureAwait(false);
         if (_missingRetry is not null) await _missingRetry.ConfigureAwait(false);
     }
@@ -1483,6 +1634,10 @@ public sealed class CatalogStampImageSource(
     private void DisposeIfUnused()
     {
         if (_leases > 0 || _frameThread != 0) return;
+        ReleaseFrameAnswers(_previousFrame);
+        ReleaseFrameAnswers(_currentFrame);
+        _previousFallbacks.Clear(); _currentFallbacks.Clear();
+        _currentFramePinBytes = _previousFramePinBytes = 0;
         while (_decoded.TryDequeue(out var item)) item.Image?.Dispose();
         _cache.Dispose();
         _samples.Dispose();

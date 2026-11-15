@@ -155,7 +155,7 @@ public sealed class StampImageLeaseTests : IDisposable
         var (images, shas) = Source();
         using var _ = images;
         var inUse = images.TryGetImage(shas[0])!;
-        using (images.BeginFrame()) foreach (var sha in shas.Skip(1)) Assert.NotNull(images.TryGetImage(sha));
+        using (images.BeginFrame()) LoadOnWorker(images, shas.Skip(1));
         Assert.Equal(IntPtr.Zero, inUse.Handle);
     }
 
@@ -166,7 +166,7 @@ public sealed class StampImageLeaseTests : IDisposable
         using var _ = images;
         var lease = images.Lease();
         var inUse = lease.TryGetImage(shas[0])!;
-        using (images.BeginFrame()) foreach (var sha in shas.Skip(1)) Assert.NotNull(images.TryGetImage(sha));
+        using (images.BeginFrame()) LoadOnWorker(images, shas.Skip(1));
 
         Assert.NotEqual(IntPtr.Zero, inUse.Handle);
         Assert.True(Drawn(inUse));
@@ -174,7 +174,7 @@ public sealed class StampImageLeaseTests : IDisposable
         Assert.Same(inUse, images.TryGetImage(shas[0]));
 
         lease.Dispose();
-        using (images.BeginFrame()) foreach (var sha in shas.Skip(1)) images.TryGetImage(sha);
+        using (images.BeginFrame()) LoadOnWorker(images, shas.Skip(1));
         Assert.Equal(IntPtr.Zero, inUse.Handle);
     }
 
@@ -183,6 +183,7 @@ public sealed class StampImageLeaseTests : IDisposable
     {
         var (images, shas) = Source();
         using var _ = images;
+        Assert.NotNull(images.TryGetImage(shas[0])); // decode before entering the disk-free frame
         var frameThread = images.BeginFrame()!;
         var drawn = images.TryGetImage(shas[0])!;
         // Another thread fills the cache past its 64 pictures while this frame still draws «drawn». A thread of its
@@ -203,6 +204,10 @@ public sealed class StampImageLeaseTests : IDisposable
         Assert.NotEqual(IntPtr.Zero, drawn.Handle);
         Assert.True(Drawn(drawn));
         frameThread.Dispose();
+        // The previous frame's resident answers stay pinned for a busy next frame. Rotation releases them.
+        using (images.BeginFrame()) { }
+        using (images.BeginFrame()) { }
+        LoadOnWorker(images, shas.Skip(1));
         Assert.Equal(IntPtr.Zero, drawn.Handle);
     }
 
@@ -212,6 +217,7 @@ public sealed class StampImageLeaseTests : IDisposable
         // The race itself: four workers draw leased pictures while frames on this thread ask for all 72.
         var (images, shas) = Source();
         using var _ = images;
+        foreach (var sha in shas) images.TryGetImage(sha);
         using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(2));
         var freed = 0; var draws = 0;
         var workers = Enumerable.Range(0, 4).Select(seed => Task.Run(() =>
@@ -233,13 +239,37 @@ public sealed class StampImageLeaseTests : IDisposable
         {
             using (images.BeginFrame())
                 foreach (var sha in shas.OrderBy(_ => Random.Shared.Next()).Take(40))
-                    if (images.TryGetImage(sha) is not { } image || !Drawn(image)) Interlocked.Increment(ref freed);
+                {
+                    var image = images.TryGetImage(sha);
+                    if (image is not null && !Drawn(image)) Interlocked.Increment(ref freed);
+                    if (image is null) Assert.True(images.LastImageRequestPending);
+                }
             frames++;
         }
         await Task.WhenAll(workers);
 
         Assert.Equal(0, freed);
         Assert.True(draws > 100 && frames > 10, $"draws {draws}, frames {frames}");
+    }
+
+    private static void LoadOnWorker(CatalogStampImageSource images, IEnumerable<string> shas)
+    {
+        Exception? failure = null;
+        var worker = new Thread(() =>
+        {
+            try
+            {
+                foreach (var sha in shas)
+                {
+                    using var lease = images.Lease();
+                    Assert.NotNull(lease.TryGetImage(sha));
+                }
+            }
+            catch (Exception ex) { failure = ex; }
+        });
+        worker.Start();
+        Assert.True(worker.Join(TimeSpan.FromSeconds(10)));
+        Assert.Null(failure);
     }
 
     private static bool Drawn(SKImage image)

@@ -25,6 +25,7 @@ public sealed class AssetImageCache : IDisposable
     }
 
     private readonly Dictionary<string, Entry> _entries = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<SKImage, Entry> _imageOwners = new(ReferenceEqualityComparer.Instance);
     // Images another thread is using (a lease of the stamp source): their entry is never evicted, and one removed
     // while in use waits in _retired. Eviction itself may also be asked to wait (DeferDisposal) — see below.
     private readonly Dictionary<SKImage, int> _pins = new(ReferenceEqualityComparer.Instance);
@@ -140,8 +141,16 @@ public sealed class AssetImageCache : IDisposable
         Touch(key, entry);
         if (entry.FallbackImage is not null) return entry.FallbackImage;
         using var pixels = entry.Image.PeekPixels();
-        return pixels is null ? entry.Image : entry.FallbackImage = SKImage.FromPixels(pixels);
+        if (pixels is null) return entry.Image;
+        entry.FallbackImage = SKImage.FromPixels(pixels);
+        _imageOwners[entry.FallbackImage] = entry;
+        return entry.FallbackImage;
     }
+
+    /// <summary>Conservative weight of retaining this image's whole entry, including future mips/fallback.
+    /// Zero for an image owned by another cache. Constant-time; caller supplies synchronization.</summary>
+    public long RetentionBytes(SKImage image) => _imageOwners.TryGetValue(image, out var entry)
+        ? entry.ResidentBytes + entry.DecodedBytes * 2 : 0;
 
     /// <summary>Keeps <paramref name="image"/> (an image or mip this cache returned) alive and in the cache until unpinned.</summary>
     public void Pin(SKImage image) => _pins[image] = _pins.GetValueOrDefault(image) + 1;
@@ -158,7 +167,7 @@ public sealed class AssetImageCache : IDisposable
         for (var i = _retired.Count - 1; i >= 0; i--)
         {
             if (IsPinned(_retired[i])) continue;
-            _retired[i].Dispose();
+            DisposeEntry(_retired[i]);
             _retired.RemoveAt(i);
         }
     }
@@ -175,7 +184,15 @@ public sealed class AssetImageCache : IDisposable
     private void Release(Entry entry)
     {
         if (DeferDisposal || IsPinned(entry)) _retired.Add(entry);
-        else entry.Dispose();
+        else DisposeEntry(entry);
+    }
+
+    private void DisposeEntry(Entry entry)
+    {
+        _imageOwners.Remove(entry.Image);
+        if (entry.FallbackImage is { } fallback) _imageOwners.Remove(fallback);
+        foreach (var mip in entry.Mips.Values) _imageOwners.Remove(mip);
+        entry.Dispose();
     }
 
     public SKImage? Get(string key, string? path)
@@ -291,6 +308,7 @@ public sealed class AssetImageCache : IDisposable
             ResidentBytes = incomingResidentBytes,
         };
         Touch(key, _entries[key]);
+        _imageOwners[image] = _entries[key];
         DecodedBytes += metadata.DecodedBytes;
         ResidentBytes += incomingResidentBytes;
         return image;
@@ -319,6 +337,7 @@ public sealed class AssetImageCache : IDisposable
         TrimForIncoming(bytes);
         _entries[key] = new Entry { Image = image, DecodedBytes = bytes, ResidentBytes = bytes };
         Touch(key, _entries[key]);
+        _imageOwners[image] = _entries[key];
         DecodedBytes += bytes;
         ResidentBytes += bytes;
         Misses++;
@@ -353,6 +372,7 @@ public sealed class AssetImageCache : IDisposable
             ResidentBytes = incomingResidentBytes,
         };
         Touch(key, _entries[key]);
+        _imageOwners[image] = _entries[key];
         DecodedBytes += metadata.DecodedBytes;
         ResidentBytes += incomingResidentBytes;
         return image;
@@ -400,6 +420,16 @@ public sealed class AssetImageCache : IDisposable
         return null;
     }
 
+    /// <summary>Only an already resident level; never generates pixels or reads a file.</summary>
+    public SKImage? GetReadyForPixelSize(string key, double pixelWidth, double pixelHeight)
+    {
+        if (!_entries.TryGetValue(key, out var entry)) return null;
+        Touch(key, entry);
+        var ratio = Math.Min(entry.Image.Width / Math.Max(1, pixelWidth), entry.Image.Height / Math.Max(1, pixelHeight));
+        var level = Math.Clamp((int)Math.Floor(Math.Log2(Math.Max(1, ratio))), 0, 15);
+        return level == 0 ? entry.Image : entry.Mips.GetValueOrDefault(level);
+    }
+
     /// <summary>Power-of-two minification of an already verified source, charged to the same LRU
     /// byte budget. Close zoom always receives the original. No source pixels are changed.</summary>
     public SKImage? GetForPixelSize(string key, double pixelWidth, double pixelHeight)
@@ -434,6 +464,7 @@ public sealed class AssetImageCache : IDisposable
             bitmap.SetImmutable();
             source = SKImage.FromBitmap(bitmap);
             entry.Mips.Add(n, source);
+            _imageOwners[source] = entry;
             var added = (long)width * height * 4;
             entry.MipBytes += added; ResidentBytes += added;
         }
@@ -452,12 +483,12 @@ public sealed class AssetImageCache : IDisposable
     {
         foreach (var entry in _entries.Values)
         {
-            entry.Dispose();
+            DisposeEntry(entry);
         }
 
         _entries.Clear();
         _recency.Clear();
-        foreach (var entry in _retired) entry.Dispose();
+        foreach (var entry in _retired) DisposeEntry(entry);
         _retired.Clear();
         _pins.Clear();
         DecodedBytes = 0;
