@@ -74,12 +74,12 @@ public sealed partial class StyleMockupDump
     /// The three chosen ink styles as Map itself paints them (document style, SceneRenderer), beside
     /// the mock-ups: MAP_STYLE_INK_APP = output folder. Also a half-scale render, the zoomed-out view.
     /// </summary>
-    [Fact]
+    [OptInProbe("MAP_STYLE_INK_APP,MAP_LIGHT_ASSETS", "StyleRenderingTests.Reviewed_presets_change_pixels_and_rebuild_after_a_local_edit")]
     public void Dump_ink_styles_from_the_renderer_when_asked()
     {
         var output = Environment.GetEnvironmentVariable("MAP_STYLE_INK_APP");
         var assets = Environment.GetEnvironmentVariable("MAP_LIGHT_ASSETS");
-        if (string.IsNullOrEmpty(output) || string.IsNullOrEmpty(assets) || !Directory.Exists(assets)) return;
+        Assert.True(Directory.Exists(assets), "opt-in asset directory is missing: " + assets);
         Directory.CreateDirectory(output);
         var images = Directory.GetFiles(assets, "*.png").Take(3)
             .ToDictionary(f => Path.GetFileNameWithoutExtension(f), f => SKImage.FromEncodedData(f)!);
