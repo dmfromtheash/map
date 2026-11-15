@@ -35,6 +35,18 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # DEC-116: no silent passes (early return, Skip without "defect:") and no weakened test (raised threshold,
+      # added Skip, removed Assert, moved to a separate collection) unless a commit says "test-change:" and why.
+      - name: Test integrity
+        shell: pwsh
+        run: |
+          $base = '${{ github.event.before }}'
+          if (-not $base -or $base -match '^0+$') { $base = 'HEAD~1' }
+          powershell -NoProfile -ExecutionPolicy Bypass -File tools/ai/Test-Integrity.ps1 -Base $base
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::Test integrity: a silent pass or a weakened test without test-change:"; exit 1 }
 
       - name: .NET SDK from global.json
         uses: actions/setup-dotnet@v4
