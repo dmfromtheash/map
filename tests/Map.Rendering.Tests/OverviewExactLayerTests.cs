@@ -42,10 +42,18 @@ public sealed class OverviewExactLayerTests(ITestOutputHelper output)
         Assert.True(after.Complete, "the layer run did not settle");
         Assert.True(after.Exact >= 128, $"only {after.Exact} exact objects: the model does not reach the layer");
         Assert.Equal(after.Settled.Count, after.Copied);
-        // After an edit the settled frame keeps the previous layer and draws only the changed place directly.
-        Assert.Equal(3, after.EditKind);
-        Assert.True(after.EditPatched > 0 && after.EditPatched * 4 < after.Exact,
-            $"an edit patched {after.EditPatched} of {after.Exact} exact objects: the frame redraws far more than the changed place");
+        foreach (var edit in before.Edits)
+            output.WriteLine($"direct {edit.Name}: frames={edit.Frames.Count}; max exact={edit.Frames.Max(f => f.Ms):F2} ms; worst direct={edit.Frames.Max(f => f.Direct)}; pixels max={edit.MaxDifference}/255");
+        foreach (var edit in after.Edits)
+        {
+            var worst = edit.Frames.MaxBy(f => f.Ms)!;
+            output.WriteLine($"{edit.Name}: settled={edit.Complete}, kinds={string.Join(',', edit.Frames.Select(f => f.Kind))}; max exact={worst.Ms:F2} ms ({worst.Direct} direct objects); worst direct={edit.Frames.Max(f => f.Direct)}; pixels max={edit.MaxDifference}/255");
+            Assert.True(edit.Complete, $"{edit.Name} did not settle");
+            Assert.True(edit.Frames.Max(f => f.Direct) * 4 <= after.Exact,
+                $"{edit.Name} drew {edit.Frames.Max(f => f.Direct)} of {after.Exact} exact objects directly");
+            Assert.True(edit.MaxDifference <= 4, $"{edit.Name}: edited pixels differ by {edit.MaxDifference}/255");
+            Assert.True(edit.ChangedPixels > 0, $"{edit.Name}: edited objects never reached the settled pixels");
+        }
         // Source-over into a transparent layer and then over the chunks rounds in another order than drawing each
         // stamp over the chunks: a channel moves by 1-2/255, by 3-4 only where many translucent edges overlap
         // (2 000 000 objects: 118 of 921 600 pixels). A different image level or a missing stamp would be far more.
@@ -76,10 +84,11 @@ public sealed class OverviewExactLayerTests(ITestOutputHelper output)
     private sealed record Result(List<double> Settled, List<double> Pan, List<double> Wheel, int SettleFrames, bool Complete,
         int Exact, int Started, int Copied, byte[] Pixels, string Log, List<double>[] ExactMs, byte[]? Direct)
     {
-        public int EditKind { get; init; } = -1;
-        public int EditPatched { get; init; } = -1;
-        public double EditMs { get; init; } = double.NaN;
+        public List<EditResult> Edits { get; init; } = [];
     }
+
+    private sealed record EditFrame(int Kind, double Ms, int Direct);
+    private sealed record EditResult(string Name, bool Complete, List<EditFrame> Frames, int MaxDifference, int ChangedPixels);
 
     private static Result Run(int count, int distinct, bool layers, bool finalSettle)
     {
@@ -118,7 +127,7 @@ public sealed class OverviewExactLayerTests(ITestOutputHelper output)
 
             var log = new List<string>();
             var moving = false;
-            int editKind = -1, editPatched = -1; var editMs = double.NaN;
+            var edits = new List<EditResult>();
             using var tiles = new ObjectOverviewCache(1024, 256L << 20);
             using var atlas = new ObjectOverviewCache();
             using var preparation = new SceneRenderer.OverviewPreparation(() => Volatile.Read(ref moving));
@@ -130,7 +139,7 @@ public sealed class OverviewExactLayerTests(ITestOutputHelper output)
             var lastFrame = 16.7;
             RenderStats last = new();
 
-            (bool Complete, double Ms) Frame(double cx, double cy, double scale, bool camMoving)
+            (bool Complete, double Ms) Frame(double cx, double cy, double scale, bool camMoving, bool synchronous = false)
             {
                 Volatile.Write(ref moving, camMoving);
                 var c = surface.Canvas;
@@ -147,10 +156,10 @@ public sealed class OverviewExactLayerTests(ITestOutputHelper output)
                         SceneRenderer.Render(c, document, new RenderOptions
                         {
                             Stamps = source, ObjectCache = tiles, AtlasCache = atlas, Stats = stats, ViewScale = scale,
-                            OverviewPreparation = preparation, CameraMoving = camMoving, FastTerrain = camMoving,
+                            OverviewPreparation = synchronous ? null : preparation, CameraMoving = camMoving, FastTerrain = camMoving,
                             LodTier = scale < .125 ? RenderLodTier.Overview : RenderLodTier.Exact,
                             VisibleWorld = new(cx - halfW, cy - halfH, cx + halfW, cy + halfH),
-                            RequestRefinedFrame = static () => { },
+                            RequestRefinedFrame = synchronous ? null : static () => { },
                         });
                         c.Flush();
                     }
@@ -166,12 +175,15 @@ public sealed class OverviewExactLayerTests(ITestOutputHelper output)
             }
 
             // Real time for the background workers (overview chunks, mips in simulated credit, exact layers).
-            (bool Complete, int Frames) Settle(double cx, double cy, double scale)
+            (bool Complete, int Frames) Settle(double cx, double cy, double scale, List<EditFrame>? frames = null, bool synchronous = false)
             {
                 var timeout = Stopwatch.StartNew();
                 for (var frame = 1; timeout.Elapsed < TimeSpan.FromSeconds(60); frame++)
                 {
-                    if (Frame(cx, cy, scale, false).Complete) return (true, frame);
+                    var rendered = Frame(cx, cy, scale, false, synchronous);
+                    frames?.Add(new(last.OverviewExactLayer, last.OverviewExactMilliseconds,
+                        last.OverviewExactLayer == 0 ? last.ExactObjects : last.OverviewExactPatched));
+                    if (rendered.Complete) return (true, frame);
                     Thread.Sleep(5);
                 }
                 log.Add($"not settled at {scale:F4}: pending={last.DetailTilesPending} unresolved={last.UnresolvedImages} requests={source.ImageRequestsPending} chunks={last.OverviewChunks} layer={last.OverviewExactLayer} prep={preparation.Statistics.Queued}/{preparation.Statistics.ReadyImages}/idle={preparation.Statistics.Idle} adopted={last.OverviewAdoptions} deferred={last.OverviewAdoptionsDeferred} hits={last.ObjectCacheHits} misses={last.ObjectCacheMisses}");
@@ -219,10 +231,17 @@ public sealed class OverviewExactLayerTests(ITestOutputHelper output)
                 }).ToArray();
                 document = new Map.Core.Editing.AddObjectsCommand(layer.Id, placed).Apply(document);
                 preparation.UpdateDocument(document, source, static () => { });
-                var editFrame = Frame(centre, centre, fit, false);
-                editKind = last.OverviewExactLayer; editPatched = last.OverviewExactPatched; editMs = last.OverviewExactMilliseconds;
-                log.Add($"edit frame: layer kind {editKind}, patched objects {editPatched} of {last.ExactObjects}, exact {editMs:F1} ms, frame {editFrame.Ms:F1} ms");
-                log.Add($"after edit settled={Settle(centre, centre, fit).Complete}");
+                var frames = new List<EditFrame>();
+                var edited = Settle(centre, centre, fit, frames);
+                byte[] editedPixels;
+                using (var snapshot = surface.Snapshot())
+                using (var bitmap = SKBitmap.FromImage(snapshot)) editedPixels = bitmap.Bytes;
+                var reference = Settle(centre, centre, fit, synchronous: true);
+                Assert.True(reference.Complete, "edited synchronous reference did not settle");
+                using var directSnapshot = surface.Snapshot();
+                using var directBitmap = SKBitmap.FromImage(directSnapshot);
+                edits.Add(new("place-10", edited.Complete, frames, Compare(editedPixels, directBitmap.Bytes).Max,
+                    Compare(pixels, editedPixels).Pixels));
             }
             var started = 0;
             var kinds = new int[4];
@@ -252,7 +271,7 @@ public sealed class OverviewExactLayerTests(ITestOutputHelper output)
             // (16 overview rasters wait in the preparation handoff that no frame takes), so the default run skips it.
             if (finalSettle) log.Add($"final settle={Settle(centre, centre, fit).Complete}");
             return new Result(settled, pan, wheel, settle.Frames, settle.Complete, exact, started, copied, pixels, string.Join("; ", log), exactMs, direct)
-                { EditKind = editKind, EditPatched = editPatched, EditMs = editMs };
+                { Edits = edits };
         }
         finally
         {
