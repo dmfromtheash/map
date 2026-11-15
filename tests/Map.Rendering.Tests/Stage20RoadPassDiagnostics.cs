@@ -87,5 +87,13 @@ public sealed class Stage20RoadJunctionCloseup
         var fork = scene.Main.FindNode(scene.ForkNode)!;
         using var forkCloseup = Stage20RoadRenderingTests.Render(scene.Document, 6, new WorldBounds(fork.X - 70, fork.Y - 60, fork.X + 70, fork.Y + 60), 840, 720);
         Stage20RoadRenderingTests.SaveForReview(forkCloseup, "fork-6x.png");
+        var withoutRoads = scene.Document with { Layers = [.. scene.Document.Layers.Select(layer =>
+            layer is ObjectLayer objects ? objects with { Roads = [] } : layer)] };
+        using var bare = Stage20RoadRenderingTests.Render(withoutRoads, 6,
+            new WorldBounds(node.X - 70, node.Y - 60, node.X + 70, node.Y + 60), 840, 720);
+        Assert.False(bare.GetPixelSpan().SequenceEqual(closeup.GetPixelSpan()), "junction body did not reach the rendered close-up");
+        using var bareFork = Stage20RoadRenderingTests.Render(withoutRoads, 6,
+            new WorldBounds(fork.X - 70, fork.Y - 60, fork.X + 70, fork.Y + 60), 840, 720);
+        Assert.False(bareFork.GetPixelSpan().SequenceEqual(forkCloseup.GetPixelSpan()), "fork body did not reach the rendered close-up");
     }
 }
