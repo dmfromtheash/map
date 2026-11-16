@@ -55,11 +55,12 @@ public static partial class SceneRenderer
     private static readonly ConditionalWeakTable<ObjectOverviewCache, DetailRasterJobs> DetailRasterContexts = [];
 
     /// <summary>
-    /// Workers for every render context: ProcessorCount − 2 (at most 8), below normal priority. Visible tile
+    /// Workers for every render context: the machine's CPU/RAM share, below normal priority. Visible tile
     /// work is FIFO (centre first); optional overview layers wait until visible work has drained.
     /// </summary>
-    private static readonly int DetailRasterWorkers = Math.Clamp(Environment.ProcessorCount - 2, 1, 8);
-    internal static DetailWorkQueue DetailRasterQueue = new(DetailRasterWorkers);
+    private static readonly int DetailRasterWorkers = MachineProfileMonitor.Shared.Limits.DetailWorkers;
+    internal static DetailWorkQueue DetailRasterQueue = new(DetailRasterWorkers,
+        () => MachineProfileMonitor.Shared.Limits.DetailWorkers);
 
     private static void QueueDetailWork(Action work, bool overviewLayer = false) => DetailRasterQueue.Add(work, overviewLayer);
 
@@ -69,11 +70,13 @@ public static partial class SceneRenderer
         private readonly object _gate = new();
         private readonly Queue<Action> _visible = [], _layers = [];
         private readonly Thread[] _threads;
-        private int _visibleRunning;
+        private readonly Func<int>? _concurrency;
+        private int _visibleRunning, _running;
         private bool _stopped;
 
-        internal DetailWorkQueue(int workers)
+        internal DetailWorkQueue(int workers, Func<int>? concurrency = null)
         {
+            _concurrency = concurrency;
             _threads = new Thread[workers];
             for (var i = 0; i < workers; i++)
             {
@@ -103,7 +106,8 @@ public static partial class SceneRenderer
                 bool visible;
                 lock (_gate)
                 {
-                    while (_visible.Count == 0 && (_layers.Count == 0 || _visibleRunning > 0))
+                    while (_running >= (_concurrency?.Invoke() ?? _threads.Length)
+                        || _visible.Count == 0 && (_layers.Count == 0 || _visibleRunning > 0))
                     {
                         if (_stopped && _layers.Count == 0) return;
                         Monitor.Wait(_gate);
@@ -111,6 +115,7 @@ public static partial class SceneRenderer
                     visible = _visible.Count > 0;
                     work = (visible ? _visible : _layers).Dequeue();
                     if (visible) _visibleRunning++;
+                    _running++;
                 }
                 try { work(); } catch (Exception ex) when (ex is not OutOfMemoryException) { }
                 finally
@@ -118,6 +123,7 @@ public static partial class SceneRenderer
                     lock (_gate)
                     {
                         if (visible) _visibleRunning--;
+                        _running--;
                         Monitor.PulseAll(_gate);
                     }
                 }

@@ -36,7 +36,7 @@ public sealed record DerivedCachePurgeResult(int Entries, long Files, long Bytes
 
 public sealed partial class StampDerivedAssetStore
 {
-    private enum JobKind { Ledger, Clean, Purge }
+    private enum JobKind { Ledger, Clean, Purge, MemoryPressure }
     private sealed record Job(JobKind Kind, Func<DerivedCacheEntry, bool>? Select = null,
         TaskCompletionSource<DerivedCacheJanitorReport>? Done = null);
 
@@ -112,6 +112,12 @@ public sealed partial class StampDerivedAssetStore
         if (!_jobs.Writer.TryWrite(new Job(JobKind.Clean))) Volatile.Write(ref _cleanQueued, 0);
     }
 
+    private void OnMemoryPressure()
+    {
+        if (!_disposed) _jobs.Writer.TryWrite(new Job(JobKind.MemoryPressure));
+        SourceChanged?.Invoke(); // Wake an idle canvas so its owner-thread cache trim can run.
+    }
+
     /// <summary>Runs one full pass now (after queued work) and returns its report.</summary>
     public Task<DerivedCacheJanitorReport> CleanNowAsync() => Enqueue(JobKind.Clean, null);
 
@@ -175,6 +181,13 @@ public sealed partial class StampDerivedAssetStore
             Directory.CreateDirectory(_root);
             switch (job.Kind)
             {
+                case JobKind.MemoryPressure:
+                    // RAM pressure drops the reusable decoded source; disk preparations remain
+                    // subject to their disk/free-space budget, cleaned by the existing janitor.
+                    ClearPreparedSource();
+                    lock (_memoryGate) { _memoryPixels.Clear(); _memoryBytes = 0; }
+                    RequestCleanup();
+                    break;
                 case JobKind.Ledger:
                     TouchLedger();
                     break;

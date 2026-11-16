@@ -19,7 +19,7 @@ public static partial class StyleRenderer
         pixels.Erase(SKColors.Transparent);
         var rowBytes = pixels.RowBytes;
         Parallel.For(0, (height + bandHeight - 1) / bandHeight,
-            new ParallelOptions { MaxDegreeOfParallelism = Math.Min(4, Environment.ProcessorCount) }, band =>
+            new ParallelOptions { MaxDegreeOfParallelism = MachineProfileMonitor.Shared.Limits.ExportWorkers }, band =>
             {
                 var top = band * bandHeight;
                 var rows = Math.Min(bandHeight, height - top);

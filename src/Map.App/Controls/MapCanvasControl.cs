@@ -644,6 +644,7 @@ public sealed partial class MapCanvasControl : Control
 
     public override void Render(DrawingContext context)
     {
+        UpdateFrameBudgetDisplay();
         if (_editor is null || Bounds.Width <= 0 || Bounds.Height <= 0)
         {
             return;

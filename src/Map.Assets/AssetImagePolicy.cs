@@ -16,7 +16,7 @@ public static class AssetImagePolicy
     public const long MaxPixels = 32L * 1024 * 1024;
     public const long MaxDecodedBytes = 128L * 1024 * 1024;
     public const long MaxEncodedBytes = 64L * 1024 * 1024;
-    public const long DefaultCacheDecodedBytes = 256L * 1024 * 1024;
+    public static long DefaultCacheDecodedBytes => Map.Rendering.MachineProfileMonitor.Shared.Limits.AssetCacheBytes;
     public const int MaxThumbnailDimension = 2_048;
     public const long MaxThumbnailPixels = 4L * 1024 * 1024;
     public const long MaxThumbnailEncodedBytes = 8L * 1024 * 1024;

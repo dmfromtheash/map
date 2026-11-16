@@ -114,12 +114,13 @@ public sealed class ColdLibraryWholeMapTests
     public void A_layer_rastered_in_strips_matches_a_single_pass_within_two_channel_steps()
     {
         // Owner 2026-11-15: objects behind the priority ones appeared after 4-44 s - one worker rastered the layer.
-        var workers = SceneRenderer.ExactLayerStripWorkers;
+        // test-change: partition origins are separate from the adaptive worker count.
+        var workers = SceneRenderer.ExactLayerStripPartitions;
         try
         {
             byte[] Settled(int strips)
             {
-                SceneRenderer.ExactLayerStripWorkers = strips;
+                SceneRenderer.ExactLayerStripPartitions = strips;
                 using var view = new WholeMapView(200_000, ready: true); // 2 % exact: 4 000 >= the strip minimum
                 var settled = view.Settle();
                 Assert.Equal(1, settled.Stats.OverviewExactLayer);
@@ -140,7 +141,7 @@ public sealed class ColdLibraryWholeMapTests
             // one step of a channel, never a missing or moved object.
             Assert.InRange(worst, 0, 2); // measured 2 in 290 of 1 048 576 bytes
         }
-        finally { SceneRenderer.ExactLayerStripWorkers = workers; }
+        finally { SceneRenderer.ExactLayerStripPartitions = workers; }
     }
 
     [Fact]
@@ -336,6 +337,8 @@ public sealed class ColdLibraryWholeMapTests
         private int _plans;
         private long _unresolved;
         public bool Ready => Volatile.Read(ref _ready) != 0;
+        // test-change: lets the controller wiring guard request a smaller explicit experiment budget.
+        public int DirectDrawBudget { get; set; } = DirectObjectLimit;
         public long? OverviewColorRevision => _remembered?.OverviewColorRevision ?? (Ready ? 1 : 0);
         public bool ImageRequestsPending => !Ready;
         public long UnresolvedRequestVersion => Volatile.Read(ref _unresolved);
