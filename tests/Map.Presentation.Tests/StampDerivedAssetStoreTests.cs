@@ -731,6 +731,13 @@ public sealed class StampDerivedAssetStoreTests : IDisposable
 
     [Fact]
     public async Task Persistent_missing_source_ignores_file_hints_until_the_slow_retry_confirms_restoration()
+        => await CheckRestoredSource(immediate: false);
+
+    [Fact(Skip = "defect: FileChanged ignores a restored persistent missing source until the 60 s retry; Request returns null")]
+    public async Task Restored_source_file_hint_retries_immediately_without_sixty_seconds()
+        => await CheckRestoredSource(immediate: true);
+
+    private async Task CheckRestoredSource(bool immediate)
     {
         await using var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));
         var record = ImportOwner(catalog, 1);
@@ -754,6 +761,11 @@ public sealed class StampDerivedAssetStoreTests : IDisposable
         File.WriteAllBytes(path, bytes);
         typeof(StampDerivedAssetStore).GetMethod("FileChanged", System.Reflection.BindingFlags.Instance
             | System.Reflection.BindingFlags.NonPublic)!.Invoke(store, [path]);
+        if (immediate)
+        {
+            Assert.NotNull(await store.Request(record.Sha256).WaitAsync(TimeSpan.FromSeconds(10)));
+            return;
+        }
         Assert.Null(await store.Request(record.Sha256));
         Assert.Empty(store.TakeInvalidated());
         clock.Advance(TimeSpan.FromSeconds(60));

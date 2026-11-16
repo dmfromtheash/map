@@ -1,11 +1,11 @@
 # Prepares the naming input for refs2 (owner 13.11: refs2 into the library): groups in the cls/chunks format plus
 # thumbnails (<=384 px, transparency on grey) for an agent with sight.
-#   refs2_groups.py <out_dir>   (reads H:\MapLibrary\plan\refs2\files.json, plan\cls\chunks_out, C:\Users\Leshe\Pictures\refs2)
+#   refs2_groups.py <out_dir>   (reads H:\MapLibrary\plan\refs2\files.json, plan\cls\chunks_out, H:\MapSources\refs2)
 import collections, json, os, re, sys
 from PIL import Image
 
 LIB = os.environ.get('MAP_LIBRARY_ROOT', r'H:\MapLibrary')
-SRC = r'C:\Users\Leshe\Pictures\refs2'
+SRC = r'H:\MapSources\refs2'  # moved from C:\Users\Leshe\Pictures (owner, 2026-11-16)
 OUT = sys.argv[1]
 
 

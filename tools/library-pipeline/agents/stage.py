@@ -2,7 +2,7 @@
 import glob, io, json, os, random, subprocess, sys, tarfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 LIB = r'H:\MapLibrary'
-REFS = r'C:\Users\Leshe\Pictures\refs'
+REFS = r'H:\MapSources\refs'  # moved from C:\Users\Leshe\Pictures (owner, 2026-11-16)
 SSH = ['ssh', '-o', 'BatchMode=yes', 'user@192.168.31.25']
 OLD = r'C:\Users\Leshe\AppData\Local\Temp\claude\5e61ffe7b5425a05\473c8591-4ef9-4178-a83a-ecec8c1a5c4b\scratchpad'
 

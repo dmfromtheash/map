@@ -19,10 +19,10 @@ public sealed class StyleScaleBenchmark(ITestOutputHelper output)
     private const int DeviceWidth = 768, DeviceHeight = 432, Columns = 1000;
     private const double Spacing = 130;
 
-    [Fact]
+    [OptInProbe("MAP_STYLE_SCALE", "StyleScaleEquivalenceTests.A_styled_frame_after_edits_is_byte_equal_to_the_frame_of_a_freshly_built_map", "1")]
     public void Styles_on_100k_and_1M_owner_mountains()
     {
-        if (Environment.GetEnvironmentVariable("MAP_STYLE_SCALE") != "1") return;
+
         var counts = (Environment.GetEnvironmentVariable("MAP_STYLE_SCALE_COUNTS") ?? "100000,1000000")
             .Split(',').Select(int.Parse).ToArray();
         var presets = (Environment.GetEnvironmentVariable("MAP_STYLE_SCALE_PRESETS")

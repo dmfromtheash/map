@@ -15,7 +15,7 @@ def add_arguments(parser, classifications=False):
     parser.add_argument('--refs2-inventory', type=Path)
     parser.add_argument('--refs2-files', type=Path, help='files.json with SHA and reviewed duplicate links')
     parser.add_argument('--refs2-prefix', default='refs2')
-    parser.add_argument('--refs2-root', type=Path, default=Path(r'C:\Users\Leshe\Pictures'),
+    parser.add_argument('--refs2-root', type=Path, default=Path(r'H:\MapSources'),
                         help='root before the rel prefix (originals, read-only)')
     parser.add_argument('--refs2-pixel-duplicates', type=Path,
                         help='explicit reviewed list of pixel-equivalent rels; never infer from a path collision')

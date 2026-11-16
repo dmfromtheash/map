@@ -25,6 +25,7 @@
   <ItemGroup>
     <Compile Include="..\Shared\FixedWorkingMemory.cs" Link="Shared\FixedWorkingMemory.cs" />
     <Compile Include="..\Shared\OptInFactAttribute.cs" Link="Shared\OptInFactAttribute.cs" />
+    <Compile Include="..\Shared\OptInProbeAttribute.cs" Link="Shared\OptInProbeAttribute.cs" />
   </ItemGroup>
 
 </Project>

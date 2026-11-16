@@ -1,6 +1,6 @@
 """Sequential PC queue for shop previews <=256 px, DEC-108; uses the normal two-model producer.
 
-No source deletion. Defaults match the existing refs queue. refs2 rels require the Pictures root.
+No source deletion. Defaults match the existing refs queue. refs2 rels require the sources root (H:\MapSources).
 --dry-run reads the local list and image headers only, without locks, GPU or writes.
 """
 import argparse
@@ -14,7 +14,7 @@ import run_upscale2 as pipeline
 
 def parser():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--refs-root', type=Path, default=Path(r'C:\Users\Leshe\Pictures\refs'))
+    p.add_argument('--refs-root', type=Path, default=Path(r'H:\MapSources\refs'))
     p.add_argument('--list', type=Path, default=pipeline.LIB / 'lists/all.txt')
     p.add_argument('--library-root', type=Path, default=pipeline.LIB)
     p.add_argument('--limit', type=int)

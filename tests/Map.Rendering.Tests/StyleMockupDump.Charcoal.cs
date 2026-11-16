@@ -31,12 +31,12 @@ public sealed partial class StyleMockupDump
         float[] Layers,              // value thresholds of the three hatch layers
         string Paper, string Dark, string ChalkColour, string RedColour);
 
-    [Fact]
+    [OptInProbe("MAP_STYLE_CHARCOAL,MAP_LIGHT_ASSETS", "StyleRenderingTests.Reviewed_presets_change_pixels_and_rebuild_after_a_local_edit")]
     public void Dump_charcoal_when_asked()
     {
         var output = Environment.GetEnvironmentVariable("MAP_STYLE_CHARCOAL");
         var assets = Environment.GetEnvironmentVariable("MAP_LIGHT_ASSETS");
-        if (string.IsNullOrEmpty(output) || string.IsNullOrEmpty(assets) || !Directory.Exists(assets)) return;
+        Assert.True(Directory.Exists(assets), "opt-in asset directory is missing: " + assets);
         Directory.CreateDirectory(output);
         var only = Environment.GetEnvironmentVariable("MAP_STYLE_CHARCOAL_ONLY");
         var sceneOnly = Environment.GetEnvironmentVariable("MAP_STYLE_CHARCOAL_SCENE");

@@ -265,10 +265,10 @@ public sealed class Stage19WaterJoinRenderingTests
         Assert.True(IsWater(flat.GetPixel(420, 318)), "at equal levels the river runs over both pieces");
     }
 
-    [Fact]
+    [OptInProbe("MAP_WATER_FRAMES", "Stage19WaterJoinRenderingTests.Water_runs_past_the_coast_and_dissolves_instead_of_stopping_at_it")]
     public void Frames_for_review()
     {
-        if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("MAP_WATER_FRAMES"))) return;
+
         using var twoLands = Render(TwoLands(), 2);
         Save(twoLands, "two-lands-2x.png");
         using var plateau = Render(TwoLands(upperLevel: 1, riverLevel: 0), 2);

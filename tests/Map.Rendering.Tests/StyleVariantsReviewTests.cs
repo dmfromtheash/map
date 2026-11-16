@@ -10,11 +10,36 @@ namespace Map.Rendering.Tests;
 /// </summary>
 public sealed class StyleVariantsReviewTests
 {
-    [OptInFact("manual style-variant PNG sheet, no automated visual baseline", "MAP_STYLE_VARIANTS")]
+    [Theory]
+    [InlineData("night")]
+    [InlineData("winter")]
+    [InlineData("parchment")]
+    [InlineData("sepia")]
+    [InlineData("bw")]
+    [InlineData("red-sky")]
+    [InlineData("faded")]
+    [InlineData("overcast")]
+    public void A_small_colour_look_changes_pixels_and_repeats_exactly(string id)
+    {
+        var scene = new MapDocument(DocumentId.New(), "look", DateTimeOffset.UnixEpoch,
+            new CanvasDefinition(96, 64, "px", "#FF33885A"),
+            [new BaseColorLayer(LayerId.New(), "base", true, false, 1, "#FF33885A")]);
+        using var plain = Render(scene);
+        var preset = FilterColorEffects.Preset(id)!;
+        var filter = new FilterLayer(LayerId.New(), "filter", true, false, 1,
+            FilterColorEffects.WithPreset(new FilterSettings(), preset));
+        var styled = scene with { Layers = [.. scene.Layers, filter] };
+        using var first = Render(styled);
+        using var again = Render(styled);
+        Assert.NotEqual(plain.GetPixel(48, 32), first.GetPixel(48, 32));
+        Assert.Equal(first.Bytes, again.Bytes);
+    }
+
+    [OptInProbe("MAP_STYLE_VARIANTS", "StyleVariantsReviewTests.A_small_colour_look_changes_pixels_and_repeats_exactly")]
     public void Variants_for_review()
     {
         var folder = Environment.GetEnvironmentVariable("MAP_STYLE_VARIANTS");
-        ArgumentException.ThrowIfNullOrWhiteSpace(folder);
+
         Directory.CreateDirectory(folder);
         var document = Showcase();
         Save(Render(document), folder, "base.png");

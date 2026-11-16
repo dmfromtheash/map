@@ -108,24 +108,31 @@ public sealed class ObjectSurfaceAndLevelSliderTests
     }
 
     [Fact]
-    public void Choosing_an_asset_arms_placement_without_a_second_click_on_another_tool()
+    public async Task Choosing_an_asset_arms_placement_without_a_second_click_on_another_tool()
     {
-        var editor = NewEditor();
+        var root = Directory.CreateTempSubdirectory("map-placement-guard-").FullName;
+        try
+        {
+        await using var catalog = new Map.Assets.AssetCatalog(Path.Combine(root, "catalog"));
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "Map.slnx"))) directory = directory.Parent;
+        Assert.NotNull(directory);
+        var imported = catalog.ImportSet([Path.Combine(directory.FullName, "tests", "fixtures", "assets", "owner-mountain-01.png")],
+            "fixture", new Map.Assets.AssetImportOptions(), DateTimeOffset.UnixEpoch);
+        var editor = new EditorViewModel(TestData.Document(), null, false, new FakeProjectStore(),
+            new FakeRecentMaps(), new FakeFilePicker(), new FakePrompts(), new FakeLog(), assetCatalog: catalog);
         editor.Session.Viewport.Resize(1000, 700);
         Assert.False(editor.HasChosenAsset);
 
-        var set = editor.LibrarySets.FirstOrDefault();
-        if (set is null)
-        {
-            // No sample library in this environment: the arming path is covered by the native
-            // smoke instead, and nothing here may pretend otherwise.
-            return;
-        }
+        var set = Assert.Single(editor.LibrarySets);
+        Assert.Equal(imported.Id, set.SetId);
 
         editor.SelectAssetSet(set.SetId);
 
         Assert.True(editor.HasChosenAsset);
         Assert.Equal(EditorTool.Stamp, editor.ActiveTool);
+        }
+        finally { Directory.Delete(root, recursive: true); }
     }
 
     // ------------------------------------------- the first block of a selected object

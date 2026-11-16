@@ -15,7 +15,7 @@ from pathlib import Path
 from PIL import Image
 
 LIB = Path(r'H:\MapLibrary')
-REFS = Path(r'C:\Users\Leshe\Pictures\refs')
+REFS = Path(r'H:\MapSources\refs')  # moved from C:\Users\Leshe\Pictures (owner, 2026-11-16)
 MAC = 'user@192.168.31.25'
 SSH = ['ssh', '-o', 'BatchMode=yes', '-o', 'ServerAliveInterval=30', MAC]
 JOBS = 'MapWork/upscale/jobs'

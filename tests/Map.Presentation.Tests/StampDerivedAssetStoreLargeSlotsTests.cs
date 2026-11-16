@@ -15,10 +15,10 @@ public sealed class StampDerivedAssetStoreLargeSlotsTests(ITestOutputHelper outp
     /// by a simulated 60 Hz frame under the same 2 ms rule as <see cref="CatalogStampImageSource.BeginFrame()"/>.
     /// Runs only with MAP_LARGE_SLOTS_BENCH=1 (owner mountains resized in a disposable catalog).
     /// </summary>
-    [Fact]
+    [OptInProbe("MAP_LARGE_SLOTS_BENCH", "StampDerivedAssetStoreLargeSlotsTests.Large_results_finish_without_waiting_for_the_canvas_and_give_their_bytes_back", "1")]
     public async Task Dense_view_of_large_results_measurement()
     {
-        if (Environment.GetEnvironmentVariable("MAP_LARGE_SLOTS_BENCH") != "1") return;
+
         var count = int.TryParse(Environment.GetEnvironmentVariable("MAP_LARGE_SLOTS_COUNT"), out var n) ? n : 300;
         // Level 1: sources of 1024–2046 px halved once, so every result pays a full decode (the weak laptop's shape).
         var level = Environment.GetEnvironmentVariable("MAP_LARGE_SLOTS_LEVEL") == "1" ? 1 : 0;

@@ -1,4 +1,5 @@
 ﻿using Map.Core.Documents;
+using Map.Core.Editing;
 using Map.Rendering.Styles;
 using SkiaSharp;
 
@@ -9,6 +10,28 @@ public sealed partial class StyleRenderingTests
 {
     private const string Sha = "2222222222222222222222222222222222222222222222222222222222222222";
     private static readonly WorldBounds View = new(0, 0, 512, 384);
+
+    public static TheoryData<MapStylePreset> ReviewPresets => new(Enum.GetValues<MapStylePreset>());
+
+    [Theory]
+    [MemberData(nameof(ReviewPresets))]
+    public void Reviewed_presets_change_pixels_and_rebuild_after_a_local_edit(MapStylePreset preset)
+    {
+        using var mountain = Mountain();
+        var scene = Scene(MapStyle.For(preset));
+        using var before = Draw(scene, mountain, View);
+        using var plain = Draw(scene with { Style = null }, mountain, View);
+        Assert.True(MaxDiff(plain, before) > 8, $"{preset}: style did not change pixels");
+        var layer = scene.Layers.OfType<ObjectLayer>().Single();
+        var original = Assert.Single(layer.Objects);
+        var moved = SceneObjectClone.At(original, original.X + 96, original.Y + 32);
+        var revised = Map.Core.Editing.DocumentEditor.ReplaceObject(scene, moved);
+        using var edited = Draw(revised, mountain, View);
+        Assert.True(MaxDiff(before, edited) > 8, $"{preset}: edit did not reach the styled frame");
+        var cold = revised with { Layers = [revised.Layers[0], new ObjectLayer(layer.Id, layer.Name, true, false, 1, [moved])] };
+        using var reference = Draw(cold, mountain, View);
+        Assert.Equal(reference.Bytes, edited.Bytes);
+    }
 
     [Fact]
     public void A_style_switched_off_draws_exactly_the_map_without_style()

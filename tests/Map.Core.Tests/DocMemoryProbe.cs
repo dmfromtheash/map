@@ -53,11 +53,30 @@ public sealed class DocMemoryProbe
             [new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FFFFFFFF"),
              new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, objects)]);
 
-    [OptInFact("100k/1M document/index memory report (no CI memory budget)", "MAP_DOC_MEM_PROBE")]
+    [Fact]
+    public void Load_like_duplicates_share_styles_and_short_strings_without_changing_values()
+    {
+        var loaded = Build(32, loadLike: true, uniqueNames: false);
+        Assert.Equal(32, loaded.Length);
+        // The bounded sharing table is deliberately lossy: tolerate occasional hash collisions.
+        var shared = Enumerable.Range(0, 16).Count(i => ReferenceEquals(loaded[i].Stamp, loaded[i + 16].Stamp));
+        Assert.True(shared >= 12, $"only {shared}/16 duplicate styles were shared");
+        Assert.Same(loaded[0].FillColor, loaded[1].FillColor);
+        Assert.Same(loaded[0].Stamp!.AssetSha256, loaded[16].Stamp!.AssetSha256);
+        Assert.NotEqual(loaded[0].Stamp!.AssetSha256, loaded[1].Stamp!.AssetSha256);
+        var original = Document(loaded);
+        var layer = (ObjectLayer)original.Layers[1];
+        var revised = layer.ObjectStorage.ReplaceAt(16, loaded[16] with { Name = "edited" });
+        Assert.Same(layer.Objects[0], revised[0]);
+        Assert.Equal("Гора", layer.Objects[16].Name);
+        Assert.Equal("edited", revised[16].Name);
+    }
+
+    [OptInProbe("MAP_DOC_MEM_PROBE", nameof(Load_like_duplicates_share_styles_and_short_strings_without_changing_values))]
     public void Measure()
     {
         var output = Environment.GetEnvironmentVariable("MAP_DOC_MEM_PROBE");
-        ArgumentException.ThrowIfNullOrWhiteSpace(output);
+        if (string.IsNullOrWhiteSpace(output)) return;
         var report = new StringBuilder();
         foreach (var n in new[] { 100_000, 1_000_000 }) MeasureOne(n, report);
         File.AppendAllText(output, report.ToString());

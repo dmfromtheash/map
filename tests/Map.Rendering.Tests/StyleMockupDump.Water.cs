@@ -17,12 +17,12 @@ public sealed partial class StyleMockupDump
     /// <summary>One sea variant: its ink, shallow, middle and deep water.</summary>
     private sealed record Water(int Variant, string Ink, string Shallow, string Middle, string Deep);
 
-    [Fact]
+    [OptInProbe("MAP_STYLE_WATER,MAP_LIGHT_ASSETS", "StyleRenderingTests.Reviewed_presets_change_pixels_and_rebuild_after_a_local_edit")]
     public void Dump_water_when_asked()
     {
         var output = Environment.GetEnvironmentVariable("MAP_STYLE_WATER");
         var assets = Environment.GetEnvironmentVariable("MAP_LIGHT_ASSETS");
-        if (string.IsNullOrEmpty(output) || string.IsNullOrEmpty(assets) || !Directory.Exists(assets)) return;
+        Assert.True(Directory.Exists(assets), "opt-in asset directory is missing: " + assets);
         Directory.CreateDirectory(output);
         var only = Environment.GetEnvironmentVariable("MAP_STYLE_WATER_ONLY");
         var sceneOnly = Environment.GetEnvironmentVariable("MAP_STYLE_WATER_SCENE");

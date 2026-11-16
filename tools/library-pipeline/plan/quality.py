@@ -10,7 +10,7 @@ from PIL import Image
 LIB = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # deployed: H:\MapLibrary\pipeline\quality.py
 if not os.path.exists(os.path.join(LIB, 'map-library.json')):  # repository copy: tools/library-pipeline/plan
     LIB = os.environ.get('MAP_LIBRARY_ROOT', r'H:\MapLibrary')
-REFS = r'C:\Users\Leshe\Pictures\refs'
+REFS = r'H:\MapSources\refs'  # moved from C:\Users\Leshe\Pictures (owner, 2026-11-16)
 
 ap = argparse.ArgumentParser()
 ap.add_argument('--perfile', required=True)

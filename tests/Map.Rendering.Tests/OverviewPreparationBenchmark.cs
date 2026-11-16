@@ -10,10 +10,8 @@ public sealed class OverviewPreparationBenchmark(ITestOutputHelper output)
 {
     [Theory]
     // background=false is the synchronous reference path (plan and variants inside the frame).
-    [InlineData(100_000, true)]
-    [InlineData(1_000_000, true)]
-    [InlineData(100_000, false)]
-    [InlineData(1_000_000, false)]
+    [InlineData(2_000, true)]
+    [InlineData(2_000, false)]
     public void Cold_bucket_and_warm_frames(int count, bool background)
     {
         var mode = background ? "background" : "sync";
@@ -51,7 +49,14 @@ public sealed class OverviewPreparationBenchmark(ITestOutputHelper output)
             var change = Frame(document, cache, scale / Math.Sqrt(2), prep);
             switches.Add(change.Ms);
             bucketReady.Add(Settle(document, cache, prep, scale / Math.Sqrt(2), change.Stats));
-            for (var frame = 0; frame < 40; frame++) warm.Add(Frame(document, cache, scale / Math.Sqrt(2), prep).Ms);
+            for (var frame = 0; frame < 4; frame++)
+            {
+                var ready = Frame(document, cache, scale / Math.Sqrt(2), prep);
+                Assert.Equal(count, ready.Stats.ObjectsDrawn);
+                Assert.True(ready.Stats.OverviewChunks > 0, "overview path was not exercised");
+                Assert.Equal(0, ready.Stats.DetailTilesPending);
+                warm.Add(ready.Ms);
+            }
             if (prep is null) continue;
             var work = prep.Statistics;
             Assert.Null(work.Error);
@@ -116,6 +121,13 @@ public sealed class OverviewPreparationBenchmark(ITestOutputHelper output)
             output.WriteLine($"{count} {mode} {name}: n={values.Count} median={values[values.Count / 2]:F3}ms p99={values[(int)Math.Ceiling(values.Count * .99) - 1]:F3}ms max={values[^1]:F3}ms 1%low={1000 / tail:F1}fps");
         }
     }
+
+    [OptInProbeTheory("MAP_OVERVIEW_PREPARATION_BENCH", nameof(Cold_bucket_and_warm_frames))]
+    [InlineData(100_000, true)]
+    [InlineData(1_000_000, true)]
+    [InlineData(100_000, false)]
+    [InlineData(1_000_000, false)]
+    public void Large_cold_bucket_and_warm_frames(int count, bool background) => Cold_bucket_and_warm_frames(count, background);
 
     private sealed class Colors : IStampImageSource
     {

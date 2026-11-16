@@ -35,6 +35,7 @@
     <Compile Include="..\Shared\FixedWorkingMemory.cs" Link="Shared\FixedWorkingMemory.cs" />
     <Compile Include="..\Shared\OptInFactAttribute.cs" Link="Shared\OptInFactAttribute.cs" />
     <Compile Include="..\Shared\ColorCacheFixture.cs" Link="Shared\ColorCacheFixture.cs" />
+    <Compile Include="..\Shared\OptInProbeAttribute.cs" Link="Shared\OptInProbeAttribute.cs" />
     <Compile Include="../../tools/Map.EditLatency/UiProbe.cs" Link="Support/UiProbe.cs" />
     <Compile Include="../../tools/Map.Performance/DerivedBuildProbe.cs" Link="Support/DerivedBuildProbe.cs" />
     <Compile Include="../../tools/Map.Performance/PerformanceContract.cs" Link="Support/PerformanceContract.cs" />

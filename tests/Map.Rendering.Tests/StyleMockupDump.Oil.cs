@@ -28,12 +28,12 @@ public sealed partial class StyleMockupDump
         string SeaNear, string SeaDeep, string LandCoast, string LandInland,
         string River, string Imprimatura, string Contour);
 
-    [Fact]
+    [OptInProbe("MAP_STYLE_OIL,MAP_LIGHT_ASSETS", "StyleRenderingTests.Reviewed_presets_change_pixels_and_rebuild_after_a_local_edit")]
     public void Dump_oil_when_asked()
     {
         var output = Environment.GetEnvironmentVariable("MAP_STYLE_OIL");
         var assets = Environment.GetEnvironmentVariable("MAP_LIGHT_ASSETS");
-        if (string.IsNullOrEmpty(output) || string.IsNullOrEmpty(assets) || !Directory.Exists(assets)) return;
+        Assert.True(Directory.Exists(assets), "opt-in asset directory is missing: " + assets);
         Directory.CreateDirectory(output);
         var only = Environment.GetEnvironmentVariable("MAP_STYLE_OIL_ONLY");
         var sceneOnly = Environment.GetEnvironmentVariable("MAP_STYLE_OIL_SCENE");

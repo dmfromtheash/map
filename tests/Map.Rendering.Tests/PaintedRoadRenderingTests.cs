@@ -60,11 +60,11 @@ public sealed class PaintedRoadRenderingTests
     }
 
     /// <summary>Frames for the comparison sheet with the owner's mountains (MAP_ROAD_FRAMES = output folder).</summary>
-    [OptInFact("manual road PNG sheet, no automated visual baseline", "MAP_ROAD_FRAMES")]
+    [OptInProbe("MAP_ROAD_FRAMES", "PaintedRoadRenderingTests.Painted_strokes_change_the_earth_and_older_looks_do_not_carry_them")]
     public void Frames_for_review()
     {
         var folder = Environment.GetEnvironmentVariable("MAP_ROAD_FRAMES");
-        ArgumentException.ThrowIfNullOrWhiteSpace(folder);
+
         Directory.CreateDirectory(folder);
         VectorPoint[] course = [new(10, 60), new(160, 120), new(300, 230), new(460, 250), new(620, 330), new(890, 400)];
         foreach (var (name, style) in new[]

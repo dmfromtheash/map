@@ -65,7 +65,9 @@ if os.path.exists(_rep):
     for item in (_r.get('files') if isinstance(_r, dict) else _r) or []:
         rel_ = item.get('source') or item.get('rel') or item.get('path') or ''
         rel_ = rel_.replace('/', '\\')
-        if 'Pictures\\refs\\' in rel_: rel_ = rel_.split('Pictures\\refs\\', 1)[1]
+        # Sources moved from C:\Users\Leshe\Pictures to H:\MapSources (owner, 2026-11-16); old reports keep the old path.
+        for _root in ('Pictures\\refs\\', 'MapSources\\refs\\'):
+            if _root in rel_: rel_ = rel_.split(_root, 1)[1]; break
         TEX_VERDICT[rel_] = item.get('verdict')
 # What was seen on the pictures (look/out/*.jsonl): common name, detail, how drawn, view, colour, fixes.
 DRAWN = {'ink-outline': 'Контур тушью', 'ink-filled': 'Тушь с заливкой', 'color': 'Цветной рисунок', 'watercolor': 'Акварель',

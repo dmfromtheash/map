@@ -12,12 +12,18 @@ namespace Map.Presentation.Tests;
 /// Invokes the worker after admission: the Windows named heavy-operation gate is unavailable on macOS.</summary>
 public sealed class SaveWorkflowCostProbeTests
 {
-    [OptInFact("owner-mountain save/autosave worker cost report (no CI time budget)", "MAP_SAVE_WORKFLOW_COUNT")]
+    [Fact]
+    public Task Small_save_and_autosave_preserve_the_edit_assets_and_preview() => Run(64);
+
+    [OptInProbe("MAP_SAVE_WORKFLOW_COUNT", nameof(Small_save_and_autosave_preserve_the_edit_assets_and_preview))]
     public async Task Measure_save_and_autosave_with_owner_art()
     {
         var countText = Environment.GetEnvironmentVariable("MAP_SAVE_WORKFLOW_COUNT");
-        ArgumentException.ThrowIfNullOrWhiteSpace(countText);
-        var count = int.Parse(countText);
+        await Run(int.Parse(countText!));
+    }
+
+    private static async Task Run(int count)
+    {
         var root = Directory.CreateTempSubdirectory("map-save-workflow-").FullName;
         try
         {
@@ -68,9 +74,21 @@ public sealed class SaveWorkflowCostProbeTests
             var autosavePath = Path.Combine(journal.DirectoryFor(document.Id.Value), record.SnapshotFileName);
             foreach (var file in new[] { path, autosavePath })
             {
+                var expected = file == path ? document : changed;
+                var opened = Map.Persistence.MapProjectStore.Open(file).Document;
+                var savedObjects = opened.Layers.OfType<ObjectLayer>().Single().Objects;
+                Assert.Equal(count, savedObjects.Count);
+                Assert.Equal(expected.Layers.OfType<ObjectLayer>().Single().Objects[count / 2].ObjectOpacity,
+                    savedObjects[count / 2].ObjectOpacity);
+                Assert.Equal(art, Assert.Single(opened.Assets).EmbeddedContent);
                 using var zip = ZipFile.OpenRead(file);
                 using var preview = zip.GetEntry("preview.png")!.Open();
-                Console.WriteLine($"PREVIEW count={count} op={(file == path ? "save" : "autosave")} sha256={Convert.ToHexStringLower(SHA256.HashData(preview))}");
+                using var previewBytes = new MemoryStream();
+                preview.CopyTo(previewBytes);
+                using var images = new ExportStampImageSource(expected, path, null);
+                Assert.Equal(ThumbnailRenderer.RenderPng(expected, stamps: images), previewBytes.ToArray());
+                previewBytes.Position = 0;
+                Console.WriteLine($"PREVIEW count={count} op={(file == path ? "save" : "autosave")} sha256={Convert.ToHexStringLower(SHA256.HashData(previewBytes))}");
             }
         }
         finally { Directory.Delete(root, recursive: true); }

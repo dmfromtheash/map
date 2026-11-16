@@ -6,12 +6,12 @@ namespace Map.Rendering.Tests;
 public sealed partial class StyleMockupDump
 {
     /// <summary>Review artifacts use the real program renderer, not the mockup shaders. Opt-in, no owner data written.</summary>
-    [Fact]
+    [OptInProbe("MAP_R09_PRESETS,MAP_LIGHT_ASSETS", "StyleRenderingTests.Reviewed_presets_change_pixels_and_rebuild_after_a_local_edit")]
     public void Dump_approved_presets_from_program_when_asked()
     {
         var output = Environment.GetEnvironmentVariable("MAP_R09_PRESETS");
         var assets = Environment.GetEnvironmentVariable("MAP_LIGHT_ASSETS");
-        if (string.IsNullOrEmpty(output) || string.IsNullOrEmpty(assets)) return;
+
         Directory.CreateDirectory(output);
         var images = Directory.GetFiles(assets, "*.png").Take(3)
             .ToDictionary(f => Path.GetFileNameWithoutExtension(f)!, f =>
