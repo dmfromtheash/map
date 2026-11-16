@@ -382,6 +382,19 @@ public enum RenderLodTier
 /// <summary>Options of one scene pass. Selection overlay is editor chrome and is opt-in only.</summary>
 public sealed class RenderOptions
 {
+    internal bool IsLayerRepair { get; private set; }
+    internal RenderOptions ForLayerRepair()
+    {
+        var copy = (RenderOptions)MemberwiseClone();
+        copy.IsLayerRepair = true;
+        return copy;
+    }
+    internal RenderOptions WithoutObjectOverrides()
+    {
+        var copy = (RenderOptions)MemberwiseClone();
+        copy._objectOverrides = null;
+        return copy;
+    }
     /// <summary>Borrowed only during a native frame. Cached detail images remain raster-owned.</summary>
     public GRContext? GpuContext { get => _gpuContext; init => _gpuContext = value; }
     private GRContext? _gpuContext;
@@ -500,7 +513,8 @@ public sealed class RenderOptions
     /// Bounded live object substitutions for an editor gesture. They are evaluated over the
     /// immutable source revision without constructing a 50K-sized preview document.
     /// </summary>
-    public IReadOnlyList<SceneObject>? ObjectOverrides { get; init; }
+    public IReadOnlyList<SceneObject>? ObjectOverrides { get => _objectOverrides; init => _objectOverrides = value; }
+    private IReadOnlyList<SceneObject>? _objectOverrides;
 
     /// <summary>
     /// Bounded transient objects for an armed placement. They are drawn only by editor callers,
@@ -922,8 +936,8 @@ public static partial class SceneRenderer
         // The same holds for any frame that repeats the previous frame's view (LayerImageCache.Steady);
         // a frame that only moves the camera at the same scale shifts a wider kept image (TryDrawPanned).
         var motion = options.LayerImages is not null && !options.IsExport ? options.LayerImages.Motion(canvas) : FrameMotion.Changed;
-        var eligible = options.LayerImages is not null && options.Stats is not null && !options.IsExport
-            && options.ObjectOverrides is not { Count: > 0 };
+        var eligible = options.LayerImages is not null && options.Stats is not null && !options.IsExport;
+        var baseOptions = options.ObjectOverrides is { Count: > 0 } ? options.WithoutObjectOverrides() : options;
         // A wheel notch changes the scale: the kept image stands in, scaled, within its limits.
         var panning = eligible && motion is FrameMotion.Panned or FrameMotion.Changed;
         var keepLayers = eligible && !panning
@@ -980,11 +994,22 @@ public static partial class SceneRenderer
             }
 
             var clippingSource = layerIndex > 0 ? document.Layers[layerIndex - 1] : null;
-            if ((panning || keepLayers && motion == FrameMotion.Still) && layer is ObjectLayer panned && CanKeepLayerImage(panned, options)
-                && DrawPannedObjectLayer(canvas, document, panned, clippingSource, options, reuseOnly: !panning))
+            if (layer is ObjectLayer previewLayer && options.ObjectOverrides is { Count: > 0 })
+            {
+                var preview = DrawLocalObjectPreview(canvas, document, previewLayer, clippingSource, view, options,
+                    baseOptions, panning, keepLayers);
+                if (preview == true) continue;
+                if (preview == false)
+                {
+                    DrawLayer(canvas, document, layer, clippingSource, view, options, drawRivers: false);
+                    continue;
+                }
+            }
+            if ((panning || keepLayers && motion == FrameMotion.Still) && layer is ObjectLayer panned && CanKeepLayerImage(panned, baseOptions)
+                && DrawPannedObjectLayer(canvas, document, panned, clippingSource, baseOptions, reuseOnly: !panning))
                 continue;
-            if (keepLayers && layer is ObjectLayer objects && CanKeepLayerImage(objects, options)
-                && DrawKeptObjectLayer(canvas, document, objects, clippingSource, view, options))
+            if (keepLayers && layer is ObjectLayer objects && CanKeepLayerImage(objects, baseOptions)
+                && DrawKeptObjectLayer(canvas, document, objects, clippingSource, view, baseOptions))
                 continue;
             if (keepLayers && layer is ObjectLayer masked && options.MaskEditLayerId == masked.Id && CanKeepMaskedContent(masked, options))
             {
@@ -1078,7 +1103,10 @@ public static partial class SceneRenderer
     private sealed class LayerImageSupport
     {
         private readonly int _unsupported;
+        private readonly int _unrepairable;
+        public double MaximumSide { get; }
         public bool Supported => _unsupported == 0;
+        public bool Repairable => _unrepairable == 0;
         // Revisions a frame never drew (several edits between two frames) are derived through their deltas too:
         // only the first revision was then known, and the frame after a placement counted all 2 million objects
         // (192 ms, live place-10 trace 2026-11-15). Bounded, so a long unrendered chain falls back to one count.
@@ -1099,11 +1127,21 @@ public static partial class SceneRenderer
             {
                 _unsupported = previous._unsupported - delta!.Removed.Count(i => !Independent(delta.Source.Objects[i]))
                     + delta.Added.Count(i => !Independent(layer.Objects[i]));
+                _unrepairable = previous._unrepairable - delta.Removed.Count(i => !RepairableStamp(delta.Source.Objects[i]))
+                    + delta.Added.Count(i => !RepairableStamp(layer.Objects[i]));
+                MaximumSide = previous.MaximumSide;
+                foreach (var index in delta.Added)
+                    MaximumSide = Math.Max(MaximumSide, Math.Max(layer.Objects[index].Width, layer.Objects[index].Height));
             }
             else
             {
                 Interlocked.Increment(ref _fullCounts);
-                _unsupported = layer.Objects.Count(o => !Independent(o));
+                foreach (var item in layer.Objects)
+                {
+                    if (!Independent(item)) _unsupported++;
+                    if (!RepairableStamp(item)) _unrepairable++;
+                    MaximumSide = Math.Max(MaximumSide, Math.Max(item.Width, item.Height));
+                }
             }
         }
 
@@ -1117,6 +1155,10 @@ public static partial class SceneRenderer
             SceneObjectKind.Text => o.Text is null or { Blend: "Normal" },
             _ => false,
         };
+
+        public static bool RepairableStamp(SceneObject o) => o.Kind == SceneObjectKind.Stamp
+            && o.Stamp is { Blur: 0, ShadowOpacity: 0, ClipMaskEnabled: false, Blend: "Normal" }
+            && !AreaBeautyRenderer.HasMass(o);
     }
 
     private static readonly ConditionalWeakTable<ObjectLayer, LayerImageSupport> KeptLayerSupport = [];
@@ -1158,7 +1200,7 @@ public static partial class SceneRenderer
     internal static long KeptLayerSupportFullCounts => LayerImageSupport.FullCounts;
 
     private static bool DrawKeptObjectLayer(SKCanvas canvas, MapDocument document, ObjectLayer layer, MapLayer? clippingSource,
-        WorldBounds view, RenderOptions options)
+        WorldBounds view, RenderOptions options, SKRegion? exclude = null)
     {
         var stats = options.Stats!;
         var pendingBefore = stats.DetailTilesPending;
@@ -1167,9 +1209,16 @@ public static partial class SceneRenderer
         // level and per-object effects of the frame, the stamp images, the foreground surface.
         // A fast frame (the camera moving) draws dense tiles of a nearby zoom bucket resampled:
         // its image must not serve the exact frame that follows.
-        object[] parts = [layer, options.LodTier, options.FastPreview, options.FastTerrain, options.ViewScale, (object?)options.Stamps ?? DBNull.Value,
-            options.Stamps?.MissingRevision ?? 0L, (object?)document.StampForeground ?? DBNull.Value, document.Assets];
+        var neutral = options.LodTier != RenderLodTier.Overview && layer.Effects == new LayerEffects()
+            && KeptLayerSupport.GetValue(layer, static l => new(l)).Repairable;
+        object[] parts = [layer, neutral ? RenderLodTier.Exact : options.LodTier, !neutral && options.FastPreview,
+            options.FastTerrain, options.ViewScale, (object?)options.Stamps ?? DBNull.Value,
+            options.Stamps?.SourceRevision ?? 0L, options.Stamps?.MissingRevision ?? 0L,
+            (object?)document.StampForeground ?? DBNull.Value, document.Assets];
         var appended = AppendedObjects(layer, view, options, out var previous);
+        var basis = options.LayerImages!.RevisionFor(layer.Id);
+        var damage = LayerEditDamage(layer, basis, options);
+        if (appended is null || !ReferenceEquals(previous, basis)) { appended = null; previous = basis; }
         var unresolvedBefore = stats.UnresolvedImages;
         var requestsBefore = options.Stamps?.UnresolvedRequestVersion ?? 0;
         var drawn = options.LayerImages!.TryDraw(canvas, layer.Id, parts, options.GpuContext,
@@ -1187,7 +1236,13 @@ public static partial class SceneRenderer
                     DrawObject(target, sceneObject, document.StampForeground, options);
                     stats.ObjectsDrawn++;
                 }
-            });
+            }, damageAreas: appended is null ? damage : null,
+            redraw: (target, dirty) =>
+            {
+                built = true;
+                DrawLayer(target, document, layer, clippingSource,
+                    new(dirty.Left, dirty.Top, dirty.Right, dirty.Bottom), options.ForLayerRepair(), drawRivers: false);
+            }, exclude: exclude);
         if (drawn && !built) stats.LayerImagesKept++;
         if (drawn) stats.LayersDrawn++;
         return drawn;
@@ -1199,7 +1254,7 @@ public static partial class SceneRenderer
     /// area once, and the following frames of the pan shift it.
     /// </summary>
     private static bool DrawPannedObjectLayer(SKCanvas canvas, MapDocument document, ObjectLayer layer, MapLayer? clippingSource,
-        RenderOptions options, bool reuseOnly = false)
+        RenderOptions options, bool reuseOnly = false, SKRegion? exclude = null)
     {
         var stats = options.Stats!;
         var pendingBefore = stats.DetailTilesPending;
@@ -1210,24 +1265,31 @@ public static partial class SceneRenderer
         // The fast flag is in it: the image a wheel zoom built from resampled tiles of a nearby
         // bucket served every still frame after the zoom (the exact bucket was built only by the
         // next edit, 0.4-0.6 s inside a stroke on 50 000 objects; found in the live check 2026-10-18).
-        object[] parts = [layer, options.LodTier, options.FastPreview, options.FastTerrain, (object?)options.Stamps ?? DBNull.Value,
-            options.Stamps?.MissingRevision ?? 0L, (object?)document.StampForeground ?? DBNull.Value, document.Assets];
+        var neutral = options.LodTier != RenderLodTier.Overview && layer.Effects == new LayerEffects()
+            && KeptLayerSupport.GetValue(layer, static l => new(l)).Repairable;
+        object[] parts = [layer, neutral ? RenderLodTier.Exact : options.LodTier, !neutral && options.FastPreview,
+            options.FastTerrain, (object?)options.Stamps ?? DBNull.Value,
+            options.Stamps?.SourceRevision ?? 0L, options.Stamps?.MissingRevision ?? 0L,
+            (object?)document.StampForeground ?? DBNull.Value, document.Assets];
         var device = canvas.DeviceClipBounds;
         // Dense layers already reuse world-aligned tiles. Building a widened pan image visits
         // up to three times as many tiles, exceeding the cache's 16 MiB pressure budget and
         // evicting the very tiles the next refinement needs in order to finish.
         var margin = layer.Objects.Count >= DenseTileMinimumObjects && options.ObjectCache is not null
             && options.RequestRefinedFrame is not null ? 0 : Math.Max(device.Width, device.Height) / 4;
+        var previous = options.LayerImages!.RevisionFor(layer.Id, pan: true);
+        var damage = LayerEditDamage(layer, previous, options);
         var drawn = options.LayerImages!.TryDrawPanned(canvas, layer.Id, parts, options.GpuContext, margin,
             (target, world) =>
             {
                 built = true;
                 DrawLayer(target, document, layer, clippingSource, new WorldBounds(world.Left, world.Top, world.Right, world.Bottom),
-                    options, drawRivers: false);
+                    damage is not null ? options.ForLayerRepair() : options, drawRivers: false);
             },
             () => stats.DetailTilesPending == pendingBefore
                 && stats.UnresolvedImages == unresolvedBefore
-                && (options.Stamps?.UnresolvedRequestVersion ?? 0) == requestsBefore, reuseOnly, allowScale: !reuseOnly);
+                && (options.Stamps?.UnresolvedRequestVersion ?? 0) == requestsBefore, reuseOnly, allowScale: !reuseOnly,
+            previous: previous, damageAreas: damage, exclude: exclude);
         if (drawn && !built) stats.LayerImagesKept++;
         if (drawn) stats.LayersDrawn++;
         return drawn;
@@ -1251,6 +1313,12 @@ public static partial class SceneRenderer
             || !ObjectLayerChanges.TryGet(layer, out var delta) || delta.Removed.Count > 0 || delta.Added.Count == 0
             || delta.Added.Any(index => index < delta.Source.Objects.Count)
             || !RevisionsFor(layer).AllOnFirstSublayer)
+            return null;
+        // A dense layer was rastered through its 8-bit detail tiles. Appending a stamp
+        // directly to the whole-layer surface would bypass that premultiplied rounding.
+        if (options.ObjectCache is not null && options.ViewScale >= .03
+            && layer.Objects.Count >= DenseTileMinimumObjects && RevisionsFor(layer).CanCache
+            && ObjectSpatialIndex.For(layer).MayContainAtLeast(view, DenseTileMinimumVisible))
             return null;
         var added = delta.Added.Select(index => layer.Objects[index]).ToArray();
         if (added.Any(o => o.Stamp is { ShadowPlacement: StampShadowPlacement.Layer, ShadowOpacity: > 0 })) return null;
@@ -3549,10 +3617,14 @@ public static partial class SceneRenderer
             && options.ObjectCache is not null && options.VisibleWorld is not null
             && layer.Objects.Count >= DenseTileMinimumObjects && !SpatialIndexReady(layer, options);
         if (indexPending && options.Stats is { } waiting) waiting.DetailTilesPending++;
+        var densityView = view;
+        if (options.IsLayerRepair && options.VisibleWorld is { } fullView
+            && TryIntersect(fullView, new(0, 0, document.Canvas.Width, document.Canvas.Height), out var fullPageView))
+            densityView = fullPageView;
         if (!indexPending && !options.IsExport && options.ViewScale >= .03
             && options.ObjectCache is not null && options.VisibleWorld is not null
             && options.ObjectOverrides is not { Count: > 0 } && layer.Objects.Count >= DenseTileMinimumObjects
-            && ObjectSpatialIndex.For(layer).MayContainAtLeast(view, DenseTileMinimumVisible)
+            && ObjectSpatialIndex.For(layer).MayContainAtLeast(densityView, DenseTileMinimumVisible)
             && RevisionsFor(layer).CanCache
             && AllAssetSizesKnown(document, options.Stamps))
         {
@@ -3577,8 +3649,8 @@ public static partial class SceneRenderer
 
         // A layer shadow may originate just outside the viewport. The expansion is the strict
         // maximum offset plus a conservative three-sigma blur reach; it remains a local query.
-        var queryView = Expand(view,
-            AppearanceLimits.MaxShadowOffset + (AppearanceLimits.MaxShadowBlur * 3));
+        var queryView = options.IsLayerRepair
+            ? view : Expand(view, AppearanceLimits.MaxShadowOffset + (AppearanceLimits.MaxShadowBlur * 3));
         IReadOnlyList<SceneObject> candidates = options.VisibleWorld is null
             ? layer.Objects
             : ObjectSpatialIndex.For(layer).Query(queryView);
