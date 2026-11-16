@@ -95,6 +95,14 @@ internal sealed class ZoomRouteReport
     /// <summary>Worst scene plus GPU completion time while waiting for the settled terrain.</summary>
     public double? SettleFrameMs { get; set; }
     public double? SettleDelayMs { get; set; }
+    /// <summary>
+    /// From the end of the gesture until every stamp in view has the mip it asked for: no image queue (metadata, builds,
+    /// pixels, decodes, late pixels), no unresolved image in the frame. What the owner sees as "blur -> sharp"; the terrain
+    /// refinement above can be complete while stamps still draw a coarser level (2026-11-16: 0.13 s vs seconds of blur).
+    /// </summary>
+    public double? SharpDelayMs { get; set; }
+    public bool? SharpCompleted { get; set; }
+    public int SharpMaxQueue { get; set; }
     public bool? RefinementCompleted { get; set; }
     public double? RefinementBuildMs { get; set; }
     public List<string> SlowRefinementFrames { get; } = [];
@@ -511,9 +519,12 @@ public sealed partial class ZoomAssetsApplication : Application
             var retained = System.Environment.GetEnvironmentVariable("MAP_PERF_RETAIN_SAMPLES") != "0";
             measuredSource = new CatalogStampImageSource(_catalog, () => opening?.Session.Document ?? document,
                 () => opening?.DocumentPath, retainSamples: retained,
+                cacheBytes: CatalogStampImageSource.ExperimentBytes("MAP_STAMP_CACHE_MB", 512L * 1024 * 1024),
                 derivedRoot: System.Environment.GetEnvironmentVariable("MAP_PERF_DERIVED_ROOT")) { MeasureTimings = true };
             _report.Environment["retain-samples"] = retained.ToString();
             _report.Environment["derived-root"] = System.Environment.GetEnvironmentVariable("MAP_PERF_DERIVED_ROOT") ?? "disabled";
+            foreach (var name in new[] { "MAP_GPU_CACHE_MB", "MAP_STAMP_CACHE_MB", "MAP_MIP_ADOPT_MB", "MAP_MIP_GESTURE_ADOPT_MB" })
+                _report.Environment[name] = System.Environment.GetEnvironmentVariable(name) ?? "default";
         }
         opening = new EditorViewModel(document, null, false, new ProjectStore(new RecoveryJournal(Path.Combine(_workspace, "recovery"))),
             new LocalRecent(), new LocalPicker(Path.Combine(_workspace, "zoom.mapproj")), new LocalPrompts(), new LocalLog(),
@@ -804,7 +815,7 @@ public sealed partial class ZoomAssetsApplication : Application
         var canvas = _view.Canvas;
         target.RefinementStartQpc = Stopwatch.GetTimestamp();
         if (!canvas.LastFrameFastTerrain && !canvas.LastTerrainRefinementPending && canvas.LastRenderStats.DetailTilesPending == 0)
-        { target.RefinementCompleted = true; CaptureRefinementState(target); return; }
+        { target.RefinementCompleted = true; CaptureRefinementState(target); await Sharp(target); return; }
         var before = canvas.CompletedSceneRevision;
         var exactFrames = new List<double>();
         var completed = false;
@@ -843,6 +854,7 @@ public sealed partial class ZoomAssetsApplication : Application
         target.RefinementCompleted = completed;
         target.RefinementBuildMs = canvas.LastRenderStats.TerrainRefinementBuildMilliseconds;
         CaptureRefinementState(target);
+        await Sharp(target);
         Console.WriteLine($"    settled exact frame: worst scene+GPU={target.SettleFrameMs:0.0} ms, delay={target.SettleDelayMs:0.0} ms, background={target.RefinementBuildMs:0.0} ms, complete={target.RefinementCompleted}");
     }
 
@@ -868,6 +880,38 @@ public sealed partial class ZoomAssetsApplication : Application
                 target.RefinementState["latePixels"] = queues.LatePixels;
             }
         }
+    }
+
+    /// <summary>
+    /// Waits (at most 30 s) until the stamp image source has nothing queued and the last frame drew no unresolved image,
+    /// three checks in a row 10 ms apart; the time is counted from the start of <see cref="Settled"/>.
+    /// </summary>
+    private async Task Sharp(ZoomRouteReport target)
+    {
+        if (_editor.StampImages is not CatalogStampImageSource images) return;
+        var calm = 0;
+        var maxQueue = 0;
+        var limit = Stopwatch.GetTimestamp() + 30 * Stopwatch.Frequency;
+        while (Stopwatch.GetTimestamp() < limit)
+        {
+            var busy = true;
+            if (images.TryReadPerformanceQueues(out var q))
+            {
+                var queued = q.Metadata + q.Builds + q.Pixels + q.Decodes + q.LatePixels;
+                maxQueue = Math.Max(maxQueue, queued);
+                busy = queued > 0 || _view.Canvas.LastRenderStats.UnresolvedImages > 0;
+            }
+            calm = busy ? 0 : calm + 1;
+            if (calm >= 3) break;
+            await Task.Delay(10);
+        }
+        _report.Environment["gpu-cache-mib"] = (Map.App.Controls.MapCanvasControl.GpuResourceCacheBytes >> 20).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        _report.Environment["gpu-adapter-budget-mib"] = Map.App.Controls.GpuMemoryBudget.LastAdapterBudget is { } budget
+            ? (budget >> 20).ToString(System.Globalization.CultureInfo.InvariantCulture) : "unknown";
+        target.SharpCompleted = calm >= 3;
+        target.SharpMaxQueue = maxQueue;
+        target.SharpDelayMs = (Stopwatch.GetTimestamp() - target.RefinementStartQpc) * 1000.0 / Stopwatch.Frequency;
+        Console.WriteLine($"    sharp: {target.SharpDelayMs:0} ms after the gesture, max queue {maxQueue}, complete={target.SharpCompleted}");
     }
 
     private async Task Route(ZoomScenarioReport scenario, string name, int steps, Action<int> step)

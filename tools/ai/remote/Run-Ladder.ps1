@@ -17,7 +17,7 @@ if ($Paced) { $env:MAP_PERF_INPUT = 'paced'; $Tag = "$Tag-paced" } else { Remove
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $csv = Join-Path $Base 'ladder.csv'
 New-Item -ItemType Directory -Force -Path $Base | Out-Null
-if (-not (Test-Path $csv)) { 'tag,objects,side,route,fps,low1,frameWorkP95,intervalMedian,openReadySeconds' | Set-Content -Encoding ascii $csv }
+if (-not (Test-Path $csv)) { 'tag,objects,side,route,fps,low1,frameWorkP95,intervalMedian,openReadySeconds,sharpSeconds' | Set-Content -Encoding ascii $csv }
 
 function Get-Side([int]$n) { if ($n -le 500000) { 32768 } elseif ($n -le 1000000) { 65536 } else { 131072 } }
 
@@ -43,7 +43,9 @@ foreach ($n in $Counts) {
         if ($null -eq $route.Fps) { continue }
         $low = if ($null -ne $route.OnePercentLowFps) { [math]::Round($route.OnePercentLowFps, 1) } else { '' }
         $work = if ($null -ne $route.FrameWorkP95) { [math]::Round($route.FrameWorkP95, 1) } else { '' }
-        "$Tag,$n,$side,$($route.Name),$([math]::Round($route.Fps,1)),$low,$work,$intervalMedian,$ready" | Add-Content -Encoding ascii $csv
+        # Time until every stamp in view has its asked mip (blur -> sharp); "+" marks a wait that hit the 30 s limit.
+        $sharp = if ($null -ne $route.SharpDelayMs) { [math]::Round($route.SharpDelayMs / 1000, 2).ToString([Globalization.CultureInfo]::InvariantCulture) + $(if ($route.SharpCompleted -eq $false) { '+' } else { '' }) } else { '' }
+        "$Tag,$n,$side,$($route.Name),$([math]::Round($route.Fps,1)),$low,$work,$intervalMedian,$ready,$sharp" | Add-Content -Encoding ascii $csv
         if ($route.Name -notlike 'edit/*') { $moving += $route }
     }
     $avg = if ($moving.Count) { [math]::Round(($moving | Measure-Object Fps -Average).Average, 1) } else { 0 }

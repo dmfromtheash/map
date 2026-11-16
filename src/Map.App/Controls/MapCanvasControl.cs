@@ -195,13 +195,12 @@ public sealed partial class MapCanvasControl : Control
     public CanvasPerformanceMode PerformanceMode { get; set; } = CanvasPerformanceMode.Balanced;
 
     /// <summary>
-    /// Budget of the GPU texture cache shared by the windows. The library's originals are about
-    /// 1.5 K × 0.9 K pixels; at close zoom a screen of different assets needs their full mips,
-    /// some 120 MiB for seventeen of them. The former 64 MiB re-uploaded every texture on every
-    /// frame there (49 ms per frame measured, 0.1 ms with room); 256 MiB is a small share of any
-    /// GPU this program runs on.
+    /// Budget of the GPU texture cache shared by the windows, from the drawing adapter's memory
+    /// (<see cref="GpuMemoryBudget"/>): the fixed 256 MiB re-uploaded full-size stamps every frame at 400-1600 %
+    /// (PC 2026-11-16: 5.5 -> 138.7 FPS with 1.5 GiB). Read once per GPU context.
     /// </summary>
-    private const long GpuResourceCacheBytes = 256L * 1024 * 1024;
+    public static long GpuResourceCacheBytes { get; private set; } = GpuMemoryBudget.Floor;
+    private static IntPtr _budgetContext;
 
     /// <summary>
     /// How long after the last wheel notch or pan step the camera counts as moving. While it
@@ -840,8 +839,16 @@ public sealed partial class MapCanvasControl : Control
                 if (GpuFrameTimerEnabled && !MeasureGpuFlush) GpuTimer.Begin(lease);
                 // One Avalonia GPU context is shared by the windows. Bound its reusable texture
                 // cache; active frame resources remain owned by the borrowed lease/driver.
-                if (lease.GrContext is { } gpu && gpu.GetResourceCacheLimit() != GpuResourceCacheBytes)
-                    gpu.SetResourceCacheLimit(GpuResourceCacheBytes);
+                if (lease.GrContext is { } gpu)
+                {
+                    if (gpu.Handle != _budgetContext)
+                    {
+                        _budgetContext = gpu.Handle;
+                        using var api = lease.TryLeasePlatformGraphicsApi();
+                        GpuResourceCacheBytes = GpuMemoryBudget.CacheBytes(api?.Context as Avalonia.OpenGL.IGlContext);
+                    }
+                    if (gpu.GetResourceCacheLimit() != GpuResourceCacheBytes) gpu.SetResourceCacheLimit(GpuResourceCacheBytes);
+                }
                 if (lease.GrContext is { } diagnosed)
                 {
                     diagnosed.GetResourceCacheUsage(out _, out var gpuBytes);
