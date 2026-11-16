@@ -352,7 +352,7 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
     /// for the frame, adoption in BeginFrame under a 2 ms budget and a byte-bounded resident LRU.
     /// </summary>
     internal sealed class BoundedDerivedSource(IReadOnlyDictionary<string, AssetShape> records, MipDisk disk, long residentBytes)
-        : IStampImageSource
+        : IStampImageSource, IDisposable
     {
         public readonly record struct Key(string Sha, int Step, int Level);
         private readonly IReadOnlyDictionary<string, AssetShape> _records = records;
@@ -373,6 +373,8 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
         private readonly HashSet<Key> _requested = [];
         private double _workerCredit;
         private bool _inFrame;
+        private readonly object _frameGate = new();
+        private bool _disposed;
         public long RequestedKeys => _requested.Count;
         public long RequestedBytes { get; private set; }
         public long NeededEvictions { get; private set; }
@@ -383,17 +385,60 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
         public long MaxPlanBytes { get; set; }
         public long PlanPrepares { get; set; }
         public double LastBeginFrameMilliseconds { get; private set; }
+
+        public void Dispose()
+        {
+            lock (_frameGate)
+            {
+                if (_disposed) return;
+                _disposed = true;
+                // Worker reads use MipDisk's images; finish before the caller disposes it.
+                Task.WaitAll(_finished.Select(item => item.Pixels).ToArray());
+                foreach (var item in _lru)
+                    if (!TryRetire(item.Image)) item.Image.Dispose();
+                _lru.Clear(); _resident.Clear(); _residentBytes = 0;
+                foreach (var image in _retired) image.Dispose();
+                _retired.Clear(); _finished.Clear(); _queue.Clear(); _inFlight.Clear(); _late.Clear();
+            }
+        }
         private readonly HashSet<Key> _everAdopted = [];
+        // Reserve the model's request bookkeeping before timing, equally for before and after.
+        // Real source plans reserve their shared wanted-key set on the preparation worker.
+        internal void ReserveNavigationCapacity(int pixelKeys)
+        {
+            _requested.EnsureCapacity(pixelKeys);
+            _everAdopted.EnsureCapacity(pixelKeys);
+            _wanted.EnsureCapacity(pixelKeys);
+            _previousWanted.EnsureCapacity(pixelKeys);
+            _inFlight.EnsureCapacity(InFlightCapacity);
+            _late.EnsureCapacity(pixelKeys);
+        }
         public long Evictions { get; private set; }
         public long Adopted { get; private set; }
         public double PreflightMilliseconds { get; private set; }
         public long PreflightItems { get; private set; }
         public long UnresolvedRequestVersion { get; private set; }
-        public bool ImageRequestsPending => _late.Count > 0;
+        public bool ImageRequestsPending => _late.Count > 0 || _queue.Count > 0 || _inFlight.Count > 0 || _finished.Count > 0;
         [ThreadStatic] private static bool _pending;
         public bool LastImageRequestPending => _pending;
 
         public IDisposable BeginFrame(double sinceLastFrame)
+        {
+            if (!Monitor.TryEnter(_frameGate))
+            {
+                // As the real source's frame gate: a pinning worker must never stall the frame.
+                // Its resident directory is read-only until the next adoption under the gate.
+                _inFrame = true;
+                (_previousWanted, _wanted) = (_wanted, _previousWanted);
+                _wanted.Clear();
+                _workerCredit = Math.Min(_workerCredit + sinceLastFrame, 1000);
+                return new End(this, releaseGate: false);
+            }
+            try { return BeginFrameCore(sinceLastFrame); }
+            catch { Monitor.Exit(_frameGate); throw; }
+        }
+
+        private IDisposable BeginFrameCore(double sinceLastFrame)
         {
             var begun = Stopwatch.GetTimestamp();
             _inFrame = true;
@@ -441,16 +486,22 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
             return new End(this);
         }
 
-        private sealed class End(BoundedDerivedSource source) : IDisposable
+        private sealed class End(BoundedDerivedSource source, bool releaseGate = true) : IDisposable
         {
             public void Dispose()
             {
                 source._inFrame = false;
                 // CancelUnwantedPixels: requests nobody asked for in this frame are dropped before they start.
-                source._queue.RemoveAll(key => !source._wanted.Contains(key) && source._inFlight.Remove(key));
-                source._late.RemoveWhere(key => !source._wanted.Contains(key));
+                // FinishFrame in the real source preserves requests when the frame drew
+                // only kept tiles/overview and therefore made no statement about image demand.
+                if (source._wanted.Count > 0)
+                {
+                    source._queue.RemoveAll(key => !source._wanted.Contains(key) && source._inFlight.Remove(key));
+                    source._late.RemoveWhere(key => !source._wanted.Contains(key));
+                }
                 foreach (var image in source._retired) image.Dispose();
                 source._retired.Clear();
+                if (releaseGate) Monitor.Exit(source._frameGate);
             }
         }
 
@@ -604,10 +655,19 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
             private Key[]? _array;
             private long _readyAt = -1, _checkedAt = -1;
             private Key[]? _missing;
+            private Key[]? _missingBuffer;
+            private int _missingCount;
             public long Bytes { get; private set; }
             public long SourceRevision => 0;
-            public IStampImageLease? Pin() => source.Background ? source.Pin(_keys) : null;
-            public IStampImageLease? PinResident() => source.Background ? source.Pin(_keys, resident: true) : null;
+            public bool CanPinOnWorker => source.Background;
+            public IStampImageLease? Pin() => source.Background ? source.Pin(_array ?? (IEnumerable<Key>)_keys) : null;
+            public IStampImageLease? PinResident() => source.Background ? source.Pin(_array ?? (IEnumerable<Key>)_keys, resident: true) : null;
+            public void Seal()
+            {
+                _array = [.. _keys];
+                _missingBuffer = new Key[_array.Length];
+                _missingCount = 0; _checkedAt = -1;
+            }
             public void Add(IEnumerable<(string Sha256, double Width, double Height)> stamps)
             {
                 var started = Stopwatch.GetTimestamp();
@@ -618,6 +678,7 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
                     if (_keys.Add(key)) { var (w, h) = source.Size(key); Bytes += (long)w * h * 4; }
                 }
                 _array = null; _missing = null; _checkedAt = -1;
+                _missingBuffer = null; _missingCount = 0;
                 source.PreflightMilliseconds += Stopwatch.GetElapsedTime(started).TotalMilliseconds;
             }
             public bool Prepare(Action ready)
@@ -626,8 +687,13 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
                 if (_readyAt == source.Evictions) return true;
                 var started = Stopwatch.GetTimestamp();
                 // As the real source: without an eviction only the keys missing last time can change.
-                var keys = _checkedAt == source.Evictions && _missing is { } missing ? missing : _array ??= [.. _keys];
-                var still = new List<Key>();
+                var all = _array ??= [.. _keys];
+                ReadOnlySpan<Key> keys = _checkedAt == source.Evictions
+                    ? _missingBuffer is { } previous ? previous.AsSpan(0, _missingCount)
+                        : _missing is { } missing ? missing : all
+                    : all;
+                var still = _missingBuffer is null ? new List<Key>() : null;
+                var missingCount = 0;
                 var asked = 0;
                 foreach (var key in keys)
                 {
@@ -636,11 +702,14 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
                     source._wanted.Add(key);
                     // As the real source: at most 512 new requests per check.
                     if (asked++ < 512) source.Request(key);
-                    still.Add(key);
+                    if (_missingBuffer is { } buffer) buffer[missingCount] = key;
+                    else still!.Add(key);
+                    missingCount++;
                 }
-                _missing = [.. still];
+                if (still is not null) _missing = [.. still];
+                _missingCount = missingCount;
                 _checkedAt = source.Evictions;
-                var resident = still.Count == 0;
+                var resident = missingCount == 0;
                 if (resident) _readyAt = source.Evictions;
                 source.PreflightMilliseconds += Stopwatch.GetElapsedTime(started).TotalMilliseconds;
                 return resident;
@@ -665,18 +734,35 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
 
         internal IStampImageLease? Pin(IEnumerable<Key> keys, bool resident = false)
         {
-            var images = new Dictionary<Key, SKImage>();
-            foreach (var key in keys)
+            var array = keys as Key[] ?? keys.ToArray();
+            var images = new Dictionary<Key, SKImage>(array.Length);
+            var held = new HashSet<SKImage>(array.Length);
+            var complete = false;
+            try
             {
-                if (_resident.TryGetValue(key, out var node)) images[key] = node.Value.Image;
-                // As the real source's stand-in pin: the nearest resident level, or nothing (pending).
-                else if (!resident) return null;
-                else if (NearestResident(key) is { } other) images[key] = other;
+                // The real source allocates its snapshot outside the gate and pins in 256-key
+                // batches. Adoption may run between batches; already copied images stay pinned.
+                for (var offset = 0; offset < array.Length; offset += 256)
+                    lock (_frameGate)
+                    {
+                        if (_disposed) return null;
+                        lock (_pins)
+                            for (var i = offset; i < Math.Min(array.Length, offset + 256); i++)
+                            {
+                                var key = array[i];
+                                var image = _resident.TryGetValue(key, out var node) ? node.Value.Image
+                                    : resident ? NearestResident(key) : null;
+                                if (image is null) { if (!resident) return null; continue; }
+                                images[key] = image;
+                                if (held.Add(image)) _pinned[image] = _pinned.GetValueOrDefault(image) + 1;
+                            }
+                    }
+                var sizes = images.Keys.Select(k => k.Sha).Distinct().ToDictionary(sha => sha, sha => TryGetImageSize(sha)!.Value);
+                BackgroundRasters++;
+                complete = true;
+                return new Pinned(this, images, sizes);
             }
-            lock (_pins) foreach (var image in images.Values.Distinct()) _pinned[image] = _pinned.GetValueOrDefault(image) + 1;
-            var sizes = images.Keys.Select(k => k.Sha).Distinct().ToDictionary(sha => sha, sha => TryGetImageSize(sha)!.Value);
-            BackgroundRasters++;
-            return new Pinned(this, images, sizes);
+            finally { if (!complete) Unpin(held); }
         }
 
         private void Unpin(IEnumerable<SKImage> images)

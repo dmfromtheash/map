@@ -26,8 +26,10 @@ public static partial class SceneRenderer
         public required WorldBounds Bounds { get; init; }
         public required double Scale { get; init; }
         public required int Bucket { get; init; }
-        public required RenderOptions Options { get; init; }
-        public required IStampImageLease Images { get; init; }
+        public required RenderOptions Options { get; set; }
+        public IStampImageLease? Images;
+        public IStampPreparationPlan? PinPlan;
+        public bool RetryPin;
         public required Action? Ready { get; init; }
         /// <summary>A coarse fallback level (see <see cref="DrawDetailedStampTiles"/>), not an exact tile.</summary>
         public required bool Seed { get; init; }
@@ -149,6 +151,21 @@ public static partial class SceneRenderer
         try
         {
             lock (job) if (job.Cancelled) { FinishDetailRaster(job, null, false); return; }
+            if (job.Images is null)
+            {
+                // A large plan's snapshot allocates dictionaries and pins thousands of keys.
+                // Opt-in sources synchronize with their frame internally; none of that work,
+                // including waiting for their gate, belongs on the compositor thread.
+                job.Images = job.PinPlan!.Pin();
+                job.PinPlan = null;
+                if (job.Images is null)
+                {
+                    job.RetryPin = true;
+                    FinishDetailRaster(job, null, false);
+                    return;
+                }
+                job.Options = job.Options.ForBackgroundTile(job.Images, new RenderStats());
+            }
             var tile = PrepareDetailTile(job.Layer, job.Bounds, job.Scale, null, default, job.Options);
             (job.Objects, job.Culled) = (tile.Objects, tile.Culled);
             job.Tile = tile;
@@ -179,7 +196,7 @@ public static partial class SceneRenderer
             if (!cancelled)
             {
                 var stats = new RenderStats();
-                var options = job.Options.ForBackgroundTile(job.Images, stats);
+                var options = job.Options.ForBackgroundTile(job.Images!, stats);
                 using var scratch = new StampBatchScratch();
                 // The same platform pixel layout as the frame-thread CPU path.
                 // The same platform pixel layout as the frame-thread CPU path.
@@ -227,12 +244,12 @@ public static partial class SceneRenderer
         }
         catch (Exception ex) when (ex is not OutOfMemoryException) { composed?.Dispose(); composed = null; }
         foreach (var piece in job.Parts) piece?.Dispose();
-        FinishDetailRaster(job, composed, composed is not null && job.Images.UnresolvedRequestVersion == 0);
+        FinishDetailRaster(job, composed, composed is not null && job.Images!.UnresolvedRequestVersion == 0);
     }
 
     private static void FinishDetailRaster(DetailRasterJob job, SKImage? image, bool complete)
     {
-        job.Images.Dispose();
+        job.Images?.Dispose();
         lock (job)
         {
             if (job.Cancelled) { image?.Dispose(); image = null; }
@@ -282,6 +299,7 @@ public static partial class SceneRenderer
                 job.Image = null;
             }
             context.Jobs.Remove(key);
+            if (job.RetryPin) return BackgroundTile.Waiting;
             if (image is null || !job.Complete)
             {
                 image?.Dispose();
@@ -300,12 +318,17 @@ public static partial class SceneRenderer
             return BackgroundTile.FrameThread;
         if (revisions.Plan(x, y, bucket, area, stamps) is not { Complete: true } tile) return BackgroundTile.FrameThread;
         if (context.Running >= DetailRasterWorkers * 2) return BackgroundTile.Waiting;
-        if (tile.Plan.Pin() is not { } images)
+        var pinStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+        var images = tile.Plan.CanPinOnWorker ? null : tile.Plan.Pin();
+        if (options.Stats is { } pinStats)
+            pinStats.DetailPinMilliseconds += System.Diagnostics.Stopwatch.GetElapsedTime(pinStarted).TotalMilliseconds;
+        if (images is null && !tile.Plan.CanPinOnWorker)
             return tile.Plan.Prepare(ready) ? BackgroundTile.FrameThread : BackgroundTile.Waiting;
         var started = new DetailRasterJob
         {
             Key = key, Document = document, Layer = layer, Bounds = bounds, Scale = scale, Bucket = bucket,
-            Options = options.ForBackgroundTile(images, new RenderStats()), Images = images, Ready = ready, Seed = seed,
+            Options = options.ForBackgroundTile(images ?? stamps, new RenderStats()), Images = images,
+            PinPlan = images is null ? tile.Plan : null, Ready = ready, Seed = seed,
             Touched = cache.FrameNumber,
         };
         context.Jobs.Add(key, started);
