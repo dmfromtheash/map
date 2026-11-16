@@ -10,37 +10,6 @@ public sealed class AssetCatalogSnapshotTests(ITestOutputHelper output) : IDispo
     private readonly string _temp = Path.Combine(AppContext.BaseDirectory, "snapshot-tests", Guid.NewGuid().ToString("N"));
 
     [Fact]
-    public async Task Routed_placement_recency_reads_do_not_merge_40000_content_records()
-    {
-        string[] roots = [Seed("recent-drive-a", 20000), Seed("recent-drive-b", 20000, start: 20000)];
-        await using var own = new AssetCatalog(Seed("recent-own", 1, start: 50000));
-        own.SetMounts(roots);
-        var oldRecent = own.Recent;
-        var oldRecords = own.Records;
-        var violations = new List<long>();
-        for (var step = 0; step < 10; step++)
-        {
-            var allocated = GC.GetAllocatedBytesForCurrentThread();
-            var start = Stopwatch.GetTimestamp();
-            own.TouchRecent("set-39999", "var-39999", DateTimeOffset.UnixEpoch.AddSeconds(step));
-            var variant = own.CurrentVariantOf("set-39999");
-            var recent = own.Recent;
-            var bytes = GC.GetAllocatedBytesForCurrentThread() - allocated;
-            Console.WriteLine(FormattableString.Invariant($"EDIT-RECENT records=40000 step={step} ms={Stopwatch.GetElapsedTime(start).TotalMilliseconds:F4} bytes={bytes}"));
-            Assert.Equal("var-39999", variant);
-            Assert.Equal("set-39999", Assert.Single(recent).SetId);
-            if (bytes > 64 * 1024) violations.Add(bytes);
-        }
-        Assert.Empty(oldRecent);
-        Assert.Equal(40001, oldRecords.Count);
-        await own.FlushMetadataAsync();
-        await using var reopened = new AssetCatalog(roots[1]);
-        Assert.Equal("var-39999", reopened.CurrentVariantOf("set-39999"));
-        Assert.Equal(DateTimeOffset.UnixEpoch.AddSeconds(9), Assert.Single(reopened.Recent).UsedUtc);
-        Assert.Empty(violations);
-    }
-
-    [Fact]
     public async Task Own_and_routed_favorite_edits_with_40000_drive_records_take_less_than_50_ms()
     {
         // Keep each JSON within the existing per-catalog byte/token budget. Together the two

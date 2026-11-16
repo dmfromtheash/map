@@ -154,7 +154,7 @@ public sealed partial class AssetCatalog : IAsyncDisposable
 
     public IReadOnlyList<AssetCollection> Collections => _view.Collections;
 
-    public IReadOnlyList<AssetRecentEntry> Recent => _snapshot.Recent;
+    public IReadOnlyList<AssetRecentEntry> Recent => _view.Recent;
 
     // ---------------------------------------------------------------- mounted drive libraries
 
@@ -1249,7 +1249,7 @@ public sealed partial class AssetCatalog : IAsyncDisposable
     }
 
     public string? CurrentVariantOf(string setId) =>
-        _snapshot.CurrentVariantOf(setId);
+        _view.CurrentVariantBySet.TryGetValue(setId, out var variantId) ? variantId : null;
 
     public void RememberVariant(string setId, string variantId)
     {

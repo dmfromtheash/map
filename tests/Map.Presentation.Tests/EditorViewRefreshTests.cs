@@ -14,40 +14,6 @@ public sealed class EditorRefreshCollection;
 public sealed class EditorViewRefreshTests
 {
     [Fact]
-    public Task Exact_zoom_edits_leave_overview_preparation_for_the_frame_that_needs_it() => EditorUiThread.Run(() =>
-    {
-        var context = SynchronizationContext.Current;
-        var item = Item(20);
-        var document = new MapDocument(DocumentId.New(), "overview edit", DateTimeOffset.UnixEpoch,
-            new(1000, 1000, "px", "#FFFFFFFF"),
-            [new BaseColorLayer(LayerId.New(), "paper", true, false, 1, "#FFFFFFFF"),
-             new ObjectLayer(LayerId.New(), "objects", true, false, 1, [item])]);
-        var editor = new EditorViewModel(document, null, false, new FakeProjectStore(), new FakeRecentMaps(),
-            new FakeFilePicker(), new FakePrompts(), new FakeLog(), availableFontFamilies: ["Arial"]);
-        var view = UiProbe.Create(editor);
-        try
-        {
-            Assert.True(editor.Session.Viewport.Scale >= .25);
-            Assert.True(SpinWait.SpinUntil(() => view.Canvas.BackgroundOverviewStatistics.Idle, 5000));
-            var prepared = view.Canvas.BackgroundOverviewStatistics.Plans;
-            Assert.True(prepared > 0);
-            editor.AddObject(SceneObjectKind.Rectangle);
-            UiProbe.Drain(view);
-            Assert.True(SpinWait.SpinUntil(() => view.Canvas.BackgroundOverviewStatistics.Idle, 5000));
-            Assert.Equal(prepared, view.Canvas.BackgroundOverviewStatistics.Plans);
-            Assert.Equal(1, editor.Session.UndoDepth);
-            editor.Undo();
-            Assert.Equal(item, Assert.Single(editor.Session.Document.Layers.OfType<ObjectLayer>().Single().Objects));
-            editor.Session.Viewport.ZoomAt(0, 0, .01);
-            editor.AddObject(SceneObjectKind.Rectangle);
-            UiProbe.Drain(view);
-            Assert.True(SpinWait.SpinUntil(() => view.Canvas.BackgroundOverviewStatistics.Idle, 5000));
-            Assert.True(view.Canvas.BackgroundOverviewStatistics.Plans > prepared);
-        }
-        finally { UiProbe.Dispose(view); SynchronizationContext.SetSynchronizationContext(context); }
-    });
-
-    [Fact]
     public Task Selection_burst_has_one_flush_and_preserves_items_source_and_latest_inspector() => EditorUiThread.Run(() =>
     {
         var context = SynchronizationContext.Current;

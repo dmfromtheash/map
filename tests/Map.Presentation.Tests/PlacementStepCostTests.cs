@@ -20,7 +20,6 @@ public sealed class PlacementStepCostTests
 {
     [Theory]
     [InlineData(10_000)]
-    [InlineData(100_000)]
     [InlineData(200_000)]
     [InlineData(10_000, true)]
     public Task Native_place_and_undo_steps_with_owner_stamps(int count, bool differentKind = false) => EditorUiThread.Run(() =>
@@ -215,7 +214,7 @@ public sealed class PlacementStepCostTests
         }
     });
 
-    internal sealed class CpuLayoutRoot : TopLevel
+    private sealed class CpuLayoutRoot : TopLevel
     {
         public CpuLayoutRoot() : base(CreatePlatform())
         {

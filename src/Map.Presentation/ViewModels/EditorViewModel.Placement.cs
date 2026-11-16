@@ -499,7 +499,7 @@ public sealed partial class EditorViewModel
         var commitMs = timing.Elapsed.TotalMilliseconds - prepareMs - namesMs;
         if (_selectedSetId is not null && CurrentVariant is { } placedVariant)
         {
-            Timed("catalog-recent", () => _assetCatalog!.TouchRecent(_selectedSetId, placedVariant.Id, _clock()));
+            _assetCatalog!.TouchRecent(_selectedSetId, placedVariant.Id, _clock());
         }
 
         if (RandomVariantAfterPlacement && _selectedSetVariants.Count > 1)
