@@ -113,7 +113,7 @@ public sealed partial class ZoomAssetsApplication
         _shotsFolder = Environment.GetEnvironmentVariable("MAP_PERF_SHOTS") ?? Path.GetDirectoryName(Options.OutputPath)!;
         _shotPrefix = Environment.GetEnvironmentVariable("MAP_BUILD_TAG") is { Length: > 0 } tag ? tag + "-" : "";
         Directory.CreateDirectory(_shotsFolder);
-        MountBuildLibrary();
+        MountBuildLibrary(seed);
         Console.WriteLine($"build-ladder: mode={_report.Environment["mode"]} seed={seed} target={Options.ObjectCount} sets={_catalog.Sets.Count}");
         if (reopen is not null) { await ExecuteBuildReopen(reopen); return; }
 
@@ -170,7 +170,7 @@ public sealed partial class ZoomAssetsApplication
     /// <summary>Same canvas sides as Run-Ladder.ps1 for the larger counts; a smaller page below 50 000.</summary>
     private static int SideFor(int count) => count <= 50_000 ? 16384 : count <= 500_000 ? 32768 : count <= 1_000_000 ? 65536 : 131072;
 
-    private void MountBuildLibrary()
+    private void MountBuildLibrary(int seed)
     {
         var root = Environment.GetEnvironmentVariable("MAP_DRIVE_LIBRARY_ROOTS")
             ?? throw new InvalidOperationException("Set MAP_DRIVE_LIBRARY_ROOTS to the owner's library.");
@@ -183,8 +183,16 @@ public sealed partial class ZoomAssetsApplication
         }
         else
         {
-            mounts = all.Where(p => PreferredCatalogs.Contains(Path.GetFileName(p), StringComparer.OrdinalIgnoreCase)).ToArray();
-            if (mounts.Length == 0) mounts = all;
+            // Owner 2026-11-16: live runs never repeat - every seed mounts its own rotation of ALL the library's
+            // catalogs (the owner's new ones included): one interiors catalog for the rooms plus three to five others.
+            // The reopen process gets the same seed, so it mounts the same catalogs the saved map links to.
+            var pick = new Random(seed ^ 0x5EED);
+            var interiors = all.Where(p => Path.GetFileName(p).Contains("interior", StringComparison.OrdinalIgnoreCase)).ToArray();
+            var others = all.Except(interiors).OrderBy(_ => pick.Next()).Take(3 + pick.Next(3)).ToList();
+            if (interiors.Length > 0) others.Add(interiors[pick.Next(interiors.Length)]);
+            mounts = others.Count > 0 ? [.. others.Order()] : all;
+            if (Environment.GetEnvironmentVariable("MAP_BUILD_CATALOGS") == "preferred")
+                mounts = all.Where(p => PreferredCatalogs.Contains(Path.GetFileName(p), StringComparer.OrdinalIgnoreCase)).DefaultIfEmpty(all[0]).ToArray();
         }
         if (mounts.Length == 0) throw new InvalidOperationException("No library catalog under " + root);
         _catalog.SetMounts(mounts);
