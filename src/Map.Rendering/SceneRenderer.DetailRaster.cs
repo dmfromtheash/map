@@ -97,31 +97,37 @@ public static partial class SceneRenderer
 
         private void Run()
         {
-            while (true)
+            while (RunNext()) { }
+        }
+
+        // A permanent worker must not keep the last callback's closure in its idle stack frame.
+        // A separate frame also releases Tier 0 temporaries that an explicit null assignment cannot.
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private bool RunNext()
+        {
+            Action work;
+            bool visible;
+            lock (_gate)
             {
-                Action work;
-                bool visible;
+                while (_visible.Count == 0 && (_layers.Count == 0 || _visibleRunning > 0))
+                {
+                    if (_stopped && _layers.Count == 0) return false;
+                    Monitor.Wait(_gate);
+                }
+                visible = _visible.Count > 0;
+                work = (visible ? _visible : _layers).Dequeue();
+                if (visible) _visibleRunning++;
+            }
+            try { work(); } catch (Exception ex) when (ex is not OutOfMemoryException) { }
+            finally
+            {
                 lock (_gate)
                 {
-                    while (_visible.Count == 0 && (_layers.Count == 0 || _visibleRunning > 0))
-                    {
-                        if (_stopped && _layers.Count == 0) return;
-                        Monitor.Wait(_gate);
-                    }
-                    visible = _visible.Count > 0;
-                    work = (visible ? _visible : _layers).Dequeue();
-                    if (visible) _visibleRunning++;
-                }
-                try { work(); } catch (Exception ex) when (ex is not OutOfMemoryException) { }
-                finally
-                {
-                    lock (_gate)
-                    {
-                        if (visible) _visibleRunning--;
-                        Monitor.PulseAll(_gate);
-                    }
+                    if (visible) _visibleRunning--;
+                    Monitor.PulseAll(_gate);
                 }
             }
+            return true;
         }
 
         public void Dispose()
