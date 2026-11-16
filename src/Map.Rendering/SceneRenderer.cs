@@ -77,6 +77,19 @@ public interface IStampImageSource
     /// only when it ends. Null when the source has nothing to defer.
     /// </summary>
     IDisposable? BeginFrame() => null;
+
+    /// <summary>
+    /// The machine's store of finished overview chunk rasters (<see cref="OverviewChunkDiskCache"/>), so a map opened
+    /// again starts from the pictures of the previous run. Null: none (every chunk is rastered). Worker threads only.
+    /// </summary>
+    IOverviewChunkStore? OverviewChunks => null;
+
+    /// <summary>
+    /// A stable name of the exact pixels this source draws for the asset across program runs (its prepared-pixels
+    /// version and source files), or null when unknown: a chunk that paints the asset is then not kept on disk.
+    /// Worker threads; never touches the disk.
+    /// </summary>
+    string? PixelIdentity(string sha256) => null;
 }
 
 /// <summary>See <see cref="IStampImageSource.CreatePreparationPlan"/>.</summary>
@@ -7170,6 +7183,14 @@ public static partial class SceneRenderer
         public int BatchCount => batchCount;
         public bool Painted => painted;
         public SKRect Bounds => bounds;
+        internal double BucketScale => bucketScale;
+        internal ReadOnlySpan<OverviewStep> Steps => steps;
+
+        /// <summary>The raster's pixel size (what <see cref="BuildImage"/> allocates).</summary>
+        internal (int Width, int Height) PixelSize
+        {
+            get { var (_, width, height) = ImageSize(); return (width, height); }
+        }
 
         public SKImage BuildImage(StampForegroundSurface? stampForeground, RenderOptions options,
             CancellationToken cancellationToken = default)

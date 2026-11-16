@@ -20,6 +20,17 @@ public sealed partial class CatalogStampImageSource(
 
     /// <summary>True when this source keeps the machine cache of preparations (and runs its janitor).</summary>
     public bool HasDerivedCache => _derived is not null;
+
+    // The whole-map chunk pictures of earlier runs, next to the prepared pixels they were drawn from
+    // (<derived root>/overview-chunks; the janitor owns only the v1..vN folders beside it).
+    private readonly OverviewChunkDiskCache? _overviewChunks = derivedRoot is null ? null
+        : new(Path.Combine(derivedRoot, OverviewChunkDiskCache.FolderName));
+
+    /// <inheritdoc cref="IStampImageSource.OverviewChunks"/>
+    public IOverviewChunkStore? OverviewChunks => _overviewChunks;
+
+    /// <inheritdoc cref="IStampImageSource.PixelIdentity"/>
+    public string? PixelIdentity(string sha256) => _derived?.PixelIdentity(sha256);
     public DerivedCacheJanitorReport? LastDerivedCleanup => _derived?.LastCleanup;
     public long DerivedCleanups => _derived?.Cleanups ?? 0;
     // Targeted cleanup of the machine cache (DEC-111 p.4); without a cache there is nothing to remove.
@@ -1687,6 +1698,8 @@ public sealed partial class CatalogStampImageSource(
         if (_sourceValidation is not null) await _sourceValidation.ConfigureAwait(false);
         if (_derived is not null) await _derived.Completion.ConfigureAwait(false);
         if (_missingRetry is not null) await _missingRetry.ConfigureAwait(false);
+        // Whole-map chunk pictures still queued for the disk: the next open of the map starts from them.
+        if (_overviewChunks is { } chunks) await Task.Run(() => chunks.Flush(TimeSpan.FromSeconds(5))).ConfigureAwait(false);
     }
 
     private void DisposeIfUnused()

@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using Map.Core.Documents;
 using SkiaSharp;
@@ -326,6 +326,13 @@ public static partial class SceneRenderer
             {
                 Work work;
                 bool gesture;
+                (IOverviewChunkStore, byte[], int, int, byte[])[]? unsaved = null;
+                lock (_gate)
+                {
+                    // The visible work is done (nothing or only prefetch left): the new chunk pictures go to disk now.
+                    if (_queue.First is null || _queue.First.Value.Prefetch || _disposed) unsaved = TakeUnsaved();
+                }
+                if (unsaved is not null) SaveAll(unsaved);
                 lock (_gate)
                 {
                     if (_disposed || _queue.First is null) { _busy = false; return; }
@@ -462,17 +469,35 @@ public static partial class SceneRenderer
             }
             started = Stopwatch.GetTimestamp();
             allocated = GC.GetAllocatedBytesForCurrentThread();
-            // A kept raster must hold exactly what a settled frame draws, whichever thread builds it and
-            // whenever: the exact lease waits for each image's prepared pixels instead of another level.
-            using var lease = state.Source?.ExactLease(token);
-            var options = new RenderOptions { Stamps = lease, LodTier = RenderLodTier.Overview, ViewScale = Math.Pow(2, work.Zoom / 4d) };
-            var image = variant.BuildImage(work.Foreground, options, token);
-            if (lease?.PreparingLookups > 0)
+            // The disk tier first (a map opened again): the same pixels a raster of this variant gives, made by an
+            // earlier run, under a key of everything the raster is drawn from. Only this worker touches the disk.
+            var store = state.Source?.OverviewChunks;
+            var keyStarted = Stopwatch.GetTimestamp();
+            var key = store is null ? null : OverviewChunkDiskKey(variant, work.Zoom, work.Foreground, state.Source!);
+            Interlocked.Add(ref _keyTicks, Stopwatch.GetTimestamp() - keyStarted);
+            var (width, height) = variant.PixelSize;
+            var image = key is null ? null : store!.TryLoad(key, width, height);
+            byte[]? keep = null;
+            if (image is not null) Interlocked.Increment(ref _diskLoads);
+            else
             {
-                // Cancelled or timed out on an image: not kept, the frame asks again.
-                image.Dispose();
-                lock (_gate) { _variantBytes += variantBytes; _variantMilliseconds += variantMs; _parked++; }
-                return;
+                // A kept raster must hold exactly what a settled frame draws, whichever thread builds it and
+                // whenever: the exact lease waits for each image's prepared pixels instead of another level.
+                using var lease = state.Source?.ExactLease(token);
+                var stats = new RenderStats();
+                var options = new RenderOptions { Stamps = lease, LodTier = RenderLodTier.Overview, ViewScale = Math.Pow(2, work.Zoom / 4d), Stats = stats };
+                image = variant.BuildImage(work.Foreground, options, token);
+                Interlocked.Increment(ref _rasters);
+                if (lease?.PreparingLookups > 0)
+                {
+                    // Cancelled or timed out on an image: not kept, the frame asks again.
+                    image.Dispose();
+                    lock (_gate) { _variantBytes += variantBytes; _variantMilliseconds += variantMs; _parked++; }
+                    return;
+                }
+                // Only a final picture goes to disk: no placeholder of a missing image, no fallback level.
+                if (key is not null && stats.MissingAssets == 0 && stats.UnresolvedImages == 0)
+                    keep = ReadPixels(image);
             }
             var rasterMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
             var rasterBytes = GC.GetAllocatedBytesForCurrentThread() - allocated;
@@ -481,11 +506,67 @@ public static partial class SceneRenderer
                 _variantBytes += variantBytes; _rasterBytes += rasterBytes;
                 if (_disposed || token.IsCancellationRequested || !ReferenceEquals(state.Snapshot?.Palette, work.Palette))
                 { image.Dispose(); return; }
-                _ready.Add(work, new(variant, image));
-                _variantMilliseconds += variantMs; _rasterMilliseconds += rasterMs;
+                {
+                    _ready.Add(work, new(variant, image));
+                    _variantMilliseconds += variantMs; _rasterMilliseconds += rasterMs;
+                }
             }
             SignalReady(state);
+            if (keep is null) return;
+            // Written once the worker has no visible work left: each new file costs the PC about a millisecond of
+            // file-system and scanner work, which slowed a first whole-map view of 256 chunks by a third when written
+            // at once (100 000 objects: 600 -> 900 ms). The pixels were copied before the handoff.
+            Interlocked.Increment(ref _diskSaves);
+            (IOverviewChunkStore, byte[], int, int, byte[])[]? now = null;
+            lock (_gate)
+            {
+                _unsaved.Add((store!, key!, width, height, keep));
+                _unsavedBytes += keep.Length;
+                // The last visible chunk (only prefetch or nothing queued): all of them go now, before this work
+                // leaves the queue, so whoever sees the view complete also finds them with the store's writer.
+                if (_unsavedBytes > UnsavedLimit || _queue.All(queued => queued.Prefetch)) now = TakeUnsaved();
+            }
+            if (now is not null) SaveAll(now);
         }
+
+        // Pictures waiting for the end of the visible work; past this many bytes they go to the disk at once.
+        private const long UnsavedLimit = 64L * 1024 * 1024;
+        private readonly List<(IOverviewChunkStore Store, byte[] Key, int Width, int Height, byte[] Pixels)> _unsaved = [];
+        private long _unsavedBytes;
+
+        // Under _gate.
+        private (IOverviewChunkStore, byte[], int, int, byte[])[]? TakeUnsaved()
+        {
+            if (_unsaved.Count == 0) return null;
+            var taken = _unsaved.ToArray();
+            _unsaved.Clear();
+            _unsavedBytes = 0;
+            return taken;
+        }
+
+        // Outside _gate. The store only queues them for its own writer thread.
+        private static void SaveAll((IOverviewChunkStore Store, byte[] Key, int Width, int Height, byte[] Pixels)[] items)
+        {
+            foreach (var (store, key, width, height, pixels) in items) store.Save(key, width, height, pixels);
+        }
+
+        private static byte[]? ReadPixels(SKImage image)
+        {
+            var info = new SKImageInfo(image.Width, image.Height, SKColorType.Rgba8888, SKAlphaType.Premul);
+            var pixels = new byte[info.BytesSize64];
+            var handle = System.Runtime.InteropServices.GCHandle.Alloc(pixels, System.Runtime.InteropServices.GCHandleType.Pinned);
+            try { return image.ReadPixels(info, handle.AddrOfPinnedObject(), info.RowBytes, 0, 0) ? pixels : null; }
+            finally { handle.Free(); }
+        }
+
+        private long _diskLoads, _rasters, _diskSaves, _keyTicks;
+
+        /// <summary>Chunk pictures taken from the disk tier, rastered here, and written to the disk tier.</summary>
+        /// <summary>Time spent on disk keys (milliseconds), for measurements.</summary>
+        public double DiskKeyMilliseconds => Interlocked.Read(ref _keyTicks) * 1000d / Stopwatch.Frequency;
+
+        public (long Loaded, long Rastered, long Saved) DiskStatistics =>
+            (Interlocked.Read(ref _diskLoads), Interlocked.Read(ref _rasters), Interlocked.Read(ref _diskSaves));
 
         private void ArmPrefetch(LayerWork state)
         {
@@ -579,11 +660,15 @@ public static partial class SceneRenderer
         /// <summary>Cancels a closed editor without waiting on its worker or touching render-owned images.</summary>
         public void Reset()
         {
+            (IOverviewChunkStore, byte[], int, int, byte[])[]? unsaved;
             lock (_gate)
             {
                 foreach (var state in _layers.Values) Cancel(state);
                 _layers.Clear();
+                unsaved = TakeUnsaved();
             }
+            // Finished pictures are still valid: the store's own writer keeps them (no disk access on this thread).
+            if (unsaved is not null) SaveAll(unsaved);
         }
 
         public void Dispose()

@@ -33,6 +33,14 @@ public sealed partial class StampDerivedAssetStore
     /// <summary>Colours remembered from earlier runs and this one (count), for diagnostics and tests.</summary>
     public int KnownColorCount => _knownColors.Count;
 
+    /// <summary>
+    /// A stable name of the prepared pixels of the asset (this store's format and the stamps of the source files they
+    /// were prepared from), without any file access; null until a header of a verified source was read (this run or
+    /// an earlier one). Kept overview chunk rasters are keyed by it.
+    /// </summary>
+    public string? PixelIdentity(string sha) => _knownColors.TryGetValue(sha, out var known) && known.Verified
+        ? "derived-v" + Version + ":" + known.Sources : null;
+
     /// <summary>The asset's overview colour as last prepared, without any file access; null when never prepared.</summary>
     public SKColor? KnownColor(string sha) => _knownColors.TryGetValue(sha, out var color) ? new SKColor(color.Color) : null;
 
