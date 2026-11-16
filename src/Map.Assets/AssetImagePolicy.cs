@@ -111,8 +111,11 @@ public static class AssetImagePolicy
                 nameof(maxEncodedBytes), $"The read limit cannot exceed {MaxEncodedBytes} bytes.");
         }
 
+        // Reading never locks the owner out of his own file: an editor saving an asset while the canvas reads it got
+        // "file in use" on Windows (FrameSourceBoundaryTests, 2026-11-16). A write during the read is caught below
+        // (size check) and by the content id of catalogue originals; the source then invalidates and reads again.
         using var stream = new FileStream(
-            path, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024,
+            path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 64 * 1024,
             FileOptions.SequentialScan);
         if (stream.Length <= 0 || stream.Length > maxEncodedBytes)
         {
