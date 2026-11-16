@@ -16,6 +16,8 @@ public sealed class ObjectSpatialIndex
     private readonly ImmutableHashSet<int> _oversized;
     private readonly ObjectSpatialIndex? _stableBasis;
     private readonly ImmutableDictionary<ObjectId, SceneObject?> _structuralOverrides = ImmutableDictionary<ObjectId, SceneObject?>.Empty;
+    [ThreadStatic] private static HashSet<int>? _queryHits;
+    [ThreadStatic] private static int[]? _queryIndices;
     public int IncrementalOverrideCount { get; }
 
     private ObjectSpatialIndex(ObjectLayer layer)
@@ -174,18 +176,59 @@ public sealed class ObjectSpatialIndex
         var maxX = (int)Math.Floor(view.Right / CellSize);
         var minY = (int)Math.Floor(view.Top / CellSize);
         var maxY = (int)Math.Floor(view.Bottom / CellSize);
-        var hits = _oversized.ToHashSet();
-        if (((long)maxX - minX + 1) * ((long)maxY - minY + 1) <= _cells.Count)
+        // Dense tile/seed preparation repeats these queries on workers. Reuse membership scratch
+        // and rent the sorted indices instead of allocating both on the LOH every time. Keep the
+        // hash-set union: a stamp can span 64 cells, so sorting every duplicate would amplify work.
+        // Scratch contains integer slots only; neither pool retains a document or its objects.
+        var hits = _queryHits ?? new HashSet<int>();
+        _queryHits = null; // nested queries borrow another scratch set
+        var indices = _queryIndices;
+        _queryIndices = null;
+        try
         {
-            for (var y = minY; y <= maxY; y++) for (var x = minX; x <= maxX; x++)
-                if (_cells.TryGetValue((x, y), out var bucket)) hits.UnionWith(bucket);
+            hits.UnionWith(_oversized);
+            if (((long)maxX - minX + 1) * ((long)maxY - minY + 1) <= _cells.Count)
+            {
+                for (var y = minY; y <= maxY; y++) for (var x = minX; x <= maxX; x++)
+                    if (_cells.TryGetValue((x, y), out var bucket)) hits.UnionWith(bucket);
+            }
+            else
+            {
+                foreach (var (cell, bucket) in _cells)
+                    if (cell.X >= minX && cell.X <= maxX && cell.Y >= minY && cell.Y <= maxY) hits.UnionWith(bucket);
+            }
+            if (hits.Count == 0) return [];
+            if (indices is null || indices.Length < hits.Count)
+            {
+                if (indices is not null) System.Buffers.ArrayPool<int>.Shared.Return(indices);
+                indices = System.Buffers.ArrayPool<int>.Shared.Rent(hits.Count);
+            }
+            hits.CopyTo(indices);
+            Array.Sort(indices, 0, hits.Count);
+            var matches = 0;
+            for (var i = 0; i < hits.Count; i++)
+            {
+                var index = indices[i];
+                if (SceneGeometry.BoundsOf(_objects[index]).Intersects(view)) indices[matches++] = index;
+            }
+            if (matches == 0) return [];
+            var result = new SceneObject[matches];
+            for (var i = 0; i < matches; i++) result[i] = _objects[indices[i]];
+            return result;
         }
-        else
+        finally
         {
-            foreach (var (cell, bucket) in _cells)
-                if (cell.X >= minX && cell.X <= maxX && cell.Y >= minY && cell.Y <= maxY) hits.UnionWith(bucket);
+            if (indices is not null)
+            {
+                // The shared pool may trim on gen2 between two frames; keep the bounded working buffer
+                // with its membership set so the very next query does not allocate another LOH array.
+                if (indices.Length <= 262_144) _queryIndices = indices;
+                else System.Buffers.ArrayPool<int>.Shared.Return(indices);
+            }
+            hits.Clear();
+            // An exceptional whole-map/export query must not pin an unbounded table on every worker.
+            if (hits.EnsureCapacity(0) <= 262_144) _queryHits = hits;
         }
-        return hits.Order().Select(i => _objects[i]).Where(o => SceneGeometry.BoundsOf(o).Intersects(view)).ToArray();
     }
 
     private IReadOnlyList<SceneObject> StructuralQuery(WorldBounds view, bool point)

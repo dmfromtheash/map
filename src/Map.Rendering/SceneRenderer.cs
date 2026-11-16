@@ -193,6 +193,8 @@ public sealed class RenderStats
     public double OverviewExactPrepareMilliseconds { get; set; }
     public double OverviewExactDrawMilliseconds { get; set; }
     public double OverviewChunkMilliseconds { get; set; }
+    public int OverviewExactDirectDraws { get; set; }
+    public int OverviewExactDrawsDeferred { get; set; }
     public int OverviewObjects { get; set; }
     public int OverviewChunks { get; set; }
     public int OverviewVariantBuilds { get; set; }
@@ -291,6 +293,8 @@ public sealed class RenderStats
         OverviewExactPrepareMilliseconds = 0;
         OverviewExactDrawMilliseconds = 0;
         OverviewChunkMilliseconds = 0;
+        OverviewExactDirectDraws = 0;
+        OverviewExactDrawsDeferred = 0;
         OverviewObjects = 0;
         OverviewChunks = 0;
         OverviewVariantBuilds = 0;
@@ -833,6 +837,27 @@ public static partial class SceneRenderer
         ArgumentNullException.ThrowIfNull(canvas);
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(options);
+        if (Styles.StyleRenderer.Applies(document, options) || Lighting.LightingRenderer.Applies(document, options))
+        {
+            RenderWithEffects(canvas, document, options);
+            return;
+        }
+        // Keep effect callbacks in their own method: their captured arguments otherwise allocate
+        // a closure even on a plain paper frame, which can wait for an in-flight background gen2.
+        options.Stats?.Reset();
+        options.PreviewCache?.Sync(options.Preview);
+        if (UseCoarseCoverage(options))
+            CoarseCoverage.Prepare(document, options.VisibleWorld ?? new WorldBounds(0, 0, document.Canvas.Width, document.Canvas.Height));
+        if (options.GpuContext is not null && !options.IsExport)
+        { Lighting.LightingRenderer.DropKept(); Styles.StyleRenderer.DropKept(); }
+        RenderScene(canvas, document, options, chrome: true);
+    }
+
+    private static void RenderWithEffects(SKCanvas canvas, MapDocument document, RenderOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(canvas);
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(options);
 
         options.Stats?.Reset();
         options.PreviewCache?.Sync(options.Preview);
@@ -996,8 +1021,7 @@ public static partial class SceneRenderer
                 continue;
             if (keepLayers && layer is ObjectLayer masked && options.MaskEditLayerId == masked.Id && CanKeepMaskedContent(masked, options))
             {
-                DrawLayer(canvas, document, layer, clippingSource, view, options, drawRivers: false,
-                    contentOverride: target => DrawKeptObjectContent(target, document, masked, view, options), maskOverlay: true);
+                DrawKeptMaskedLayer(canvas, document, masked, clippingSource, view, options);
                 continue;
             }
             DrawLayer(canvas, document, layer, clippingSource, view, options, drawRivers: false);
@@ -1034,6 +1058,11 @@ public static partial class SceneRenderer
         && !(options.PlacementPreviewLayerId == layer.Id && options.PlacementPreviewObjects is { Count: > 0 } ghost
             && ghost.Any(o => o.Stamp is { ShadowPlacement: StampShadowPlacement.Layer, ShadowOpacity: > 0 }))
         && KeptLayerSupport.GetValue(layer, static l => new(l)).Supported;
+
+    private static void DrawKeptMaskedLayer(SKCanvas canvas, MapDocument document, ObjectLayer layer,
+        MapLayer? clippingSource, WorldBounds view, RenderOptions options) =>
+        DrawLayer(canvas, document, layer, clippingSource, view, options, drawRivers: false,
+            contentOverride: target => DrawKeptObjectContent(target, document, layer, view, options), maskOverlay: true);
 
     /// <summary>
     /// The objects of a layer whose mask is being edited can be kept apart from the mask: the
@@ -2326,8 +2355,10 @@ public static partial class SceneRenderer
         switch (layer)
         {
             case BaseColorLayer baseColor:
-                using (var page = new SKPaint { Color = ParseColor(baseColor.Color), IsAntialias = false })
+                using (var pageLease = RenderScratch.Paint())
                 {
+                    var page = pageLease.Value;
+                    page.Color = ParseColor(baseColor.Color); page.IsAntialias = false;
                     canvas.DrawRect(0, 0, document.Canvas.Width, document.Canvas.Height, page);
                 }
                 // The open sea carries the same water material as rivers and lakes, so the water
@@ -2344,12 +2375,7 @@ public static partial class SceneRenderer
                 // shadow, or the clip it lends to the layer above - still includes its water.
                 if (drawRivers)
                 {
-                    var run = LayerSurfaces(objectLayer, view, options).OrderBy(surface => surface.Level).ThenBy(surface => surface.Order).ToList();
-                    if (run.Count > 0)
-                        DrawSurfaceRun(canvas, run, view, options,
-                            document.Layers.OfType<LandLayer>().Any(l => l.Visible && l.Opacity > 0 && l.GeometryTiles.TileCount > 0)
-                                ? (target, paint) => DrawAllLandCoverage(target, document, view, options, paint)
-                                : null, []);
+                    DrawObjectLayerSurfaces(canvas, document, objectLayer, view, options);
                 }
                 if (options.PlacementPreviewLayerId == objectLayer.Id
                     && options.PlacementPreviewObjects is { Count: > 0 } placementPreview)
@@ -2426,6 +2452,17 @@ public static partial class SceneRenderer
             else
                 DrawStrokePreview(canvas, preview, view, options);
         }
+    }
+
+    private static void DrawObjectLayerSurfaces(SKCanvas canvas, MapDocument document, ObjectLayer layer,
+        WorldBounds view, RenderOptions options)
+    {
+        var run = LayerSurfaces(layer, view, options).OrderBy(surface => surface.Level).ThenBy(surface => surface.Order).ToList();
+        if (run.Count > 0)
+            DrawSurfaceRun(canvas, run, view, options,
+                document.Layers.OfType<LandLayer>().Any(l => l.Visible && l.Opacity > 0 && l.GeometryTiles.TileCount > 0)
+                    ? (target, paint) => DrawAllLandCoverage(target, document, view, options, paint)
+                    : null, []);
     }
 
     private static bool HasLandShapePreview(LandLayer land, RenderOptions options) =>
@@ -3982,7 +4019,8 @@ public static partial class SceneRenderer
         {
             // Tiles with neither exact nor neighbouring pixels show the overview of their objects.
             canvas.Save();
-            using var cold = new SKPath();
+            using var coldLease = RenderScratch.Path();
+            var cold = coldLease.Value;
             foreach (var bounds in coldTiles) cold.AddRect(ToRect(bounds));
             canvas.ClipPath(cold, antialias: false);
             DrawOverviewObjects(canvas, document, layer, view, options, fallbackScale: Math.Min(.02, options.ViewScale));
@@ -4061,6 +4099,7 @@ public static partial class SceneRenderer
         public int Adopted;
         public long Bytes;
         public int Prepared;
+        public int PlansStarted;
         public double PrepareMilliseconds;
         public const double PrepareBudgetMilliseconds = 3;
     }
@@ -4088,15 +4127,21 @@ public static partial class SceneRenderer
         var tile = revisions.Plan(x, y, bucket, area, stamps);
         if (tile is null)
         {
+            if (frame.PlansStarted >= 1) return false;
             if (stamps.CreatePreparationPlan() is not { } created) return StampImagesReady(layer, bounds, scale, options);
             tile = revisions.AddPlan(x, y, bucket, new DetailTilePlan(stamps, created));
         }
         if (!tile.Complete)
         {
+            // A wheel changes every visible tile and its seed at each bucket. Queuing all their
+            // whole-tile queries at once made a burst of LOH scratch during later frames.
+            // Admit one new plan per frame, shared by the visible view and its seed.
+            if (frame.PlansStarted >= 1) return false;
             // The query and the reduction walk every object of the tile (a whole page for the seed): a background
             // worker does it, in slices so the source's lock is never held for long against the frame.
             if (Interlocked.Exchange(ref tile.Building, 1) == 0)
             {
+                frame.PlansStarted++;
                 var headroom = options.IsExport ? double.PositiveInfinity : StampDetailHeadroom;
                 var pixelScale = Math.Min(scale, headroom);
                 QueueDetailWork(() =>
@@ -4105,8 +4150,10 @@ public static partial class SceneRenderer
                     {
                         var stamped = ObjectSpatialIndex.For(layer).Query(area).Where(o => o.Visible && o.Stamp is not null).ToArray();
                         for (var start = 0; start < stamped.Length; start += 4096)
+                        {
                             tile.Plan.Add(new ArraySegment<SceneObject>(stamped, start, Math.Min(4096, stamped.Length - start))
                                 .Select(o => (o.Stamp!.AssetSha256, o.Width * pixelScale, o.Height * pixelScale)));
+                        }
                         tile.Complete = true;
                     }
                     finally { if (!tile.Complete) Volatile.Write(ref tile.Building, 0); }
@@ -4168,30 +4215,37 @@ public static partial class SceneRenderer
     }
 
     /// <summary>Draws the view from kept tiles of one zoom bucket, or nothing when any tile of it is missing.</summary>
+    [System.Runtime.CompilerServices.InlineArray(65)]
+    private struct KeptTileBuffer
+    {
+        private (WorldBounds Bounds, ObjectOverviewCacheResult Tile) _element;
+    }
+
     private static bool TryDrawKeptTiles(SKCanvas canvas, ObjectLayer layer, WorldBounds view, int bucket,
         DetailTileRevisions revisions, ObjectOverviewCache cache, RenderOptions options)
     {
         var scale = Math.Pow(2, bucket / 4d);
         var worldSize = 512 / scale;
-        var tiles = new List<(WorldBounds Bounds, ObjectOverviewCacheResult Tile)>();
+        KeptTileBuffer tiles = default;
+        var tileCount = 0;
         for (var y = (int)Math.Floor(view.Top / worldSize); y <= (int)Math.Floor(view.Bottom / worldSize); y++)
         for (var x = (int)Math.Floor(view.Left / worldSize); x <= (int)Math.Floor(view.Right / worldSize); x++)
         {
-            if (tiles.Count > 64) return false;
+            if (tileCount > 64) return false;
             var bounds = new WorldBounds(x * worldSize, y * worldSize, (x + 1) * worldSize, (y + 1) * worldSize);
             var revision = revisions.Version(x, y, bucket, Expand(bounds, 1 / scale), options.Stamps?.MissingRevision ?? 0);
             if (!cache.TryGet(layer.Id, x, y, DetailZoomKey(layer, bucket), revision, out var kept)) return false;
-            tiles.Add((bounds, kept));
+            tiles[tileCount++] = (bounds, kept);
         }
         var drawn = 0;
-        foreach (var (bounds, tile) in tiles)
+        foreach (var (bounds, tile) in tiles[..tileCount])
         {
             canvas.DrawImage(tile.Image, new SKRect(1, 1, 513, 513),
                 new SKRect((float)bounds.Left, (float)bounds.Top, (float)bounds.Right, (float)bounds.Bottom),
                 new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear));
             drawn += tile.ObjectCount;
         }
-        if (options.Stats is { } stats) { stats.DrawCalls += tiles.Count; stats.ObjectTilesDrawn += tiles.Count; stats.ObjectsDrawn += drawn; }
+        if (options.Stats is { } stats) { stats.DrawCalls += tileCount; stats.ObjectTilesDrawn += tileCount; stats.ObjectsDrawn += drawn; }
         return true;
     }
 
@@ -4235,9 +4289,9 @@ public static partial class SceneRenderer
             sources[i] = new(0, 0, image.Width, image.Height);
             colors[i] = SKColors.White.WithAlpha(Alpha(item.ObjectOpacity));
         }
-        using var ownedPaint = scratch is null
-            ? new SKPaint { IsAntialias = true, BlendMode = SKBlendMode.SrcOver } : null;
-        var paint = scratch?.Paint ?? ownedPaint!;
+        using var ownedPaint = scratch is null ? RenderScratch.Paint() : default;
+        var paint = scratch?.Paint ?? ownedPaint.Value;
+        paint.IsAntialias = true; paint.BlendMode = SKBlendMode.SrcOver;
         // A magnified image never samples its mips: asking for them made the GPU build a mip chain for each large
         // image as it was uploaded - 58 stamps at 1600 % took 160-220 ms per frame (PC ladder 100 000, 2026-11-15).
         var device = canvas.TotalMatrix;
@@ -4859,7 +4913,9 @@ public static partial class SceneRenderer
     private sealed class StampBatchScratch : IDisposable
     {
         private readonly Dictionary<int, (SKRotationScaleMatrix[], SKRect[], SKColor[])> _small = [];
-        public SKPaint Paint { get; } = new() { IsAntialias = true, BlendMode = SKBlendMode.SrcOver };
+        private readonly RenderScratch.PaintLease _paint = RenderScratch.Paint();
+        public SKPaint Paint => _paint.Value;
+        public StampBatchScratch() { Paint.IsAntialias = true; Paint.BlendMode = SKBlendMode.SrcOver; }
         public (SKRotationScaleMatrix[], SKRect[], SKColor[]) Get(int count)
         {
             if (_small.TryGetValue(count, out var buffers)) return buffers;
@@ -4869,7 +4925,7 @@ public static partial class SceneRenderer
             if (count <= 32) _small.Add(count, buffers);
             return buffers;
         }
-        public void Dispose() => Paint.Dispose();
+        public void Dispose() => _paint.Dispose();
     }
 
     private static bool TryDrawRasterStampEffect(SKCanvas canvas, SceneObject sceneObject,
@@ -5786,13 +5842,12 @@ public static partial class SceneRenderer
         // R10 «Тень под объектом»: the contact shadow lies under the stamp, inside its rectangle.
         if (stamp.GroundShadow is { } ground) AreaBeautyRenderer.DrawGroundShadow(canvas, rect, ground, objectAlpha);
 
-        using var paint = new SKPaint
-        {
-            Color = SKColors.White.WithAlpha(objectAlpha),
-            IsAntialias = true,
-            BlendMode = ParseBlend(stamp.Blend),
-            ColorFilter = AreaBeautyRenderer.Compose(BuildColorFilter(stamp), stamp),
-        };
+        using var paintLease = RenderScratch.Paint();
+        var paint = paintLease.Value;
+        paint.Color = SKColors.White.WithAlpha(objectAlpha);
+        paint.IsAntialias = true;
+        paint.BlendMode = ParseBlend(stamp.Blend);
+        paint.ColorFilter = AreaBeautyRenderer.Compose(BuildColorFilter(stamp), stamp);
 
         SKImageFilter? filter = null;
         if (stamp.Blur > 0)
@@ -6639,8 +6694,9 @@ public static partial class SceneRenderer
         var exactCount = layered ? exactCandidates + extras.Count : exact.Count;
         // Also every moving frame: the wheel between fit and 100 % (fast path, no layer) drew ~9 660 exact stamps
         // one by one at 31-55 ms per frame (PC ladder 10 000 objects, 2026-11-15). The settled frame completes them.
-        if (!layered && (exactLayerPending || options.CameraMoving || fallbackScale is not null)
-            && !options.IsExport && options.RequestRefinedFrame is not null && exact.Count > OverviewExactDirectBudget)
+        var provisionalExact = !layered && (exactLayerPending || options.CameraMoving || fallbackScale is not null)
+            && !options.IsExport && options.RequestRefinedFrame is not null;
+        if (provisionalExact && exact.Count > OverviewExactDirectBudget)
         {
             // Until the first layer lands, refine a bounded centre-first subset. Keep the
             // synchronous reference/export path and unsupported layers fully exact.
@@ -6679,6 +6735,15 @@ public static partial class SceneRenderer
         var hiddenLabels = LabelPriority.ForFrame(document, options.ViewScale, options.IsExport ? null : options.RequestRefinedFrame);
         if (hiddenLabels.IsPending && options.Stats is { } labelStats) labelStats.DetailTilesPending++;
         var prepareFinished = Stopwatch.GetTimestamp();
+        var required = scratch.Required;
+        if (provisionalExact)
+        {
+            foreach (var extra in extras) required.Add(extra.Id);
+            if (options.ObjectOverrides is { Count: > 0 } edited)
+                foreach (var replacement in edited) required.Add(replacement.Id);
+        }
+        var directDraws = 0;
+        var deferredDraws = 0;
         foreach (var sceneObject in layered ? (IEnumerable<SceneObject>)exact.Values : exact.Values.OrderBy(item => item.Sublayer))
         {
             if (GivesWay(sceneObject, hiddenLabels, options)) continue;
@@ -6686,8 +6751,21 @@ public static partial class SceneRenderer
                 && Math.Max(sceneObject.Width, sceneObject.Height) * bucketScale < OverviewExactScreenSize)
                 overviewMissing--;
             if (layered) continue;
+            if (provisionalExact && !required.Contains(sceneObject.Id) && !cache.CanDrawProvisionalExact)
+            {
+                deferredDraws++;
+                continue;
+            }
+            var drawStarted = provisionalExact ? Stopwatch.GetTimestamp() : 0;
             DrawObject(canvas, sceneObject, document.StampForeground, options);
+            if (provisionalExact) cache.RecordProvisionalExact(drawStarted);
+            directDraws++;
             options.Stats?.RecordExactObject(sceneObject);
+        }
+        if (deferredDraws > 0)
+        {
+            if (options.Stats is { } pendingExact) pendingExact.DetailTilesPending++;
+            options.RequestRefinedFrame?.Invoke();
         }
 
         if (options.Stats is { } stats)
@@ -6696,7 +6774,11 @@ public static partial class SceneRenderer
             stats.OverviewExactCollectMilliseconds += Stopwatch.GetElapsedTime(exactStarted, collectFinished).TotalMilliseconds;
             stats.OverviewExactPrepareMilliseconds += Stopwatch.GetElapsedTime(collectFinished, prepareFinished).TotalMilliseconds;
             stats.OverviewExactDrawMilliseconds += Stopwatch.GetElapsedTime(prepareFinished).TotalMilliseconds;
+            stats.OverviewExactDirectDraws += directDraws;
+            stats.OverviewExactDrawsDeferred += deferredDraws;
             stats.ObjectCandidates += overviewObjects + exactCount;
+            // This legacy counter describes the represented geometry (also while its images are pending).
+            // Readiness barriers rely on it; actual frame draws have their separate counter below.
             stats.ObjectsDrawn += overviewObjects + exactCount;
             stats.OverviewObjects += overviewObjects;
             stats.MissingAssets += Math.Max(0, overviewMissing);
@@ -6704,8 +6786,8 @@ public static partial class SceneRenderer
             if (overviewMissing > 0 && palette.Unresolved) stats.UnresolvedImages++;
             stats.OverviewChunks += overviewChunks;
             stats.OverviewBatches += overviewBatches;
-            stats.ExactObjects += layered ? exactCount : exact.Count;
-            stats.DrawCalls += overviewChunks + (layered ? 0 : exact.Count);
+            stats.ExactObjects += layered ? exactCount : directDraws;
+            stats.DrawCalls += overviewChunks + directDraws;
             stats.ObjectCacheHits += cache.Hits - cacheHitsBefore;
             stats.ObjectCacheMisses += cache.Misses - cacheMissesBefore;
             stats.ObjectCacheInvalidations += cache.Invalidations - cacheInvalidationsBefore;
@@ -6723,6 +6805,7 @@ public static partial class SceneRenderer
         public readonly List<(int X, int Y, OverviewChunk Chunk, double Distance)> Work = [];
         public readonly Dictionary<(int, int), (OverviewVariant Variant, ObjectOverviewCacheResult Cached)> Drawn = [];
         public readonly List<SceneObject> Extras = [];
+        public readonly HashSet<ObjectId> Required = [];
         public readonly PriorityQueue<SceneObject, (double Distance, Guid Id)> Nearest = new(
             OverviewExactDirectBudget + 1, Comparer<(double Distance, Guid Id)>.Create(static (a, b) => b.CompareTo(a)));
         public static OverviewFrameScratch Rent()
@@ -6733,7 +6816,7 @@ public static partial class SceneRenderer
         }
         public void Dispose()
         {
-            Exact.Clear(); Variants.Clear(); Visible.Clear(); Work.Clear(); Drawn.Clear(); Extras.Clear(); Nearest.Clear();
+            Exact.Clear(); Variants.Clear(); Visible.Clear(); Work.Clear(); Drawn.Clear(); Extras.Clear(); Required.Clear(); Nearest.Clear();
             // A huge export must not make a frame thread retain unbounded backing arrays.
             if (Exact.EnsureCapacity(0) <= 65536 && Visible.Capacity <= 4096) _overviewFrameScratch = this;
         }

@@ -13,8 +13,9 @@ internal static class StarSystemRenderer
 {
     public static void Draw(SKCanvas canvas, MapDocument document, RenderOptions options)
     {
-        foreach (var layer in document.Layers.OfType<HexLayer>())
+        for (var index = 0; index < document.Layers.Count; index++)
         {
+            if (document.Layers[index] is not HexLayer layer) continue;
             if (!layer.Visible || layer.Systems.IsEmpty || (options.HexLevel is { } level && layer.Level != level)) continue;
             var size = (float)layer.Board.Layout.Size;
             using var regular = SKTypeface.FromFamilyName("Segoe UI") ?? SKTypeface.Default;

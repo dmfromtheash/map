@@ -387,6 +387,10 @@ public static partial class SceneRenderer
                 plan = OverviewPlans.GetValue(state.Layer, _ => built);
                 Interlocked.Increment(ref _plansBuilt);
             }
+            // The first wheel frame past the detail threshold must not discover the layer's
+            // cacheability by counting every object twice. The open worker prepares that immutable
+            // metadata too; later revisions still use RevisionsFor's O(delta) handoff.
+            RevisionsFor(state.Layer);
             var planMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
             var planBytes = GC.GetAllocatedBytesForCurrentThread() - allocated;
             allocated = GC.GetAllocatedBytesForCurrentThread();

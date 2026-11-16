@@ -60,6 +60,14 @@ public sealed class ObjectOverviewCache : IDisposable
     private readonly double _overviewBuildBudgetMilliseconds;
     private double _overviewBuildMilliseconds;
     private int _overviewBuilds;
+    private double _provisionalExactMilliseconds;
+
+    // Shared by every overview pass/layer, including detail's cold fallback and its seed. A cap of
+    // 512 objects alone allowed 300-450 ms of native image draws in a single wheel frame (1M mountains).
+    // One indivisible draw may cross the time limit; final/refined views and edited objects bypass it.
+    internal bool CanDrawProvisionalExact => _provisionalExactMilliseconds < 2;
+    internal void RecordProvisionalExact(long started) =>
+        _provisionalExactMilliseconds += System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds;
 
     private readonly Map.Core.Resources.CacheMemoryAccount? _account;
     private long _pressureRetryFrame;
@@ -122,6 +130,7 @@ public sealed class ObjectOverviewCache : IDisposable
 
     internal void BeginOverviewPass()
     {
+        if (!_frameOpen) _provisionalExactMilliseconds = 0;
         if (!_frameOpen) { _overviewBuildMilliseconds = 0; _overviewBuilds = 0; _adoptedPixels = 0; _adoptions = 0; _adoptionMoving = false; }
     }
 
@@ -262,6 +271,7 @@ public sealed class ObjectOverviewCache : IDisposable
         _frame++;
         _overviewBuildMilliseconds = 0;
         _overviewBuilds = 0;
+        _provisionalExactMilliseconds = 0;
         _adoptedPixels = 0;
         _adoptions = 0;
         _adoptionMoving = false;
