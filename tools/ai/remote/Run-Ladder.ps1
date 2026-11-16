@@ -10,7 +10,13 @@ param(
     [int[]]$Counts = @(10000, 25000, 50000, 100000, 250000, 500000, 1000000, 2000000),
     # Paced: each input as soon as the previous one is on a frame (what the program can deliver); otherwise a fixed
     # 60 Hz input, which beats against a 144 Hz display and cannot show 60 fresh frames even at 0 ms per frame.
-    [switch]$Paced
+    [switch]$Paced,
+    # Cold: every step starts with an empty local derived cache (what the owner has after a fresh start of a new map /
+    # cleared cache); the library's own prepared files next to it stay - they are part of the installation.
+    # Owner 2026-11-16: "сразу при запуске холодной проги, а не целого дня разогрева".
+    [switch]$Cold,
+    # Runs of each step (cold repeats show the spread, not one lucky number).
+    [int]$Repeat = 1
 )
 $ErrorActionPreference = 'Stop'
 if ($Paced) { $env:MAP_PERF_INPUT = 'paced'; $Tag = "$Tag-paced" } else { Remove-Item Env:MAP_PERF_INPUT -ErrorAction SilentlyContinue }
@@ -21,9 +27,13 @@ if (-not (Test-Path $csv)) { 'tag,objects,side,route,fps,low1,frameWorkP95,inter
 
 function Get-Side([int]$n) { if ($n -le 500000) { 32768 } elseif ($n -le 1000000) { 65536 } else { 131072 } }
 
-foreach ($n in $Counts) {
+if ($Cold) { $Tag = "$Tag-cold" }
+$plan = foreach ($c in $Counts) { foreach ($r in 1..([math]::Max(1, $Repeat))) { [pscustomobject]@{ N = $c; R = $r } } }
+foreach ($item in $plan) {
+    $n = $item.N
     $side = Get-Side $n
-    $step = "$Tag-$n"
+    $step = if ($Repeat -gt 1) { "$Tag-$n-r$($item.R)" } else { "$Tag-$n" }
+    if ($Cold) { Remove-Item (Join-Path $Base 'derived-assets') -Recurse -Force -ErrorAction SilentlyContinue }
     $started = Get-Date
     & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $here 'Start-PcLiveRun.ps1') -Tag $step -Tree $Tree -Base $Base -Side $side -Count $n | Out-Null
     $run = Join-Path $Base "runs\$step"
@@ -45,7 +55,8 @@ foreach ($n in $Counts) {
         $work = if ($null -ne $route.FrameWorkP95) { [math]::Round($route.FrameWorkP95, 1) } else { '' }
         # Time until every stamp in view has its asked mip (blur -> sharp); "+" marks a wait that hit the 30 s limit.
         $sharp = if ($null -ne $route.SharpDelayMs) { [math]::Round($route.SharpDelayMs / 1000, 2).ToString([Globalization.CultureInfo]::InvariantCulture) + $(if ($route.SharpCompleted -eq $false) { '+' } else { '' }) } else { '' }
-        "$Tag,$n,$side,$($route.Name),$([math]::Round($route.Fps,1)),$low,$work,$intervalMedian,$ready,$sharp" | Add-Content -Encoding ascii $csv
+        $rowTag = if ($Repeat -gt 1) { "$Tag-r$($item.R)" } else { $Tag }
+        "$rowTag,$n,$side,$($route.Name),$([math]::Round($route.Fps,1)),$low,$work,$intervalMedian,$ready,$sharp" | Add-Content -Encoding ascii $csv
         if ($route.Name -notlike 'edit/*') { $moving += $route }
     }
     $avg = if ($moving.Count) { [math]::Round(($moving | Measure-Object Fps -Average).Average, 1) } else { 0 }
