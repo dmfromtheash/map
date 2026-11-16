@@ -12,6 +12,8 @@ internal sealed record PerformanceOptions(
 {
     public IReadOnlyList<string> Catalogs { get; init; } = [];
     public bool DryRun { get; init; }
+    /// <summary>True when --seed was on the command line (a profile with a time-based default seed needs to know).</summary>
+    public bool SeedGiven { get; init; }
 
     public static PerformanceOptions Parse(string[] args)
     {
@@ -23,6 +25,7 @@ internal sealed record PerformanceOptions(
         string? output = null;
         var catalogs = new List<string>();
         var dryRun = false;
+        var seedGiven = false;
 
         for (var index = 0; index < args.Length; index++)
         {
@@ -46,6 +49,7 @@ internal sealed record PerformanceOptions(
                     break;
                 case "--seed":
                     seed = int.Parse(Value("--seed"), CultureInfo.InvariantCulture);
+                    seedGiven = true;
                     break;
                 case "--warmup":
                     warmup = int.Parse(Value("--warmup"), CultureInfo.InvariantCulture);
@@ -73,13 +77,14 @@ internal sealed record PerformanceOptions(
         if (normalizedProfile is not ("drive-library" or "derived-build") && (catalogs.Count > 0 || dryRun))
             throw new ArgumentException("--catalogs и --dry-run доступны только для drive-library и derived-build.");
         var objectCount = requestedObjectCount ?? (normalizedProfile == "drive-library" ? 100
-            : normalizedProfile is "native-million-assets" or "mem-pressure" ? 1_000_000 : 50_000);
+            : normalizedProfile is "native-million-assets" or "mem-pressure" ? 1_000_000
+            : normalizedProfile == "native-build-ladder" ? 10_000 : 50_000);
         var isLargestMapStress = normalizedProfile is
             "native-largest-map-stress" or "native-largest-map-assets-only";
         var minimumObjectCount = isLargestMapStress ? 4 : 1;
         var maximumObjectCount = isLargestMapStress
             ? int.MaxValue
-            : normalizedProfile == "native-million-assets" ? 2_000_000
+            : normalizedProfile is "native-million-assets" or "native-build-ladder" ? 2_000_000
             : normalizedProfile == "mem-pressure" ? 1_000_000 : 100_000;
         if (objectCount < minimumObjectCount || objectCount > maximumObjectCount)
         {
@@ -115,6 +120,7 @@ internal sealed record PerformanceOptions(
         {
             Catalogs = [.. catalogs.Distinct(StringComparer.OrdinalIgnoreCase)],
             DryRun = dryRun,
+            SeedGiven = seedGiven,
         };
     }
 

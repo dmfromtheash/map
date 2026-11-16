@@ -68,7 +68,7 @@ else if (options.Profile == "native-paint-perf")
     Console.WriteLine($"native-paint-perf: routes={smoke.Routes.Count}, gate={(smoke.GatePassed ? "PASS" : "FAIL")}");
     if (smoke.Failure is not null) Console.WriteLine(smoke.Failure);
 }
-else if (options.Profile is "native-zoom-assets" or "native-million-assets")
+else if (options.Profile is "native-zoom-assets" or "native-million-assets" or "native-build-ladder")
 {
     var smoke = NativeZoomAssetsSmoke.Run(options); report = smoke; gatePassed = smoke.GatePassed;
     Console.WriteLine($"native-zoom-assets: scenarios={smoke.Scenarios.Count}, gate={(smoke.GatePassed ? "PASS" : "FAIL")}");

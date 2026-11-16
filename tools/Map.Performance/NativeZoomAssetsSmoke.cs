@@ -37,6 +37,9 @@ internal sealed class NativeZoomAssetsReport
     public List<ZoomScenarioReport> Scenarios { get; } = [];
     public List<string> Frames { get; } = [];
     public Dictionary<string, bool> Checks { get; } = [];
+    /// <summary>native-build-ladder only: one entry per build phase (edit-command timings, objects, memory).</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public List<BuildPhaseReport>? BuildPhases { get; set; }
     public string? Failure { get; set; }
     public bool GatePassed => Failure is null && Checks.Count > 0 && Checks.Values.All(v => v);
 }
@@ -209,7 +212,7 @@ internal static class NativeZoomAssetsSmoke
             catch (Exception ex) { completion.TrySetException(ex); }
         }) { IsBackground = true };
         thread.SetApartmentState(ApartmentState.STA); thread.Start();
-        return completion.Task.WaitAsync(TimeSpan.FromMinutes(25)).GetAwaiter().GetResult();
+        return completion.Task.WaitAsync(TimeSpan.FromMinutes(options.Profile == "native-build-ladder" ? 600 : 25)).GetAwaiter().GetResult();
     }
 }
 
@@ -249,7 +252,7 @@ public sealed partial class ZoomAssetsApplication : Application
         _performanceJournal = new PerformanceJournal(journalRoot);
         _report.Environment["performance-journal"] = Path.Combine(journalRoot, "diagnostics");
         _report.Environment["qpc-frequency"] = Stopwatch.Frequency.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        if (Options.Profile == "native-million-assets" && System.Environment.GetEnvironmentVariable("MAP_PERF_DISABLE_DERIVED") != "1"
+        if (Options.Profile is "native-million-assets" or "native-build-ladder" && System.Environment.GetEnvironmentVariable("MAP_PERF_DISABLE_DERIVED") != "1"
             && string.IsNullOrWhiteSpace(System.Environment.GetEnvironmentVariable("MAP_PERF_DERIVED_ROOT")))
             System.Environment.SetEnvironmentVariable("MAP_PERF_DERIVED_ROOT", Path.Combine(_workspace, "cache", "derived"));
         if (Options.Profile == "native-million-assets" && System.Environment.GetEnvironmentVariable("MAP_PERF_DISABLE_DERIVED") == "1")
@@ -259,7 +262,7 @@ public sealed partial class ZoomAssetsApplication : Application
         _catalog = new AssetCatalog(Path.Combine(_workspace, "catalog"));
         _window = new Window { Width = 1440, Height = 900, Title = "Map — zoom/assets performance", ShowActivated = false,
             ShowInTaskbar = false, WindowStartupLocation = WindowStartupLocation.Manual, Position = new PixelPoint(-32000, -32000) };
-        if (Options.Profile == "native-million-assets")
+        if (Options.Profile is "native-million-assets" or "native-build-ladder")
         {
             // Choose the test display before the desktop lifetime shows the window.
             // A later move still flashes over the owner's primary-screen work.
@@ -514,7 +517,7 @@ public sealed partial class ZoomAssetsApplication : Application
         if (_view is not null) { _view.CloseAuxiliaryWindowsForSmoke(); _view.Canvas.DisposeRenderCaches(); _window.Content = null; }
         EditorViewModel? opening = null;
         CatalogStampImageSource? measuredSource = null;
-        if (Options.Profile == "native-million-assets")
+        if (Options.Profile is "native-million-assets" or "native-build-ladder")
         {
             var retained = System.Environment.GetEnvironmentVariable("MAP_PERF_RETAIN_SAMPLES") != "0";
             measuredSource = new CatalogStampImageSource(_catalog, () => opening?.Session.Document ?? document,
@@ -547,6 +550,7 @@ public sealed partial class ZoomAssetsApplication : Application
         _report.Environment["composition-requested"] = System.Environment.GetEnvironmentVariable("MAP_WIN32_COMPOSITION") ?? "platform-default";
         _report.Environment["measure-gpu-flush"] = (System.Environment.GetEnvironmentVariable("MAP_MEASURE_GPU_FLUSH") == "1").ToString();
         if (Options.Profile == "native-million-assets") { await ExecuteMillion(); return; }
+        if (Options.Profile == "native-build-ladder") { await ExecuteBuildLadder(); return; }
         _report.Environment["os"] = System.Environment.OSVersion.VersionString;
         _report.Environment["cpu-threads"] = System.Environment.ProcessorCount.ToString();
         _report.Environment["window-logical"] = $"{_window.Width}x{_window.Height}";
@@ -1165,7 +1169,7 @@ public sealed partial class ZoomAssetsApplication : Application
             var watch = Stopwatch.StartNew();
             input();
             System.Threading.Volatile.Write(ref requested, canvas.RequestFrameForSmoke());
-            var frame = await completion.Task.WaitAsync(TimeSpan.FromSeconds(Options.Profile == "native-million-assets" ? 180 : 30));
+            var frame = await completion.Task.WaitAsync(TimeSpan.FromSeconds(Options.Profile is "native-million-assets" or "native-build-ladder" ? 180 : 30));
             watch.Stop();
             return (frame.Scene, watch.Elapsed.TotalMilliseconds, frame.Work, frame.Gpu);
         }
