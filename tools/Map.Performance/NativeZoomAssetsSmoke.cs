@@ -40,6 +40,8 @@ internal sealed class NativeZoomAssetsReport
     /// <summary>native-build-ladder only: one entry per build phase (edit-command timings, objects, memory).</summary>
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public List<BuildPhaseReport>? BuildPhases { get; set; }
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public List<BuildCoverageRow>? BuildCoverage { get; set; }
     public string? Failure { get; set; }
     public bool GatePassed => Failure is null && Checks.Count > 0 && Checks.Values.All(v => v);
 }

@@ -76,3 +76,16 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\ai\remote\Run-BuildLad
 `Run-Ladder.ps1`): `route` = `<фаза>/<маршрут>`, например `rivers/wheel/in-100`, `reopen/pan/100`; правки —
 `<фаза>/edit/<команда>`, где `fps` = команд в секунду вместе с кадром после, `frameWorkP95` = p95 работы
 команды в мс. Число ПК — живой замер, если в это время ПК не копирует файлы и не гоняет тесты.
+
+Покрытие функций (владелец 2026-11-16: «тестить ВСЕ функции»): список `CoverageList()` в
+`NativeBuildLadder.Coverage.cs` — 101 функция по семействам `docs/perf/perf-functions.md §1`, у каждой имя строки
+правки (`<фаза>/<команда>`) или причина «не покрыто». В конце прогона таблица `environment.coverage-table`,
+`buildCoverage[]` и проверки `coverage/<функция>`: функция без успешной строки (упала, всё отказано, фаза не
+прошла) — FAIL; семейство `### 1.N` без функции в списке и значение `EditorTool` / `StampPlacementMode` /
+`LandShapeKind` / `DecorationKind` без функции — тоже FAIL. Состояние 2026-11-16: строки есть у 26 функций,
+6 не покрыты с причиной, 69 ещё не реализованы в фазах (прогон честно красный, пока их не добавят).
+
+Сторож: `tools\ai\remote\Run-Guard.ps1 -Ref <ветка|коммит> -Out <папка>` — сборка в
+`C:\Projects\Map\.worktrees\guard`, лестница с seed 101 и 202, `-Mode Both`, 10 000 и 100 000 (`-Full` + 1 000 000),
+2 повтора, сравнение `Compare-Ladder.ps1` с `docs\perf\baseline-build-ladder.csv`, вердикт `verdict.md`; код выхода
+0 принято, 1 хуже, 2 не запущено / нет базы (тогда `baseline-candidate.csv`). Задачу планировщика не создаёт.

@@ -163,6 +163,7 @@ public sealed partial class ZoomAssetsApplication
         }
         _report.Checks["saved"] = saved && File.Exists(target);
         PrintBuildTable();
+        CheckCoverage();
         BuildCheckpoint();
     }
 
@@ -601,7 +602,7 @@ public sealed partial class ZoomAssetsApplication
         {
             var kind = kinds[i];
             SetScale((_side * corners[i].Item1, _side * corners[i].Item2), _view.Canvas.Bounds.Width / (_side / 4.0));
-            await Cmd("region/decoration", () => _editor.AddDecoration(kind));
+            await Cmd("region/decoration-" + kind, () => _editor.AddDecoration(kind));
         }
         _editor.DeselectObject(); _view.Canvas.FitToCanvas();
         // More of the land filled where the regions are.
