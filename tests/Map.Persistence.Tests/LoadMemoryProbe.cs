@@ -42,13 +42,16 @@ public sealed class LoadMemoryProbe
         }
     }
 
-    [Fact]
+    [OptInFact("separate-process save/open memory report (phase save/open, input map and report path)",
+        "MAP_DOC_MEM_PROBE", "MAP_DOC_MEM_PHASE", "MAP_DOC_MEM_FILE")]
     public void Measure()
     {
         var output = Environment.GetEnvironmentVariable("MAP_DOC_MEM_PROBE");
         var phase = Environment.GetEnvironmentVariable("MAP_DOC_MEM_PHASE");
         var path = Environment.GetEnvironmentVariable("MAP_DOC_MEM_FILE");
-        if (string.IsNullOrWhiteSpace(output) || string.IsNullOrWhiteSpace(phase) || string.IsNullOrWhiteSpace(path)) return;
+        ArgumentException.ThrowIfNullOrWhiteSpace(output);
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        if (phase is not ("save" or "open")) throw new ArgumentException("MAP_DOC_MEM_PHASE must be save or open.");
         var n = int.Parse(Environment.GetEnvironmentVariable("MAP_DOC_MEM_COUNT") ?? "200000");
         var tag = Environment.GetEnvironmentVariable("MAP_DOC_MEM_TAG") ?? "";
         if (phase == "save") { Save(path, n); return; }

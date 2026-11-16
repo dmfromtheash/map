@@ -38,13 +38,13 @@ public sealed class RenderPathCostGuardTests : IClassFixture<RenderPathCostGuard
     [InlineData("visible-raster-frame")]
     public void Bounded_render_path(string key) => Compare(key, 200_000, true);
 
-    [Fact(Skip = "O(N): " + DenseLinear)]
+    [Fact(Skip = "defect: O(N): " + DenseLinear)]
     public void Dense_overview_delta() => Compare("overview-delta-dense", 200_000, true);
 
-    [Fact(Skip = "O(N): " + RiverLinear)]
+    [Fact(Skip = "defect: O(N): " + RiverLinear)]
     public void River_preview_resolution() => Compare("river-preview", 200_000, true);
 
-    [Fact(Skip = "O(N): " + RoadLinear)]
+    [Fact(Skip = "defect: O(N): " + RoadLinear)]
     public void Road_preview_resolution() => Compare("road-preview", 200_000, true);
 
     [EnvironmentFact("MAP_RENDER_GUARDS_AUDIT")]
@@ -213,6 +213,6 @@ public sealed class RenderPathCostGuardTests : IClassFixture<RenderPathCostGuard
     public sealed class EnvironmentFactAttribute : FactAttribute
     {
         public EnvironmentFactAttribute(string variable)
-        { if (Environment.GetEnvironmentVariable(variable) != "1") Skip = "Set " + variable + "=1"; }
+        { if (Environment.GetEnvironmentVariable(variable) != "1") Skip = "defect: large-map audit/1M cost guard needs an opt-in host; set " + variable + "=1"; }
     }
 }

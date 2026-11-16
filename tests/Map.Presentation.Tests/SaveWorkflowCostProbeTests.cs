@@ -12,11 +12,11 @@ namespace Map.Presentation.Tests;
 /// Invokes the worker after admission: the Windows named heavy-operation gate is unavailable on macOS.</summary>
 public sealed class SaveWorkflowCostProbeTests
 {
-    [Fact]
+    [OptInFact("owner-mountain save/autosave worker cost report (no CI time budget)", "MAP_SAVE_WORKFLOW_COUNT")]
     public async Task Measure_save_and_autosave_with_owner_art()
     {
         var countText = Environment.GetEnvironmentVariable("MAP_SAVE_WORKFLOW_COUNT");
-        if (countText is null) return;
+        ArgumentException.ThrowIfNullOrWhiteSpace(countText);
         var count = int.Parse(countText);
         var root = Directory.CreateTempSubdirectory("map-save-workflow-").FullName;
         try

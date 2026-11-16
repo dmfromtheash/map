@@ -1,96 +1,83 @@
-# Test integrity guard (DEC-116). ASCII only (Windows PowerShell 5.1 reads files without BOM as ANSI).
-#
-# 1. Silent passes in tests/: a test body that returns early on an environment variable, a missing file/folder or the
-#    OS, and Skip reasons without "defect:". Known ones are listed in tools/ai/test-integrity-baseline.txt; a NEW one
-#    fails. -UpdateBaseline rewrites the list (only after the owner-visible review of the change).
-# 2. Weakened tests in the commits since -Base: added Skip, removed Assert lines, larger numbers in lines that carry a
-#    budget/threshold/timeout, a test moved to a slow/separate collection. Fails unless a commit message in the range
-#    carries "test-change:" with the reason.
-# Exit 0 = clean, 1 = findings. Output: one line per finding.
+# DEC-116 source/diff guard. ASCII; Windows PowerShell 5.1 and pwsh, no packages.
+# Baseline entries: exact finding key | nonempty review reason. No wildcard exceptions.
+# -Base compares that commit with the working tree (including uncommitted tracked edits).
+# A nonempty test-change: explanation in the commit range permits diff weakening only;
+# source violations still require defect: reasons or individually named baseline entries.
+# Exit 0 = clean, 1 = findings, 2 = invalid input/tool failure. -SelfTest uses red/green fixtures.
 param(
-    [string]$Repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path,
+    [string]$Repo = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path,
     [string]$Base = '',
-    [switch]$UpdateBaseline
+    [switch]$UpdateBaseline,
+    [string]$BaselineReason = '',
+    [switch]$SelfTest
 )
 $ErrorActionPreference = 'Stop'
-Set-Location $Repo
-$baselinePath = Join-Path $Repo 'tools\ai\test-integrity-baseline.txt'
-$findings = New-Object System.Collections.Generic.List[string]
-
-# ---------------------------------------------------------------- 1. silent passes
-$silent = New-Object System.Collections.Generic.List[string]
-$early = '^\s*if \(.*(GetEnvironmentVariable|File\.Exists|Directory\.Exists|OperatingSystem\.Is).*\)\s*return\s*;'
-$skip = 'Skip\s*=\s*"([^"]*)"'
-Get-ChildItem (Join-Path $Repo 'tests') -Recurse -Filter *.cs -File | Where-Object { $_.FullName -notmatch '\\(bin|obj)\\' } | ForEach-Object {
-    $rel = $_.FullName.Substring($Repo.Length + 1).Replace('\', '/')
-    $lines = [IO.File]::ReadAllLines($_.FullName)
-    $method = ''
-    for ($i = 0; $i -lt $lines.Length; $i++) {
-        $line = $lines[$i]
-        if ($line -match '^\s*(public|internal|private)\s+(async\s+)?(void|Task)\s+(\w+)\s*\(') { $method = $Matches[4] }
-        if ($line -match $early) { $silent.Add("silent-return $rel :: $method") }
-        foreach ($m in [regex]::Matches($line, $skip)) {
-            if ($m.Groups[1].Value -notmatch '^defect:') { $silent.Add("skip-without-defect $rel :: $method") }
-        }
+try {
+    if (-not ('MapTestGuards.Guard' -as [type])) {
+        $compile = @{ Path = (Join-Path $PSScriptRoot 'Test-GuardSupport.cs') }
+        if ($PSVersionTable.PSEdition -ne 'Core') { $compile.ReferencedAssemblies = @('System.dll', 'System.Core.dll', 'System.Xml.dll') }
+        Add-Type @compile
     }
-}
-$current = $silent | Sort-Object -Unique
-if ($UpdateBaseline) {
-    [IO.File]::WriteAllLines($baselinePath, [string[]]$current)
-    "baseline written: $($current.Count) known silent passes -> $baselinePath"
+    if ($SelfTest) {
+        [MapTestGuards.Guard]::SelfTest((Join-Path $PSScriptRoot 'test-guard-cases.xml'))
+        exit 0
+    }
+    $Repo = (Resolve-Path -LiteralPath $Repo).Path.TrimEnd([IO.Path]::DirectorySeparatorChar)
+    $baselinePath = Join-Path $Repo 'tools/ai/test-integrity-baseline.txt'
+    $paths = New-Object System.Collections.Generic.List[string]
+    $texts = New-Object System.Collections.Generic.List[string]
+    $testRoot = Join-Path $Repo 'tests'
+    if (-not (Test-Path -LiteralPath $testRoot -PathType Container)) { throw "Missing tests directory: $testRoot" }
+    foreach ($file in (Get-ChildItem -LiteralPath $testRoot -Recurse -Filter *.cs -File | Sort-Object FullName)) {
+        if ($file.FullName -match '[/\\](bin|obj)[/\\]') { continue }
+        $paths.Add($file.FullName.Substring($Repo.Length + 1).Replace('\', '/'))
+        $texts.Add([IO.File]::ReadAllText($file.FullName))
+    }
+    if ($paths.Count -eq 0) { throw 'No C# test sources found' }
+    $silent = @([MapTestGuards.Guard]::ScanSources($paths.ToArray(), $texts.ToArray()))
+    $current = @($silent | ForEach-Object { $_.Key } | Sort-Object -Unique)
+    $known = [MapTestGuards.Guard]::ReadBaseline('')
+    $findings = New-Object System.Collections.Generic.List[string]
+    if (Test-Path -LiteralPath $baselinePath) {
+        $known = [MapTestGuards.Guard]::ReadBaseline([IO.File]::ReadAllText($baselinePath))
+    }
+    if ($UpdateBaseline) {
+        if (-not $BaselineReason.Trim() -or $BaselineReason -match '[\r\n]') { throw '-UpdateBaseline requires a nonempty, single-line -BaselineReason after owner review' }
+        $entries = @('# Exact finding key | review reason (DEC-116). No wildcard entries.')
+        $entries += @($current | ForEach-Object {
+            $reason = $BaselineReason
+            if ($known.ContainsKey($_)) { $reason = $known[$_] }
+            "$_ | $reason"
+        })
+        [IO.File]::WriteAllText($baselinePath, (($entries -join "`r`n") + "`r`n"), [Text.UTF8Encoding]::new($false))
+        "baseline written: $($current.Count) named findings -> $baselinePath"
+        exit 0
+    }
+    foreach ($s in $silent) {
+        if (-not $known.ContainsKey($s.Key)) { $findings.Add("NEW $s") }
+        else { "KNOWN $s | $($known[$s.Key])" }
+    }
+    $gone = @($known.Keys | Where-Object { $current -notcontains $_ })
+    "source findings: $($silent.Count) occurrences, $($current.Count) named keys (baseline $($known.Count), stale $($gone.Count))"
+    if (-not $Base) {
+        $Base = ((& git -C $Repo merge-base HEAD origin/main 2>$null) -join '').Trim()
+        if ($LASTEXITCODE -ne 0 -or -not $Base) { throw 'Cannot determine diff base; supply -Base explicitly' }
+    }
+    & git -C $Repo rev-parse --verify "$Base^{commit}" 2>$null | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Invalid diff base: $Base" }
+    $messages = (& git -C $Repo log --format=%B "$Base..HEAD" 2>$null) -join "`n"
+    if ($LASTEXITCODE -ne 0) { throw 'git log failed' }
+    $justified = [MapTestGuards.Guard]::HasJustification($messages)
+    $diff = (& git -C $Repo diff --no-ext-diff --no-color --unified=20 $Base -- tests 2>$null) -join "`n"
+    if ($LASTEXITCODE -ne 0) { throw 'git diff failed' }
+    $weak = @([MapTestGuards.Guard]::ScanDiff($diff))
+    "weakened lines since ${Base}: $($weak.Count) (justified by test-change: $justified)"
+    foreach ($w in $weak) {
+        if ($justified) { "JUSTIFIED $w" } else { $findings.Add("WEAKENED $w") }
+    }
+    foreach ($f in $findings) { $f }
+    if ($findings.Count -gt 0) { "Test-Integrity: FAIL ($($findings.Count))"; exit 1 }
+    'Test-Integrity: OK'
     exit 0
 }
-$known = @{}
-if (Test-Path $baselinePath) { foreach ($k in [IO.File]::ReadAllLines($baselinePath)) { if ($k) { $known[$k] = $true } } }
-foreach ($s in $current) { if (-not $known.ContainsKey($s)) { $findings.Add("NEW $s") } }
-$gone = @($known.Keys | Where-Object { $current -notcontains $_ })
-"silent passes: $($current.Count) (known $($known.Count), fixed since baseline $($gone.Count))"
-
-# ---------------------------------------------------------------- 2. weakened tests in the range
-if (-not $Base) { $Base = (git merge-base HEAD origin/main 2>$null) }
-if ($Base) {
-    $messages = (git log --format=%B "$Base..HEAD" 2>$null) -join "`n"
-    $justified = $messages -match 'test-change:'
-    $diff = git diff --unified=0 "$Base" -- tests 2>$null
-    $file = ''
-    $removed = New-Object System.Collections.Generic.List[string]
-    $weak = New-Object System.Collections.Generic.List[string]
-    $threshold = '(Assert|Budget|budget|Timeout|TimeSpan|Milliseconds|Seconds|Ratio|ratio|<=|>=|Max|Limit|Within)'
-    foreach ($line in $diff) {
-        if ($line -like '+++ b/*') { $file = $line.Substring(6); $removed.Clear(); continue }
-        if ($line -like '@@*') { $removed.Clear(); continue }
-        if ($line -like '-*' -and $line -notlike '---*') {
-            $text = $line.Substring(1)
-            if ($text -match 'Assert\.' ) { $weak.Add("assert-removed $file :: $($text.Trim())") }
-            $removed.Add($text)
-            continue
-        }
-        if ($line -like '+*' -and $line -notlike '+++*') {
-            $text = $line.Substring(1)
-            if ($text -match $skip -and $Matches[1] -notmatch '^defect:') { $weak.Add("skip-added $file :: $($text.Trim())") }
-            if ($text -match '\[Collection\(.*(Slow|Starved|Serial|RealTime)') { $weak.Add("moved-to-collection $file :: $($text.Trim())") }
-            if ($text -match $threshold) {
-                $shape = [regex]::Replace($text, '\d+(\.\d+)?', '#')
-                foreach ($old in $removed) {
-                    if ([regex]::Replace($old, '\d+(\.\d+)?', '#') -ne $shape) { continue }
-                    $a = [regex]::Matches($old, '\d+(\.\d+)?') | ForEach-Object { [double]$_.Value }
-                    $b = [regex]::Matches($text, '\d+(\.\d+)?') | ForEach-Object { [double]$_.Value }
-                    for ($k = 0; $k -lt [Math]::Min(@($a).Count, @($b).Count); $k++) {
-                        if (@($b)[$k] -gt @($a)[$k]) { $weak.Add("number-raised $file :: $($old.Trim()) -> $($text.Trim())"); break }
-                    }
-                }
-            }
-        }
-    }
-    # An assert moved inside the same change (removed and re-added) is not a removal.
-    $added = $diff | Where-Object { $_ -like '+*' } | ForEach-Object { $_.Substring(1).Trim() }
-    $weak = $weak | Where-Object { -not ($_ -like 'assert-removed*' -and $added -contains (($_ -split ' :: ', 2)[1])) }
-    "weakened lines since $($Base.Substring(0, [Math]::Min(8, $Base.Length))): $(@($weak).Count) (justified by test-change: $justified)"
-    if (-not $justified) { foreach ($w in $weak) { $findings.Add("WEAKENED $w") } }
-    else { foreach ($w in $weak) { "  (justified) $w" } }
-}
-
-foreach ($f in $findings) { $f }
-if ($findings.Count -gt 0) { "Test-Integrity: FAIL ($($findings.Count))"; exit 1 }
-"Test-Integrity: OK"
-exit 0
+catch { Write-Error -ErrorAction Continue "Test-Integrity: ERROR: $_"; exit 2 }

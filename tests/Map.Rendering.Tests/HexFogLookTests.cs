@@ -23,11 +23,11 @@ public sealed class HexFogLookTests
     }
 
     /// <summary>MAP_FOG_LOOKS=&lt;folder&gt;: the plain fog and the three painted looks, for players and for the game master.</summary>
-    [Fact]
+    [OptInFact("manual fog-look PNG sheet, no automated visual baseline", "MAP_FOG_LOOKS")]
     public void Looks_for_review()
     {
         var folder = Environment.GetEnvironmentVariable("MAP_FOG_LOOKS");
-        if (string.IsNullOrWhiteSpace(folder)) return;
+        ArgumentException.ThrowIfNullOrWhiteSpace(folder);
         Directory.CreateDirectory(folder);
         var (document, _, _, _) = Explored();
         foreach (var look in new[] { 0, 3 })

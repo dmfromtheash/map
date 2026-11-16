@@ -8,11 +8,12 @@ namespace Map.Persistence.Tests;
 /// <summary>Opt-in headless persistence probe; preview rendering is measured separately.</summary>
 public sealed class SaveCostProbeTests
 {
-    [Fact]
+    [OptInFact("cross-build byte comparison needs a map from the other build and an output path",
+        "MAP_SAVE_COMPAT_INPUT", "MAP_SAVE_COMPAT_OUTPUT")]
     public void Cross_build_round_trip()
     {
         var input = Environment.GetEnvironmentVariable("MAP_SAVE_COMPAT_INPUT");
-        if (input is null) return;
+        ArgumentException.ThrowIfNullOrWhiteSpace(input);
         var output = Environment.GetEnvironmentVariable("MAP_SAVE_COMPAT_OUTPUT")!;
         var opened = MapProjectStore.Open(input);
         MapProjectStore.Save(opened.Document, output,
@@ -21,11 +22,11 @@ public sealed class SaveCostProbeTests
         Console.WriteLine($"COMPAT {Path.GetFileName(input)} -> {Path.GetFileName(output)}: byte-identical");
     }
 
-    [Fact]
+    [OptInFact("large-map save/autosave cost report (no CI time budget)", "MAP_SAVE_PROBE_COUNT")]
     public void Save_and_autosave_cost()
     {
         var countText = Environment.GetEnvironmentVariable("MAP_SAVE_PROBE_COUNT");
-        if (countText is null) return;
+        ArgumentException.ThrowIfNullOrWhiteSpace(countText);
         var count = int.Parse(countText);
         var rich = Environment.GetEnvironmentVariable("MAP_SAVE_PROBE_RICH") == "1";
         using var workspace = new TempWorkspace();

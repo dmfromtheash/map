@@ -29,11 +29,11 @@ public sealed class PathLabelBeautyTests
     }
 
     /// <summary>MAP_LABEL_FRAMES=&lt;folder&gt;: a labelled bend for the eye.</summary>
-    [Fact]
+    [OptInFact("manual path-label PNG sheet, no automated visual baseline", "MAP_LABEL_FRAMES")]
     public void Frames_for_review()
     {
         var folder = Environment.GetEnvironmentVariable("MAP_LABEL_FRAMES");
-        if (string.IsNullOrWhiteSpace(folder)) return;
+        ArgumentException.ThrowIfNullOrWhiteSpace(folder);
         Directory.CreateDirectory(folder);
         using var bitmap = Render(out _, 2);
         using var image = SKImage.FromBitmap(bitmap);

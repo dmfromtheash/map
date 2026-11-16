@@ -53,11 +53,11 @@ public sealed class DocMemoryProbe
             [new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FFFFFFFF"),
              new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, objects)]);
 
-    [Fact]
+    [OptInFact("100k/1M document/index memory report (no CI memory budget)", "MAP_DOC_MEM_PROBE")]
     public void Measure()
     {
         var output = Environment.GetEnvironmentVariable("MAP_DOC_MEM_PROBE");
-        if (string.IsNullOrWhiteSpace(output)) return;
+        ArgumentException.ThrowIfNullOrWhiteSpace(output);
         var report = new StringBuilder();
         foreach (var n in new[] { 100_000, 1_000_000 }) MeasureOne(n, report);
         File.AppendAllText(output, report.ToString());

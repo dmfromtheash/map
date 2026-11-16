@@ -27,10 +27,10 @@ public sealed class PixelBisectCatalogRepro
     private static string? Out => Environment.GetEnvironmentVariable("MAP_PIXREPRO_OUT");
     private static string Label => Environment.GetEnvironmentVariable("MAP_PIXREPRO_LABEL") ?? "run";
 
-    [Fact]
+    [OptInFact("500k-stamp/1800-owner-image pixel-bisect dump; comparison is a separate manual step", "MAP_PIXREPRO_OUT")]
     public async Task Render_catalog_scenarios()
     {
-        if (Out is not { } outDir) return;
+        var outDir = Out ?? throw new InvalidOperationException("MAP_PIXREPRO_OUT is required.");
         Directory.CreateDirectory(outDir);
         var catalogRoot = Environment.GetEnvironmentVariable("MAP_PIXREPRO_CATALOG") ?? Path.Combine(outDir, "catalog");
         var derivedRoot = Path.Combine(outDir, "derived-" + Label);
