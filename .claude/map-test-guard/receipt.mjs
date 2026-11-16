@@ -31,7 +31,9 @@ export function parseArguments(argv) {
   return o;
 }
 
-const quote = (s) => (/[\s"]/.test(s) ? `"${s.replace(/"/g, '\\"')}"` : s);
+// The command runs through the shell (cmd on Windows): a filter like "A|B" must be quoted or cmd pipes it
+// (2026-11-16: `--filter FullyQualifiedName~A|FullyQualifiedName~B` ran "B" as a program, exit 255, no .trx).
+const quote = (s) => (/[\s"|&<>^]/.test(s) ? `"${s.replace(/"/g, '\\"')}"` : s);
 
 /** Adds the results folder to the command (see header). Throws when it cannot know where .trx goes. */
 export function prepareCommand(command, resultsDir) {
