@@ -96,6 +96,26 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
     public long DiscardedMips => Interlocked.Read(ref _discardedMips);
     private sealed class MipRequest(CancellationTokenSource stop)
     {
+        private readonly object _priorityGate = new();
+        private readonly HashSet<StampImageRequestPriority> _priorities = [];
+        private bool _ordinary;
+        public void AddPriority(StampImageRequestPriority? priority)
+        {
+            lock (_priorityGate)
+            {
+                if (priority is null) _ordinary = true;
+                else _priorities.Add(priority);
+            }
+        }
+        public double PriorityValue()
+        {
+            lock (_priorityGate)
+            {
+                var best = _ordinary ? 0 : double.PositiveInfinity;
+                foreach (var priority in _priorities) best = Math.Min(best, priority.Value);
+                return best;
+            }
+        }
         public CancellationTokenSource Stop { get; } = stop;
         public bool Started { get; set; }
         /// <summary>Large-raster bytes this request holds in the waiting budget until taken or retired.</summary>
@@ -105,12 +125,13 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
     // Finished small results waiting for the canvas: at most 64 × 256² × 4 B = 16 MiB. The canvas adopts them
     // under its 2 ms budget, about a hundred per frame; eight slots let a dense view take only eight per frame.
     private const int CompactMipSide = 256;
-    private readonly SemaphoreSlim _mipSlots = new(64);
+    private readonly PriorityGate _mipSlots = new(64);
     // Small mips were read strictly one at a time: a zoom into 10 000 stamps queued 1 851 requests and assets
     // arrived seconds late (PC ladder, 2026-11-15). Independent compressed mips overlap on 2-4 lanes without growing
     // the 64-result handoff (Mac mipprio: 2600 -> 1762 ms to a sharp view, 59 -> 37 frames).
     internal static readonly int SmallReaderCount = Math.Clamp(Environment.ProcessorCount - 2, 2, 4);
     private readonly SemaphoreSlim _mipReader = new(SmallReaderCount);
+    private readonly PriorityGate _mipAdmission = new(SmallReaderCount);
     // A compact result can still require a full source decode (missing ladder/portable entry or repair).
     // Keep that native working memory at its former single-source bound.
     private readonly SemaphoreSlim _compactSourceReader = new(1);
@@ -119,7 +140,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
     // always passes, so a master larger than the budget cannot wait for ever. Small results keep their slots.
     internal static readonly int LargeLaneCount = Math.Clamp(Environment.ProcessorCount - 2, 1, 4);
     internal const long LargeWaitingByteBudget = 128L * 1024 * 1024;
-    private readonly SemaphoreSlim _largeLanes = new(LargeLaneCount);
+    private readonly PriorityGate _largeLanes = new(LargeLaneCount);
     // Under memory pressure only one large raster is prepared at a time.
     private readonly SemaphoreSlim _pressureLane = new(1);
     private readonly object _largeGate = new();
@@ -304,19 +325,21 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
     }
 
     /// <summary>Refuses new keys when full; callers share one capacity notification, never evict current demand.</summary>
-    public bool TryRequestPixels(Header header, int step, int level, out Task<Mip> task)
+    public bool TryRequestPixels(Header header, int step, int level, out Task<Mip> task,
+        StampImageRequestPriority? priority = null)
     {
         var key = new PixelKey(header.Sha.ToLowerInvariant(), step, level);
         lock (_requestsGate)
         {
             if (_disposed) { task = Task.FromResult(new Mip(null, 0, 0, false, Cancelled: true)); return false; }
-            if (_mips.TryGetValue(key, out var held)) { task = held.Task; return true; }
+            if (_mips.TryGetValue(key, out var held)) { held.AddPriority(priority); task = held.Task; return true; }
             if (_mips.Count >= _pixelCapacity)
             {
                 task = _capacityAvailable.Task;
                 return false;
             }
             var request = new MipRequest(CancellationTokenSource.CreateLinkedTokenSource(_stop.Token));
+            request.AddPriority(priority);
             request.Task = Task.Run(() => ReadRequestedMip(header, key, request));
             _mips[key] = request;
             Interlocked.Increment(ref _journalPixels);
@@ -364,10 +387,13 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
                 && Math.Max(Math.Max(1, record.Width >> key.Step) >> key.Level, Math.Max(1, record.Height >> key.Step) >> key.Level) <= CompactMipSide;
             if (!compact && record is not null)
                 return await ReadLargeRaster(header, key, request, record).ConfigureAwait(false);
-            if (compact) { await _mipSlots.WaitAsync(request.Stop.Token).ConfigureAwait(false); reserved = true; }
-            await _mipReader.WaitAsync(request.Stop.Token).ConfigureAwait(false);
+            if (compact) { await _mipSlots.WaitAsync(request.PriorityValue, request.Stop.Token).ConfigureAwait(false); reserved = true; }
+            await _mipAdmission.WaitAsync(request.PriorityValue, request.Stop.Token).ConfigureAwait(false);
             try
             {
+                await _mipReader.WaitAsync(request.Stop.Token).ConfigureAwait(false);
+                try
+                {
                 lock (_requestsGate) { request.Stop.Token.ThrowIfCancellationRequested(); request.Started = true; }
                 if (header.PortablePath is not null && TryReadPortablePixels(header, key) is { } portable)
                 {
@@ -417,7 +443,9 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
                 }
                 return new Mip(pixels, width, height, reserved, Image: mipImage);
             }
-            finally { _mipReader.Release(); }
+                finally { _mipReader.Release(); }
+            }
+            finally { _mipAdmission.Release(); }
         }
         catch (OperationCanceledException)
         {
@@ -441,7 +469,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
         var pressure = false;
         try
         {
-            await _largeLanes.WaitAsync(token).ConfigureAwait(false);
+            await _largeLanes.WaitAsync(request.PriorityValue, token).ConfigureAwait(false);
             try
             {
                 if (Map.Core.Resources.WorkingMemoryBudget.Shared.IsUnderPressure)
@@ -1031,7 +1059,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
                 SaveKnownColors();
                 ClearPreparedSource();
                 lock (_memoryGate) { _memoryPixels.Clear(); _memoryBytes = 0; }
-                _mipReader.Dispose(); _compactSourceReader.Dispose(); _mipSlots.Dispose(); _largeLanes.Dispose(); _pressureLane.Dispose(); _stop.Dispose();
+                _mipReader.Dispose(); _mipAdmission.Dispose(); _compactSourceReader.Dispose(); _mipSlots.Dispose(); _largeLanes.Dispose(); _pressureLane.Dispose(); _stop.Dispose();
             });
         }
     }

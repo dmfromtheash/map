@@ -788,7 +788,7 @@ public sealed partial class CatalogStampImageSource(
         // drawn from kept layer images) says nothing about what the view needs: cancelling then dropped every
         // sharp request of the gesture, and the sharp level started only ~135 ms after the camera stopped
         // (the blur the owner saw on wheel, 2026-11-15).
-        if (cancelRequests && _frameBeganUnderGate && _wantedMips.Count > 0)
+        if (cancelRequests && _frameBeganUnderGate && (_wantedMips.Count > 0 || _planInterests > 0 || _planDemandChanged))
         {
             // A late request can still be waiting for metadata when the camera leaves it;
             // then no pixel task exists to deliver a cancellation back to BeginFrame.
@@ -797,6 +797,7 @@ public sealed partial class CatalogStampImageSource(
             // Kept overview rasters wait for these exact keys: a frame that did not draw them must not cancel them.
             _wantedMips.UnionWith(_leaseWanted.Keys);
             _derived?.CancelUnwantedPixels(_wantedMips);
+            _planDemandChanged = false;
         }
         if (_disposed) { DisposeIfUnused(); return; }
         _cache.DeferDisposal = false;
@@ -987,7 +988,7 @@ public sealed partial class CatalogStampImageSource(
                         else if (header.IsCompletedSuccessfully && header.Result is { } prepared)
                         {
                             // The held task when another request already asked; the capacity signal when the store is full.
-                            _derived.TryRequestPixels(prepared, key.Step, key.Level, out var pixels);
+                            _derived.TryRequestPixels(prepared, key.Step, key.Level, out var pixels, lease.Priority);
                             wait = pixels;
                         }
                         else { FailedPixels(key); continue; }
@@ -1029,6 +1030,7 @@ public sealed partial class CatalogStampImageSource(
         internal readonly CancellationToken Cancellation = cancellation;
         internal readonly long Deadline = Environment.TickCount64 + (long)ExactWaitLimit.TotalMilliseconds;
         internal int Preparing;
+        public StampImageRequestPriority? Priority { get; set; }
         public int PreparingLookups { get { lock (_source._gate) return Preparing; } }
 
         public override SKImage? TryGetImage(string sha256) =>
@@ -1214,6 +1216,9 @@ public sealed partial class CatalogStampImageSource(
 
     private sealed class PreparationPlan(CatalogStampImageSource source, long revision) : IStampPreparationPlan
     {
+        public bool BackgroundPreparation => true;
+        public StampImageRequestPriority? Priority { get; set; }
+        public IDisposable? KeepRequests() => source.KeepPlanRequests(this);
         internal readonly HashSet<StampDerivedAssetStore.PixelKey> Keys = [];
         internal (StampDerivedAssetStore.PixelKey Key, string Name)[]? Names;
         internal long ReadyAt = -1, CheckedAt = -1;
@@ -1226,6 +1231,35 @@ public sealed partial class CatalogStampImageSource(
         public IStampImageLease? Pin() => source.PinPlan(this);
         public IStampImageLease? PinResident() => source.PinPlan(this, resident: true);
     }
+
+    private IDisposable KeepPlanRequests(PreparationPlan plan)
+    {
+        lock (_gate)
+        {
+            var keys = plan.Keys.ToArray();
+            foreach (var key in keys) AddInterest(key);
+            _planInterests++;
+            _planDemandChanged = true;
+            return new PlanInterest(this, keys);
+        }
+    }
+
+    private sealed class PlanInterest(CatalogStampImageSource source, StampDerivedAssetStore.PixelKey[] keys) : IDisposable
+    {
+        private int _closed;
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _closed, 1) != 0) return;
+            lock (source._gate)
+            {
+                foreach (var key in keys) source.RemoveInterest(key);
+                source._planInterests--;
+                source._planDemandChanged = true;
+            }
+        }
+    }
+    private int _planInterests;
+    private bool _planDemandChanged;
 
     /// <summary>
     /// The plan's resident images, pinned for a background tile raster: the shelf may evict them meanwhile, but
@@ -1245,6 +1279,7 @@ public sealed partial class CatalogStampImageSource(
         var images = new Dictionary<StampDerivedAssetStore.PixelKey, SKImage>();
         var sizes = new Dictionary<string, (int Width, int Height)>(StringComparer.OrdinalIgnoreCase);
         var occlusion = new Dictionary<string, SKImage>(StringComparer.OrdinalIgnoreCase);
+        var missing = new HashSet<StampDerivedAssetStore.PixelKey>();
         var held = new HashSet<SKImage>();
         var complete = false;
         try
@@ -1259,14 +1294,18 @@ public sealed partial class CatalogStampImageSource(
                     {
                         var (pixel, name) = names[i];
                         var image = ReadyPixels(name);
+                        var terminal = _cacheableMissing.Contains(pixel);
                         if (image is null && resident && plan.Records.TryGetValue(pixel.Sha, out var record))
                             image = ResidentLevel(record, pixel)?.Image;
+                        if (image is null && terminal && plan.Records.TryGetValue(pixel.Sha, out var absent))
+                            image = ResidentLevel(absent, pixel)?.Image;
                         if (image is not null)
                         {
                             images[pixel] = image;
                             if (held.Add(image)) { _cache.Pin(image); _samples.Pin(image); }
                         }
-                        else if (!resident && !_decodeFailed.Contains(name)) return null;
+                        else if (terminal) missing.Add(pixel);
+                        else if (!resident) return null;
                     }
                 }
             }
@@ -1290,7 +1329,7 @@ public sealed partial class CatalogStampImageSource(
             lock (_gate)
             {
                 if (_disposed || plan.SourceRevision != SourceRevision) return null;
-                var result = new PinnedPlan(this, plan.Records, images, sizes, occlusion, [.. held]);
+                var result = new PinnedPlan(this, plan, plan.Records, images, sizes, occlusion, missing, [.. held]);
                 complete = true;
                 return result;
             }
@@ -1313,13 +1352,15 @@ public sealed partial class CatalogStampImageSource(
         }
     }
 
-    /// <summary>What a background tile draws from: a fixed snapshot of one plan, never a request or a decode.</summary>
-    private sealed class PinnedPlan(CatalogStampImageSource source, IReadOnlyDictionary<string, AssetRecord> records,
+    /// <summary>Pinned pixels for a background tile; a float mip miss only extends its plan for a later retry.</summary>
+    private sealed class PinnedPlan(CatalogStampImageSource source, PreparationPlan plan, IReadOnlyDictionary<string, AssetRecord> records,
         Dictionary<StampDerivedAssetStore.PixelKey, SKImage> images, Dictionary<string, (int Width, int Height)> sizes,
-        Dictionary<string, SKImage> occlusion, SKImage[] held) : IStampImageLease
+        Dictionary<string, SKImage> occlusion, HashSet<StampDerivedAssetStore.PixelKey> missing, SKImage[] held) : IStampImageLease
     {
         private int _disposed;
         public long SourceRevision => source.SourceRevision;
+        public long MissingRevision => source.MissingRevision;
+        public bool LastImageRequestCacheableMissing { get; private set; }
         public long UnresolvedRequestVersion { get; private set; }
         public bool LastImageRequestPending { get; private set; }
         public (int Width, int Height)? TryGetImageSize(string sha256) => sizes.TryGetValue(sha256, out var size) ? size : null;
@@ -1329,10 +1370,17 @@ public sealed partial class CatalogStampImageSource(
         public SKImage? TryGetImageForPixelSize(string sha256, double width, double height)
         {
             LastImageRequestPending = false;
-            return records.TryGetValue(sha256, out var record) && images.TryGetValue(PixelKey(record, width, height), out var image)
-                ? image : Miss();
+            LastImageRequestCacheableMissing = false;
+            if (!records.TryGetValue(sha256, out var record)) return Miss();
+            var key = PixelKey(record, width, height);
+            if (images.TryGetValue(key, out var image)) return image;
+            if (missing.Contains(key)) { LastImageRequestCacheableMissing = true; return null; }
+            // Float geometry/rotation can cross a mip boundary absent from the double-sized plan.
+            // Extend it on this worker and retry the tile; never send this raster back to the frame.
+            source.AddToPlan(plan, [(sha256, width, height)]);
+            return Miss();
         }
-        private SKImage? Miss() { LastImageRequestPending = true; UnresolvedRequestVersion++; return null; }
+        private SKImage? Miss() { LastImageRequestCacheableMissing = false; LastImageRequestPending = true; UnresolvedRequestVersion++; return null; }
         public void Dispose()
         {
             if (Interlocked.Exchange(ref _disposed, 1) == 0) source.EndPinnedPlan(held);
@@ -1356,7 +1404,7 @@ public sealed partial class CatalogStampImageSource(
                     plan.Bytes += (long)Math.Max(1, Math.Max(1, record.Width >> pixel.Step) >> pixel.Level)
                         * Math.Max(1, Math.Max(1, record.Height >> pixel.Step) >> pixel.Level) * 4;
             }
-            plan.Names = null; plan.Missing = null; plan.CheckedAt = -1;
+            plan.Names = null; plan.Missing = null; plan.CheckedAt = plan.ReadyAt = -1;
         }
     }
 
@@ -1384,16 +1432,17 @@ public sealed partial class CatalogStampImageSource(
             var keys = plan.CheckedAt == epoch && plan.Missing is { } missing ? missing
                 : plan.Names ??= [.. plan.Keys.Select(key => (key, PixelName(key)))];
             var stillMissing = new List<(StampDerivedAssetStore.PixelKey Key, string Name)>();
-            // At most 512 new requests per check: a cold tile asks for thousands, spread over a few frames.
+            // At most one compact handoff (64 keys) per worker pass. A cold tile cannot flood the
+            // store's 4096-key capacity before the next view has a chance to change its priorities.
             var asked = 0;
             foreach (var (pixel, name) in keys)
             {
                 if (ReadyPixels(name) is not null) continue;
                 // Still wanted, so a request already in flight is not cancelled at the end of the frame.
                 _wantedMips.Add(pixel);
-                if (asked >= 512) { stillMissing.Add((pixel, name)); continue; }
+                if (asked >= 64) { stillMissing.Add((pixel, name)); continue; }
                 asked++;
-                if (!_decodeFailed.Contains(name) && !QueuePixels(pixel, ready)) stillMissing.Add((pixel, name));
+                if (!_decodeFailed.Contains(name) && !QueuePixels(pixel, ready, plan.Priority)) stillMissing.Add((pixel, name));
             }
             plan.Missing = [.. stillMissing];
             plan.CheckedAt = _cache.Evictions + _samples.Evictions;
@@ -1522,14 +1571,14 @@ public sealed partial class CatalogStampImageSource(
 
     // Normal completions are adopted by BeginFrame under its 2 ms budget. A preflight
     // may run several times per frame; draining here would multiply that budget.
-    private bool QueuePixels(StampDerivedAssetStore.PixelKey key, Action ready)
+    private bool QueuePixels(StampDerivedAssetStore.PixelKey key, Action ready, StampImageRequestPriority? priority = null)
     {
         _wantedMips.Add(key);
         var header = _derived!.Request(key.Sha);
         if (!header.IsCompleted) { NotifyDerived(key.Sha, header, ready); return false; }
         if (header.IsCompletedSuccessfully && header.Result is { } prepared)
         {
-            var accepted = _derived.TryRequestPixels(prepared, key.Step, key.Level, out var pixels);
+            var accepted = _derived.TryRequestPixels(prepared, key.Step, key.Level, out var pixels, priority);
             NotifyDerived(accepted ? PixelName(key) : "queue-capacity", pixels, ready);
             return false;
         }

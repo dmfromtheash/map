@@ -27,7 +27,11 @@ public static partial class SceneRenderer
         public required double Scale { get; init; }
         public required int Bucket { get; init; }
         public required RenderOptions Options { get; init; }
-        public required IStampImageLease Images { get; init; }
+        public IStampImageLease? Images;
+        public IStampPreparationPlan? Plan;
+        public IDisposable? Demand;
+        public readonly StampImageRequestPriority Priority = new();
+        public bool Preparing;
         public required Action? Ready { get; init; }
         /// <summary>A coarse fallback level (see <see cref="DrawDetailedStampTiles"/>), not an exact tile.</summary>
         public required bool Seed { get; init; }
@@ -50,6 +54,10 @@ public static partial class SceneRenderer
         /// <summary>Tiles whose background raster came back incomplete: they are built on the frame as before.</summary>
         public readonly HashSet<DetailRasterKey> FrameOnly = [];
         public int Running => Jobs.Values.Count(job => !job.Done);
+        public WorldBounds? View;
+        public long ViewFrame = -1;
+        public double AheadX, AheadY;
+        public bool BackgroundPreparation;
     }
 
     private static readonly ConditionalWeakTable<ObjectOverviewCache, DetailRasterJobs> DetailRasterContexts = [];
@@ -62,6 +70,24 @@ public static partial class SceneRenderer
     internal static DetailWorkQueue DetailRasterQueue = new(DetailRasterWorkers);
 
     private static void QueueDetailWork(Action work, bool overviewLayer = false) => DetailRasterQueue.Add(work, overviewLayer);
+
+    private static void QueueDetailWorkFromFrame(Action work, RenderStats? stats, Action? rejected = null)
+    {
+        var queue = DetailRasterQueue;
+        if (queue.TryAdd(work)) return;
+        if (stats is not null) stats.DetailQueueDeferrals++;
+        ThreadPool.QueueUserWorkItem(static item =>
+        {
+            try { item.Queue.Add(item.Work); }
+            catch (ObjectDisposedException)
+            {
+                // A deferred descriptor can lose a race with render-context shutdown.
+                try { item.Rejected?.Invoke(); }
+                catch (Exception error) when (error is not OutOfMemoryException)
+                { System.Diagnostics.Trace.TraceError("Deferred detail cleanup: {0}", error); }
+            }
+        }, (Queue: queue, Work: work, Rejected: rejected), preferLocal: false);
+    }
 
     /// <summary>Two FIFO priorities. Idle workers leave the CPUs free while a visible raster is still running.</summary>
     internal sealed class DetailWorkQueue : IDisposable
@@ -93,6 +119,19 @@ public static partial class SceneRenderer
                 (overviewLayer ? _layers : _visible).Enqueue(work);
                 Monitor.PulseAll(_gate);
             }
+        }
+
+        internal bool TryAdd(Action work)
+        {
+            if (!Monitor.TryEnter(_gate)) return false;
+            try
+            {
+                ObjectDisposedException.ThrowIf(_stopped, this);
+                _visible.Enqueue(work);
+                Monitor.PulseAll(_gate);
+                return true;
+            }
+            finally { Monitor.Exit(_gate); }
         }
 
         private void Run()
@@ -143,7 +182,22 @@ public static partial class SceneRenderer
         try
         {
             lock (job) if (job.Cancelled) { FinishDetailRaster(job, null, false); return; }
-            var tile = PrepareDetailTile(job.Layer, job.Bounds, job.Scale, null, default, job.Options);
+            if (job.Plan is { } plan)
+            {
+                job.Demand ??= plan.KeepRequests();
+                if (!plan.Prepare(job.Ready!) || (job.Images = plan.Pin()) is null)
+                {
+                    lock (job)
+                    {
+                        if (job.Cancelled) { FinishDetailRaster(job, null, false); return; }
+                        job.Preparing = false;
+                    }
+                    job.Ready?.Invoke();
+                    return;
+                }
+            }
+            var tile = PrepareDetailTile(job.Layer, job.Bounds, job.Scale, null, default,
+                job.Options.ForBackgroundTile(job.Images!, new RenderStats()));
             (job.Objects, job.Culled) = (tile.Objects, tile.Culled);
             job.Tile = tile;
             // Only a seed is split: a clip moves Skia's edge coverage by up to 3/255 at the parts' seams, harmless in
@@ -159,7 +213,8 @@ public static partial class SceneRenderer
             }
             RunDetailRasterPart(job, 0);
         }
-        catch (Exception ex) when (ex is not OutOfMemoryException) { FinishDetailRaster(job, null, false); }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        { System.Diagnostics.Trace.TraceError("Detail tile: {0}", ex); FinishDetailRaster(job, null, false); }
     }
 
     private static void RunDetailRasterPart(DetailRasterJob job, int part)
@@ -173,7 +228,7 @@ public static partial class SceneRenderer
             if (!cancelled)
             {
                 var stats = new RenderStats();
-                var options = job.Options.ForBackgroundTile(job.Images, stats);
+                var options = job.Options.ForBackgroundTile(job.Images!, stats);
                 using var scratch = new StampBatchScratch();
                 // The same platform pixel layout as the frame-thread CPU path.
                 // The same platform pixel layout as the frame-thread CPU path.
@@ -195,7 +250,8 @@ public static partial class SceneRenderer
                 unresolved = stats.UnresolvedImages;
             }
         }
-        catch (Exception ex) when (ex is not OutOfMemoryException) { image?.Dispose(); image = null; }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        { System.Diagnostics.Trace.TraceError("Detail tile: {0}", ex); image?.Dispose(); image = null; }
         job.Parts![part] = image;
         if (image is null || unresolved > 0) Interlocked.Increment(ref job.Failures);
         if (Interlocked.Decrement(ref job.Remaining) > 0) return;
@@ -221,12 +277,14 @@ public static partial class SceneRenderer
         }
         catch (Exception ex) when (ex is not OutOfMemoryException) { composed?.Dispose(); composed = null; }
         foreach (var piece in job.Parts) piece?.Dispose();
-        FinishDetailRaster(job, composed, composed is not null && job.Images.UnresolvedRequestVersion == 0);
+        FinishDetailRaster(job, composed, composed is not null && job.Images!.UnresolvedRequestVersion == 0);
     }
 
     private static void FinishDetailRaster(DetailRasterJob job, SKImage? image, bool complete)
     {
-        job.Images.Dispose();
+        job.Images?.Dispose();
+        job.Demand?.Dispose();
+        job.Demand = null;
         lock (job)
         {
             if (job.Cancelled) { image?.Dispose(); image = null; }
@@ -238,25 +296,56 @@ public static partial class SceneRenderer
     }
 
     /// <summary>Cancels background tiles that no frame asked for since the previous one (the view or revision moved on).</summary>
-    private static void SweepDetailRasters(ObjectOverviewCache cache)
+    internal static void SweepDetailRasters(ObjectOverviewCache cache, bool endFrame = false)
     {
         if (!DetailRasterContexts.TryGetValue(cache, out var context) || context.Jobs.Count == 0) return;
-        foreach (var (key, job) in context.Jobs.Where(pair => pair.Value.Touched < cache.FrameNumber - 1).ToArray())
+        foreach (var (key, job) in context.Jobs.Where(pair => pair.Value.Touched < cache.FrameNumber - (endFrame ? 0 : 1)).ToArray())
         {
             context.Jobs.Remove(key);
-            lock (job)
-            {
-                job.Cancelled = true;
-                job.Image?.Dispose();
-                job.Image = null;
-            }
+            CancelDetailRaster(job);
         }
         if (context.FrameOnly.Count > 256) context.FrameOnly.Clear();
     }
 
+    internal static void ReleaseDetailRasters(ObjectOverviewCache cache)
+    {
+        if (!DetailRasterContexts.TryGetValue(cache, out var context)) return;
+        foreach (var job in context.Jobs.Values)
+            CancelDetailRaster(job);
+        context.Jobs.Clear();
+        DetailRasterContexts.Remove(cache);
+    }
+
+    // Relinquish ownership on the frame; dropping image interests or waiting for a job's
+    // publication lock belongs to a worker, just like acquiring/pinning its images.
+    private static void CancelDetailRaster(DetailRasterJob job)
+    {
+        Volatile.Write(ref job.Cancelled, true);
+        job.Priority.Value = double.PositiveInfinity;
+        ThreadPool.QueueUserWorkItem(static cancelled =>
+        {
+            SKImage? image;
+            IDisposable? demand = null;
+            lock (cancelled)
+            {
+                image = cancelled.Image; cancelled.Image = null;
+                if (!cancelled.Preparing && !cancelled.Done)
+                { demand = cancelled.Demand; cancelled.Demand = null; }
+            }
+            image?.Dispose(); demand?.Dispose();
+        }, job, preferLocal: false);
+    }
+
+    // Finished job images are CPU rasters; releasing an abandoned one need not enter Skia's
+    // native allocation/handle bookkeeping on the compositor thread either.
+    private static void RetireDetailImage(SKImage? image)
+    {
+        if (image is not null) ThreadPool.QueueUserWorkItem(static held => held.Dispose(), image, preferLocal: false);
+    }
+
     private static BackgroundTile TryBackgroundTile(MapDocument document, ObjectLayer layer, DetailTileRevisions revisions,
         int x, int y, int bucket, WorldBounds bounds, double scale, ulong revision, ObjectOverviewCache cache, RenderOptions options,
-        DetailPreparation frame, bool seed, out ObjectOverviewCacheResult adopted)
+        DetailPreparation frame, bool seed, out ObjectOverviewCacheResult adopted, bool prefetch = false)
     {
         adopted = default;
         if (options.Stamps is not { } stamps || options.RequestRefinedFrame is not { } ready) return BackgroundTile.FrameThread;
@@ -266,19 +355,38 @@ public static partial class SceneRenderer
         if (context.Jobs.TryGetValue(key, out var job))
         {
             job.Touched = cache.FrameNumber;
+            job.Priority.Value = DetailPriority(context, bounds, seed || prefetch);
             SKImage? image;
-            lock (job)
+            if (!Monitor.TryEnter(job))
             {
-                if (!job.Done) { if (options.Stats is { } waiting) waiting.DetailRastersWaiting++; return BackgroundTile.Waiting; }
+                if (options.Stats is { } busy) busy.DetailJobLocksBusy++;
+                return BackgroundTile.Waiting;
+            }
+            try
+            {
+                if (!job.Done)
+                {
+                    if (job.Plan is not null && !job.Preparing && frame.StartedJobs < 2)
+                    {
+                        job.Preparing = true;
+                        frame.StartedJobs++;
+                        QueueDetailWorkFromFrame(() => RunDetailRaster(job), options.Stats,
+                            () => FinishDetailRaster(job, null, false));
+                    }
+                    if (options.Stats is { } waiting) waiting.DetailRastersWaiting++;
+                    return BackgroundTile.Waiting;
+                }
                 // Each adopted tile is a texture upload on its first draw (on the CPU a 0.26 Mpx copy): one per frame.
                 if (frame.Adopted >= 1) return BackgroundTile.Waiting;
                 image = job.Image;
                 job.Image = null;
             }
+            finally { Monitor.Exit(job); }
             context.Jobs.Remove(key);
             if (image is null || !job.Complete)
             {
-                image?.Dispose();
+                RetireDetailImage(image);
+                if (job.Plan is not null) return BackgroundTile.Waiting;
                 context.FrameOnly.Add(key);
                 return BackgroundTile.FrameThread;
             }
@@ -292,20 +400,44 @@ public static partial class SceneRenderer
         // A tile with a kept base gets only its appended objects drawn over that base, on the frame as before.
         if (!layer.Effects.DepthSort && revisions.TryAppendBase(cache, layer.Id, x, y, bucket, area, stamps.MissingRevision, out _, out _))
             return BackgroundTile.FrameThread;
-        if (revisions.Plan(x, y, bucket, area, stamps) is not { Complete: true } tile) return BackgroundTile.FrameThread;
-        if (context.Running >= DetailRasterWorkers * 2) return BackgroundTile.Waiting;
-        if (tile.Plan.Pin() is not { } images)
+        if (revisions.Plan(x, y, bucket, area, stamps) is not { Complete: true } tile)
+            return context.BackgroundPreparation ? BackgroundTile.Waiting : BackgroundTile.FrameThread;
+        if (context.Running >= DetailRasterWorkers * 2 || frame.StartedJobs >= 2) return BackgroundTile.Waiting;
+        var backgroundPreparation = tile.Plan.BackgroundPreparation;
+        context.BackgroundPreparation |= backgroundPreparation;
+        if (backgroundPreparation)
+        {
+            var heldBytes = context.Jobs.Values.Where(j => !j.Done && j.Plan is not null).Sum(j => j.Plan!.Bytes);
+            if (heldBytes > 0 && heldBytes + tile.Plan.Bytes > stamps.PreparationBytes) return BackgroundTile.Waiting;
+        }
+        var images = backgroundPreparation ? null : tile.Plan.Pin();
+        if (!backgroundPreparation && images is null)
             return tile.Plan.Prepare(ready) ? BackgroundTile.FrameThread : BackgroundTile.Waiting;
         var started = new DetailRasterJob
         {
             Key = key, Document = document, Layer = layer, Bounds = bounds, Scale = scale, Bucket = bucket,
-            Options = options.ForBackgroundTile(images, new RenderStats()), Images = images, Ready = ready, Seed = seed,
+            Options = options.ForBackgroundTile(stamps, new RenderStats()), Images = images, Ready = ready, Seed = seed,
+            Plan = backgroundPreparation ? tile.Plan : null, Preparing = true,
             Touched = cache.FrameNumber,
         };
+        started.Priority.Value = DetailPriority(context, bounds, seed || prefetch);
+        if (backgroundPreparation) tile.Plan.Priority = started.Priority;
         context.Jobs.Add(key, started);
-        QueueDetailWork(() => RunDetailRaster(started));
+        frame.StartedJobs++;
+        QueueDetailWorkFromFrame(() => RunDetailRaster(started), options.Stats,
+            () => FinishDetailRaster(started, null, false));
         if (options.Stats is { } stats) stats.DetailRastersStarted++;
         return BackgroundTile.Waiting;
+    }
+
+    // Visible tiles first, biased by up to half a viewport in the current direction of travel.
+    // Prefetch uses the same distance but is always behind visible detail.
+    private static double DetailPriority(DetailRasterJobs context, WorldBounds tile, bool seed)
+    {
+        if (context.View is not { } view) return 0;
+        var x = (tile.Left + tile.Right - view.Left - view.Right) / 2 - context.AheadX;
+        var y = (tile.Top + tile.Bottom - view.Top - view.Bottom) / 2 - context.AheadY;
+        return x * x + y * y + (seed ? 1e18 : 0);
     }
 
     /// <summary>

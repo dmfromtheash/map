@@ -95,6 +95,7 @@ public static partial class SceneRenderer
             public (OverviewChunk Chunk, OverviewPalette Palette, int Zoom)[] Neighbours = [];
             public int NeighbourCursor;
             public long FailedAt;
+            public readonly StampImageRequestPriority ImagePriority = new();
 
             public LayerWork(ObjectLayer layer, IReadOnlyList<MapAssetReference> assets,
                 IStampImageSource? source, Action ready, Snapshot? previous)
@@ -180,6 +181,9 @@ public static partial class SceneRenderer
                 // The latest frame says whether the view moves; a settled frame releases the prefetch.
                 if (primaryView) _frameMoving = options.CameraMoving;
                 var state = GetLayer(layer, document.Assets, options.Stamps, options.RequestRefinedFrame ?? (() => { }));
+                // A detail fallback must not put a whole chunk's small mips ahead of visible exact tiles.
+                // The same live handle promotes pending reads again when this becomes the primary view.
+                state.ImagePriority.Value = primaryView ? 0 : 1e18;
                 var view = new View(bounds, zoom, document.StampForeground);
                 if (state.View != view)
                 {
@@ -465,6 +469,7 @@ public static partial class SceneRenderer
             // A kept raster must hold exactly what a settled frame draws, whichever thread builds it and
             // whenever: the exact lease waits for each image's prepared pixels instead of another level.
             using var lease = state.Source?.ExactLease(token);
+            if (lease is not null) lease.Priority = state.ImagePriority;
             var options = new RenderOptions { Stamps = lease, LodTier = RenderLodTier.Overview, ViewScale = Math.Pow(2, work.Zoom / 4d) };
             var image = variant.BuildImage(work.Foreground, options, token);
             if (lease?.PreparingLookups > 0)

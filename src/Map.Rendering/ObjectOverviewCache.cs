@@ -275,6 +275,7 @@ public sealed class ObjectOverviewCache : IDisposable
 
     public void EndFrame()
     {
+        SceneRenderer.SweepDetailRasters(this, endFrame: true);
         _frameOpen = false;
         _framePins.Clear();
         foreach (var pair in _refiningViews)
@@ -527,6 +528,7 @@ public sealed class ObjectOverviewCache : IDisposable
     {
         if (_frameOpen) { _disposeRequested = true; return; }
         _disposeRequested = false;
+        SceneRenderer.ReleaseDetailRasters(this);
         foreach (var entry in _entries.Values)
         {
             entry.Image.Dispose();
