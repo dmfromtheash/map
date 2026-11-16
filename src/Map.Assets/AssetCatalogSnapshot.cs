@@ -65,6 +65,16 @@ public sealed partial class AssetCatalog
         public LayeredIndex<AssetSet> BySet { get; }
         private readonly Lazy<AssetLibraryDocument> _view;
         public AssetLibraryDocument View => _view.Value;
+        private readonly Lazy<IReadOnlyList<AssetRecentEntry>> _recent;
+        public IReadOnlyList<AssetRecentEntry> Recent => _recent.Value;
+
+        public string? CurrentVariantOf(string setId)
+        {
+            if (Own.Document.CurrentVariantBySet.TryGetValue(setId, out var own)) return own;
+            foreach (var mount in Mounted)
+                if (mount.Layer.Document.CurrentVariantBySet.TryGetValue(setId, out var variant)) return variant;
+            return null;
+        }
 
         public CatalogSnapshot(CatalogLayer own, MountedLayer[] mounts)
         {
@@ -78,6 +88,12 @@ public sealed partial class AssetCatalog
             // QueryAsync captures it in O(1); the first merge runs on its worker, once per snapshot.
             _view = new(() => mounts.Length == 0 ? own.Document
                 : Merge(own.Document, mounts.Select(mount => mount.Layer.Document)));
+            // Recency changes on each placement. Reading the bounded recent strips or the
+            // remembered variant must not materialize all records/variants/sets of the drives.
+            // Keep Merge's stable timestamp order and own/first-mount lookup precedence.
+            _recent = new(() => mounts.Length == 0 ? own.Document.Recent
+                : own.Document.Recent.Concat(mounts.SelectMany(mount => mount.Layer.Document.Recent))
+                    .OrderByDescending(entry => entry.UsedUtc).ToArray());
         }
 
         public AssetCatalog? MountForRecord(string? sha) => MountFor(sha, Own.BySha, layer => layer.BySha);
