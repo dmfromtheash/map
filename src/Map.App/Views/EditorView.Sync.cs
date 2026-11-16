@@ -115,6 +115,8 @@ public sealed partial class EditorView
     private SelectionRefreshDelta _lastUiSelection = SelectionRefreshDelta.Empty;
     private long _uiQueuedAt;
     private HashSet<string>? _selectionFollowChanges;
+    private SceneObject? _lastUiObject;
+    private MapLayer? _lastUiActiveLayer;
 
     private void OnEditorChanged(object? sender, PropertyChangedEventArgs e)
     {
@@ -167,12 +169,32 @@ public sealed partial class EditorView
         var structure = UiStructureKey();
         var structureChanged = structure != _lastUiStructure;
         _lastUiStructure = structure;
+        var selected = _editor.Session.SelectedObject;
+        var selectionChanged = !ReferenceEquals(selected, _lastUiObject);
+        // Translation changes the geometry boxes, already copied by SyncInspector below.
+        // It cannot change the stamp's style, header, owning layer or property controls.
+        if (selectionChanged && selected is { Kind: SceneObjectKind.Stamp } && _lastUiObject is { } oldObject
+            && SceneObjectClone.At(selected, oldObject.X, oldObject.Y) == oldObject)
+            selectionChanged = false;
+        _lastUiObject = selected;
+        var activeLayer = _editor.ActiveLayer;
+        var layerChanged = activeLayer is ObjectLayer objects && _lastUiActiveLayer is ObjectLayer previous
+            ? (objects with { Objects = previous.Objects }) != previous : activeLayer != _lastUiActiveLayer;
+        _lastUiActiveLayer = activeLayer;
         Timed("status", SyncStatus);
-        if (scene || structureChanged)
+        if (scene)
         {
             DeferPanels(DeferredPanel.Path | DeferredPanel.Area | DeferredPanel.River | DeferredPanel.Road
-                | DeferredPanel.Context | (scene ? DeferredPanel.Side : DeferredPanel.None));
+                | DeferredPanel.Side);
         }
+        // Appending an unselected stamp changes neither the inspector nor the tool settings.
+        // Keep property edits and surface selections current without refreshing every slider
+        // and layer control for each placement.
+        if (structureChanged || selectionChanged || layerChanged
+            || scene && (_editor.SelectedLand is not null || _editor.SelectedRiver is not null
+                || _editor.SelectedRoad is not null || _editor.SelectedEditablePath is not null
+                || _editor.SelectedEditableArea is not null))
+            DeferPanels(DeferredPanel.Context);
         // Water, roads and land are selections too: the section that lists them opens, its
         // property block refreshes, and the rows show the selected state.
         if (changed.Overlaps([nameof(EditorViewModel.WaterSelectionIds), nameof(EditorViewModel.RoadSelectionIds),
@@ -181,9 +203,12 @@ public sealed partial class EditorView
             var current = SelectionRefreshDelta.Capture(_editor);
             selectionDelta = selectionDelta.Merge(_lastUiSelection).Merge(current);
             _lastUiSelection = current;
-            _selectionFollowChanges = changed;
-            try { Timed("follow-selection", FollowSelectionToSection); }
-            finally { _selectionFollowChanges = null; }
+            PanelWork.Replace("follow-selection", SmallJobs(() =>
+            {
+                _selectionFollowChanges = changed;
+                try { Timed("follow-selection", FollowSelectionToSection); }
+                finally { _selectionFollowChanges = null; }
+            }));
             Timed("object-list-selection", () => SyncObjectListSelection(selectionDelta));
             Timed("section-footer", SyncSectionFooter);
         }
@@ -199,14 +224,15 @@ public sealed partial class EditorView
         {
             DeferPanels(DeferredPanel.Context);
         }
-        if (changed.Overlaps([nameof(EditorViewModel.StampToolSettings), nameof(EditorViewModel.CurrentVariant),
-            nameof(EditorViewModel.CompactRecentSets), nameof(EditorViewModel.CompactFavoriteSets)]))
+        if (changed.Overlaps([nameof(EditorViewModel.StampToolSettings), nameof(EditorViewModel.CurrentVariant)]))
         {
             Timed("appearance-sections", SyncAppearanceSections);
-            Timed("stamp-tool-panel", SyncStampToolPanel);
             if (changed.Contains(nameof(EditorViewModel.CurrentVariant)))
                 PanelWork.Replace("selected-set", SmallJobs(SyncSelectedSet));
         }
+        if (changed.Overlaps([nameof(EditorViewModel.StampToolSettings), nameof(EditorViewModel.CurrentVariant),
+            nameof(EditorViewModel.CompactRecentSets), nameof(EditorViewModel.CompactFavoriteSets)]))
+            PanelWork.Replace("stamp-tool", SmallJobs(SyncStampToolPanel));
         if (changed.Any(p => p.StartsWith("Canvas", StringComparison.Ordinal) || p.StartsWith("Region", StringComparison.Ordinal)))
             Timed("canvas-workflow", SyncCanvasWorkflow);
         if (changed.Any(p => p.StartsWith("Export", StringComparison.Ordinal)) || changed.Overlaps([
@@ -563,6 +589,9 @@ public sealed partial class EditorView
         Timed("appearance", SyncAppearanceSections);
         // Layer and level are refreshed on every context change, including "nothing is selected".
         Timed("layer-level", SyncLayerAndLevel);
+        var contentStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+        void ContentDone() => timings?.Add(("ui:context/content",
+            System.Diagnostics.Stopwatch.GetElapsedTime(contentStarted).TotalMilliseconds));
         // A new selection points the panel at the object; a new tool points it at the tool. Both
         // remain reachable afterwards, which is the part the old ActiveTool == Select gate broke.
         var selectionSignature = _editor.SelectionCount > 0
@@ -641,6 +670,7 @@ public sealed partial class EditorView
                     : EditorLabels.Objects(count) + SelectionLayerSuffix(), null);
             SyncMultiSelectionPanel();
             _contextHost.Content = _multiSelectionRoot;
+            ContentDone();
             return;
         }
 
@@ -664,6 +694,7 @@ public sealed partial class EditorView
 
             _kindSlot.Content = KindSection(kind);
             _contextHost.Content = _selectionRoot;
+            ContentDone();
             return;
         }
 
@@ -682,6 +713,7 @@ public sealed partial class EditorView
         if (_surfaceSelectedState.IsVisible) SyncSurfaceSelectedState();
         _toolSlot.Content = _toolPanels[_editor.ActiveTool];
         _contextHost.Content = _selectIdleRoot;
+        ContentDone();
     }
 
     /// <summary>
@@ -1405,7 +1437,8 @@ public sealed partial class EditorView
         if (previous is null || previous.Entities != document.Entities) Timed("entity-list", SyncEntities);
         Timed("fog", SyncFog);
         Timed("compare", SyncCompareBlock);
-        Timed("transitions", SyncTransitions);
+        if (previous is null || previous.Transitions != document.Transitions || !document.Transitions.IsEmpty)
+            Timed("transitions", SyncTransitions);
         Timed("timeline", SyncTimeline);
         Timed("pointcrawl", SyncPointcrawl);
         Timed("planet", SyncPlanet);

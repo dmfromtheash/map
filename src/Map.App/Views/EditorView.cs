@@ -499,7 +499,7 @@ public sealed partial class EditorView : UserControl
             lock (_uiSyncGate) _sceneSyncPending = true;
             OnEditorChanged(this, new(nameof(EditorViewModel.Session)));
             // Undo/Redo of a light or style change brings «Вид» back in line (not while a slider drags).
-            Dispatcher.UIThread.Post(SyncLookParts);
+            PanelWork.Replace("look-parts", SmallJobs(SyncLookParts));
         };
         _editor.SceneInvalidated += (_, e) =>
         {

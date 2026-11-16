@@ -18,6 +18,7 @@ public sealed class SelectionStepCostTests
 {
     [Theory]
     [InlineData(10_000)]
+    [InlineData(100_000)]
     [InlineData(200_000)]
     public Task Native_select_step_with_owner_stamps(int count) => EditorUiThread.Run(() =>
     {
