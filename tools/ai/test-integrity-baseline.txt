@@ -1,44 +1,46 @@
-silent-return tests/Map.Persistence.Tests/LightingPersistenceTests.cs :: Write_the_live_check_map_when_asked
-silent-return tests/Map.Presentation.Tests/CreateDemoTests.cs :: Each_demo_grows_frame_by_frame_into_the_real_thing
-silent-return tests/Map.Presentation.Tests/PixelBisectCatalogRepro.cs :: Compare_catalog_to_base
-silent-return tests/Map.Presentation.Tests/StampDerivedAssetStoreLargeSlotsTests.cs :: Dense_view_of_large_results_measurement
-silent-return tests/Map.Rendering.Tests/ContinentRenderingTests.cs :: Continent_sheet_for_review
-silent-return tests/Map.Rendering.Tests/CoverageCacheBenchmark.cs :: Huge_canvas_fit_and_quarter_scale_pan_cpu
-silent-return tests/Map.Rendering.Tests/CoverageCacheBenchmark.cs :: Pixel_fixtures_against_original_renderer
-silent-return tests/Map.Rendering.Tests/DenseDetailTilesTests.cs :: Benchmark_dense_8192
-silent-return tests/Map.Rendering.Tests/HexFogLookTests.cs :: Timing_for_review
-silent-return tests/Map.Rendering.Tests/LandCliffRenderingTests.cs :: Look_sheets_for_review
-silent-return tests/Map.Rendering.Tests/LightingFrameDump.cs :: Dump_every_light_variation_when_asked
-silent-return tests/Map.Rendering.Tests/LightingFrameDump.cs :: Dump_the_relief_choice_when_asked
-silent-return tests/Map.Rendering.Tests/OverviewZoomOutSettleTests.cs :: Benchmark_zoom_out_to_fit_with_and_without_camera_frames
-silent-return tests/Map.Rendering.Tests/PixelBisectRepro.cs :: Compare_to_base
-silent-return tests/Map.Rendering.Tests/ReliefRenderingTests.cs :: Relief_sheet_for_review
-silent-return tests/Map.Rendering.Tests/RiverFeatureRenderingTests.cs :: Feature_sheet_for_review
-silent-return tests/Map.Rendering.Tests/SeaStyleRenderingTests.cs :: Sea_sheet_for_review
-silent-return tests/Map.Rendering.Tests/Stage19WaterJoinRenderingTests.cs :: Frames_for_review
-silent-return tests/Map.Rendering.Tests/StyleMockupDump.Blueprint.cs :: Dump_blueprint_when_asked
-silent-return tests/Map.Rendering.Tests/StyleMockupDump.Charcoal.cs :: Dump_charcoal_when_asked
-silent-return tests/Map.Rendering.Tests/StyleMockupDump.cs :: Dump_style_mockups_when_asked
-silent-return tests/Map.Rendering.Tests/StyleMockupDump.Engraving.cs :: Dump_engraving_variants_when_asked
-silent-return tests/Map.Rendering.Tests/StyleMockupDump.Ink.cs :: Dump_ink_styles_from_the_renderer_when_asked
-silent-return tests/Map.Rendering.Tests/StyleMockupDump.Ink.cs :: Dump_ink_variants_when_asked
-silent-return tests/Map.Rendering.Tests/StyleMockupDump.Moonlight.cs :: Dump_moonlight_when_asked
-silent-return tests/Map.Rendering.Tests/StyleMockupDump.Oil.cs :: Dump_oil_when_asked
-silent-return tests/Map.Rendering.Tests/StyleMockupDump.OldMap.cs :: Dump_old_map_variants_when_asked
-silent-return tests/Map.Rendering.Tests/StyleMockupDump.Presets.cs :: Dump_approved_presets_from_program_when_asked
-silent-return tests/Map.Rendering.Tests/StyleMockupDump.Print.cs :: Dump_print_variants_when_asked
-silent-return tests/Map.Rendering.Tests/StyleMockupDump.Ukiyoe.cs :: Dump_ukiyoe_variants_when_asked
-silent-return tests/Map.Rendering.Tests/StyleMockupDump.Water.cs :: Dump_water_when_asked
-silent-return tests/Map.Rendering.Tests/StyleMockupDump.Watercolor.cs :: Dump_watercolour_variants_when_asked
-silent-return tests/Map.Rendering.Tests/StyleMockupDump.Watercolor2.cs :: Dump_watercolour_round2_when_asked
-silent-return tests/Map.Rendering.Tests/StyleMockupDump.Watercolor3.cs :: Dump_watercolour_round3_when_asked
-silent-return tests/Map.Rendering.Tests/StyleScaleBenchmark.cs :: Styles_on_100k_and_1M_owner_mountains
-skip-without-defect tests/Map.Core.Tests/HotPathCostGuardTests.cs :: Bounded_hot_path
-skip-without-defect tests/Map.Core.Tests/HotPathCostGuardTests.cs :: Compare
-skip-without-defect tests/Map.Core.Tests/HotPathCostGuardTests.cs :: Label_clearance_bounds
-skip-without-defect tests/Map.Core.Tests/HotPathCostGuardTests.cs :: Placement_rules_with_many_features
-skip-without-defect tests/Map.Presentation.Tests/DerivedCacheJanitorTests.cs :: Dispose
-skip-without-defect tests/Map.Rendering.Tests/RenderPathCostGuardTests.cs :: Bounded_render_path
-skip-without-defect tests/Map.Rendering.Tests/RenderPathCostGuardTests.cs :: Dense_overview_delta
-skip-without-defect tests/Map.Rendering.Tests/RenderPathCostGuardTests.cs :: Dispose
-skip-without-defect tests/Map.Rendering.Tests/RenderPathCostGuardTests.cs :: River_preview_resolution
+# Exact finding key | review reason (DEC-116). No wildcard entries.
+# Existing keys only: historical method attribution is deliberately not repaired into new exceptions.
+silent-return tests/Map.Persistence.Tests/LightingPersistenceTests.cs :: Write_the_live_check_map_when_asked | DEC-116 legacy baseline; pre-existing exception retained, not approval of a new skip.
+silent-return tests/Map.Presentation.Tests/CreateDemoTests.cs :: Each_demo_grows_frame_by_frame_into_the_real_thing | DEC-116 legacy baseline; pre-existing exception retained, not approval of a new skip.
+silent-return tests/Map.Presentation.Tests/PixelBisectCatalogRepro.cs :: Compare_catalog_to_base | DEC-116 legacy baseline; pre-existing exception retained, not approval of a new skip.
+silent-return tests/Map.Presentation.Tests/StampDerivedAssetStoreLargeSlotsTests.cs :: Dense_view_of_large_results_measurement | DEC-116 legacy baseline; pre-existing exception retained, not approval of a new skip.
+silent-return tests/Map.Rendering.Tests/ContinentRenderingTests.cs :: Continent_sheet_for_review | DEC-116 legacy baseline; pre-existing exception retained, not approval of a new skip.
+silent-return tests/Map.Rendering.Tests/CoverageCacheBenchmark.cs :: Huge_canvas_fit_and_quarter_scale_pan_cpu | DEC-116 legacy baseline; pre-existing exception retained, not approval of a new skip.
+silent-return tests/Map.Rendering.Tests/CoverageCacheBenchmark.cs :: Pixel_fixtures_against_original_renderer | DEC-116 legacy baseline; pre-existing exception retained, not approval of a new skip.
+silent-return tests/Map.Rendering.Tests/DenseDetailTilesTests.cs :: Benchmark_dense_8192 | DEC-116 legacy baseline; pre-existing exception retained, not approval of a new skip.
+silent-return tests/Map.Rendering.Tests/HexFogLookTests.cs :: Timing_for_review | DEC-116 legacy baseline; pre-existing exception retained, not approval of a new skip.
+silent-return tests/Map.Rendering.Tests/LandCliffRenderingTests.cs :: Look_sheets_for_review | DEC-116 legacy baseline; pre-existing exception retained, not approval of a new skip.
+silent-return tests/Map.Rendering.Tests/LightingFrameDump.cs :: Dump_every_light_variation_when_asked | DEC-116 legacy baseline; pre-existing exception retained, not approval of a new skip.
+silent-return tests/Map.Rendering.Tests/LightingFrameDump.cs :: Dump_the_relief_choice_when_asked | DEC-116 legacy baseline; pre-existing exception retained, not approval of a new skip.
+silent-return tests/Map.Rendering.Tests/OverviewZoomOutSettleTests.cs :: Benchmark_zoom_out_to_fit_with_and_without_camera_frames | DEC-116 legacy baseline; pre-existing exception retained, not approval of a new skip.
+silent-return tests/Map.Rendering.Tests/PixelBisectRepro.cs :: Compare_to_base | DEC-116 legacy baseline; pre-existing exception retained, not approval of a new skip.
+silent-return tests/Map.Rendering.Tests/ReliefRenderingTests.cs :: Relief_sheet_for_review | DEC-116 legacy baseline; pre-existing exception retained, not approval of a new skip.
+silent-return tests/Map.Rendering.Tests/RiverFeatureRenderingTests.cs :: Feature_sheet_for_review | DEC-116 legacy baseline; pre-existing exception retained, not approval of a new skip.
+silent-return tests/Map.Rendering.Tests/SeaStyleRenderingTests.cs :: Sea_sheet_for_review | DEC-116 legacy baseline; pre-existing exception retained, not approval of a new skip.
+silent-return tests/Map.Rendering.Tests/Stage19WaterJoinRenderingTests.cs :: Frames_for_review | DEC-116 legacy baseline; pre-existing exception retained, not approval of a new skip.
+silent-return tests/Map.Rendering.Tests/StyleMockupDump.Blueprint.cs :: Dump_blueprint_when_asked | DEC-116 legacy baseline; pre-existing exception retained, not approval of a new skip.
+silent-return tests/Map.Rendering.Tests/StyleMockupDump.Charcoal.cs :: Dump_charcoal_when_asked | DEC-116 legacy baseline; pre-existing exception retained, not approval of a new skip.
+silent-return tests/Map.Rendering.Tests/StyleMockupDump.cs :: Dump_style_mockups_when_asked | DEC-116 legacy baseline; pre-existing exception retained, not approval of a new skip.
+silent-return tests/Map.Rendering.Tests/StyleMockupDump.Engraving.cs :: Dump_engraving_variants_when_asked | DEC-116 legacy baseline; pre-existing exception retained, not approval of a new skip.
+silent-return tests/Map.Rendering.Tests/StyleMockupDump.Ink.cs :: Dump_ink_styles_from_the_renderer_when_asked | DEC-116 legacy baseline; pre-existing exception retained, not approval of a new skip.
+silent-return tests/Map.Rendering.Tests/StyleMockupDump.Ink.cs :: Dump_ink_variants_when_asked | DEC-116 legacy baseline; pre-existing exception retained, not approval of a new skip.
+silent-return tests/Map.Rendering.Tests/StyleMockupDump.Moonlight.cs :: Dump_moonlight_when_asked | DEC-116 legacy baseline; pre-existing exception retained, not approval of a new skip.
+silent-return tests/Map.Rendering.Tests/StyleMockupDump.Oil.cs :: Dump_oil_when_asked | DEC-116 legacy baseline; pre-existing exception retained, not approval of a new skip.
+silent-return tests/Map.Rendering.Tests/StyleMockupDump.OldMap.cs :: Dump_old_map_variants_when_asked | DEC-116 legacy baseline; pre-existing exception retained, not approval of a new skip.
+silent-return tests/Map.Rendering.Tests/StyleMockupDump.Presets.cs :: Dump_approved_presets_from_program_when_asked | DEC-116 legacy baseline; pre-existing exception retained, not approval of a new skip.
+silent-return tests/Map.Rendering.Tests/StyleMockupDump.Print.cs :: Dump_print_variants_when_asked | DEC-116 legacy baseline; pre-existing exception retained, not approval of a new skip.
+silent-return tests/Map.Rendering.Tests/StyleMockupDump.Ukiyoe.cs :: Dump_ukiyoe_variants_when_asked | DEC-116 legacy baseline; pre-existing exception retained, not approval of a new skip.
+silent-return tests/Map.Rendering.Tests/StyleMockupDump.Water.cs :: Dump_water_when_asked | DEC-116 legacy baseline; pre-existing exception retained, not approval of a new skip.
+silent-return tests/Map.Rendering.Tests/StyleMockupDump.Watercolor.cs :: Dump_watercolour_variants_when_asked | DEC-116 legacy baseline; pre-existing exception retained, not approval of a new skip.
+silent-return tests/Map.Rendering.Tests/StyleMockupDump.Watercolor2.cs :: Dump_watercolour_round2_when_asked | DEC-116 legacy baseline; pre-existing exception retained, not approval of a new skip.
+silent-return tests/Map.Rendering.Tests/StyleMockupDump.Watercolor3.cs :: Dump_watercolour_round3_when_asked | DEC-116 legacy baseline; pre-existing exception retained, not approval of a new skip.
+silent-return tests/Map.Rendering.Tests/StyleScaleBenchmark.cs :: Styles_on_100k_and_1M_owner_mountains | DEC-116 legacy baseline; pre-existing exception retained, not approval of a new skip.
+skip-without-defect tests/Map.Core.Tests/HotPathCostGuardTests.cs :: Bounded_hot_path | DEC-116 legacy baseline; pre-existing exception retained, not approval of a new skip.
+skip-without-defect tests/Map.Core.Tests/HotPathCostGuardTests.cs :: Compare | DEC-116 legacy baseline; pre-existing exception retained, not approval of a new skip.
+skip-without-defect tests/Map.Core.Tests/HotPathCostGuardTests.cs :: Label_clearance_bounds | DEC-116 legacy baseline; pre-existing exception retained, not approval of a new skip.
+skip-without-defect tests/Map.Core.Tests/HotPathCostGuardTests.cs :: Placement_rules_with_many_features | DEC-116 legacy baseline; pre-existing exception retained, not approval of a new skip.
+skip-without-defect tests/Map.Presentation.Tests/DerivedCacheJanitorTests.cs :: Dispose | DEC-116 legacy baseline; pre-existing exception retained, not approval of a new skip.
+skip-without-defect tests/Map.Rendering.Tests/RenderPathCostGuardTests.cs :: Bounded_render_path | DEC-116 legacy baseline; pre-existing exception retained, not approval of a new skip.
+skip-without-defect tests/Map.Rendering.Tests/RenderPathCostGuardTests.cs :: Dense_overview_delta | DEC-116 legacy baseline; pre-existing exception retained, not approval of a new skip.
+skip-without-defect tests/Map.Rendering.Tests/RenderPathCostGuardTests.cs :: Dispose | DEC-116 legacy baseline; pre-existing exception retained, not approval of a new skip.
+skip-without-defect tests/Map.Rendering.Tests/RenderPathCostGuardTests.cs :: River_preview_resolution | DEC-116 legacy baseline; pre-existing exception retained, not approval of a new skip.

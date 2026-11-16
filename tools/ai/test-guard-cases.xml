@@ -1,0 +1,351 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Each bad case must be red; clean counterparts prove approved reasons and real checks stay green. -->
+<cases>
+  <case name="static skip red" kind="source" expect="skip-without-defect"><input><![CDATA[
+class Tests { [Fact(Skip = "O(N)")] public void Bad() { Assert.Equal(1, 1); } }
+]]></input></case>
+  <case name="static skip green" kind="source" expect="clean"><input><![CDATA[
+class Tests { [Fact(Skip = "defect: tracked issue 123")] public void Good() { Assert.Equal(1, 1); } }
+]]></input></case>
+  <case name="multiline static skip red" kind="source" expect="skip-without-defect"><input><![CDATA[
+class Tests { [Fact(
+Skip =
+"environment")]
+public void Bad() { Assert.Equal(1, 1); } }
+]]></input></case>
+  <case name="Assert.Skip red" kind="source" expect="runtime-skip"><input><![CDATA[
+class Tests { [Fact] public void Bad() { Assert.Skip("environment"); } }
+]]></input></case>
+  <case name="Assert.Skip green" kind="source" expect="clean"><input><![CDATA[
+class Tests { [Fact] public void Good() { Assert.Skip("defect: tracked issue 123"); } }
+]]></input></case>
+  <case name="Assert.SkipWhen red" kind="source" expect="runtime-skip"><input><![CDATA[
+class Tests { [Fact] public void Bad() { Assert.SkipWhen(flag, "environment"); } }
+]]></input></case>
+  <case name="Assert.SkipWhen green" kind="source" expect="clean"><input><![CDATA[
+class Tests { [Fact] public void Good() { Assert.SkipWhen(flag, "defect: tracked issue 123"); } }
+]]></input></case>
+  <case name="Assert.SkipUnless red" kind="source" expect="runtime-skip"><input><![CDATA[
+class Tests { [Fact] public void Bad() { Assert.SkipUnless(flag, "environment"); } }
+]]></input></case>
+  <case name="Assert.SkipUnless green" kind="source" expect="clean"><input><![CDATA[
+class Tests { [Fact] public void Good() { Assert.SkipUnless(flag, "defect: tracked issue 123"); } }
+]]></input></case>
+  <case name="Skip.If red" kind="source" expect="runtime-skip"><input><![CDATA[
+class Tests { [Fact] public void Bad() { Skip.If(flag, "environment"); } }
+]]></input></case>
+  <case name="Skip.If green" kind="source" expect="clean"><input><![CDATA[
+class Tests { [Fact] public void Good() { Skip.If(flag, "defect: tracked issue 123"); } }
+]]></input></case>
+  <case name="Skip.IfNot red" kind="source" expect="runtime-skip"><input><![CDATA[
+class Tests { [Fact] public void Bad() { Skip.IfNot(flag); } }
+]]></input></case>
+  <case name="Skip.IfNot green" kind="source" expect="clean"><input><![CDATA[
+class Tests { [Fact] public void Good() { Skip.IfNot(flag, "defect: tracked issue 123"); } }
+]]></input></case>
+  <case name="SkipException red" kind="source" expect="runtime-skip"><input><![CDATA[
+class Tests { [Fact] public void Bad() { throw new Xunit.Sdk.SkipException("environment"); } }
+]]></input></case>
+  <case name="SkipException green" kind="source" expect="clean"><input><![CDATA[
+class Tests { [Fact] public void Good() { throw new Xunit.Sdk.SkipException("defect: tracked issue 123"); } }
+]]></input></case>
+  <case name="SkipException.ForSkip red" kind="source" expect="runtime-skip"><input><![CDATA[
+class Tests { [Fact] public void Bad() { throw SkipException.ForSkip("environment"); } }
+]]></input></case>
+  <case name="SkipException.ForSkip green" kind="source" expect="clean"><input><![CDATA[
+class Tests { [Fact] public void Good() { throw SkipException.ForSkip("defect: tracked issue 123"); } }
+]]></input></case>
+  <case name="dynamic reason cannot be proved red" kind="source" expect="runtime-skip"><input><![CDATA[
+class Tests { [Fact] public void Bad() { Assert.Skip(reason); } }
+]]></input></case>
+  <case name="named reason green" kind="source" expect="clean"><input><![CDATA[
+class Tests { [Fact] public void Good() { Assert.SkipWhen(reason: "defect: tracked issue 123", condition: flag); } }
+]]></input></case>
+  <case name="custom Fact red" kind="source" expect="custom-test-attribute"><input><![CDATA[
+class EnvironmentFactAttribute : Xunit.FactAttribute {
+ public EnvironmentFactAttribute() { if (!Enabled) Skip = "Set ENV=1"; }
+}
+class Tests { [EnvironmentFact] public void Bad() { Assert.Equal(1, 1); } }
+]]></input></case>
+  <case name="custom Fact green" kind="source" expect="clean"><input><![CDATA[
+class EnvironmentFactAttribute : FactAttribute {
+ public EnvironmentFactAttribute() { if (!Enabled) Skip = "defect: tracked issue 123"; }
+}
+class Tests { [EnvironmentFact] public void Good() { Assert.Equal(1, 1); } }
+]]></input></case>
+  <case name="custom Theory red" kind="source" expect="custom-test-attribute"><input><![CDATA[
+class EnvironmentTheoryAttribute : TheoryAttribute { public EnvironmentTheoryAttribute() { Skip = Reason(); } }
+class Tests { [EnvironmentTheory] public void Bad() { Assert.Equal(1, 1); } }
+]]></input></case>
+  <case name="custom Theory green" kind="source" expect="clean"><input><![CDATA[
+class EnvironmentTheoryAttribute : TheoryAttribute { public EnvironmentTheoryAttribute() { Skip = "defect: tracked issue 123"; } }
+class Tests { [EnvironmentTheory] public void Good() { Assert.Equal(1, 1); } }
+]]></input></case>
+  <case name="indirect derived attribute red" kind="source" expect="silent-return"><input><![CDATA[
+class BaseFactAttribute : FactAttribute { public BaseFactAttribute() { Skip = "defect: tracked issue 123"; } }
+class DerivedAttribute : BaseFactAttribute { }
+class Tests { [Derived] public void Bad() { if (flag) return; Assert.Equal(1, 1); } }
+]]></input></case>
+  <case name="early return red" kind="source" expect="silent-return"><input><![CDATA[
+class Tests { [Fact] public void Bad() {
+ if (flag) {
+   return;
+ }
+ Assert.Equal(1, result);
+} }
+]]></input></case>
+  <case name="return after check green" kind="source" expect="clean"><input><![CDATA[
+class Tests { [Theory] public void Good() { Assert.Equal(1, result); if (flag) return; } }
+]]></input></case>
+  <case name="callback return green" kind="source" expect="clean"><input><![CDATA[
+class Tests { [Fact] public void Good() { Run(() => { if (flag) return; Work(); }); Assert.Equal(1, result); } }
+]]></input></case>
+  <case name="local function return green" kind="source" expect="clean"><input><![CDATA[
+class Tests { [Fact] public void Good() { void Helper() { return; } Helper(); Assert.Equal(1, result); } }
+]]></input></case>
+  <case name="Task return red" kind="source" expect="silent-return"><input><![CDATA[
+class Tests { [Fact] public Task Bad() { if (!Ready) return Task.CompletedTask; Assert.Equal(1, result); return Task.CompletedTask; } }
+]]></input></case>
+  <case name="constant true red" kind="source" expect="assert-true"><input><![CDATA[
+class Tests { [Fact] public void Bad() => Assert.True(true); }
+]]></input></case>
+  <case name="real true green" kind="source" expect="clean"><input><![CDATA[
+class Tests { [Fact] public void Good() => Assert.True(actual); }
+]]></input></case>
+  <case name="empty catch around Assert red" kind="source" expect="empty-catch-assert"><input><![CDATA[
+class Tests { [Fact] public void Bad() { try { Assert.Equal(1, actual); } catch (Exception) { /* swallowed */ } } }
+]]></input></case>
+  <case name="catch rethrow green" kind="source" expect="clean"><input><![CDATA[
+class Tests { [Fact] public void Good() { try { Assert.Equal(1, actual); } catch { throw; } } }
+]]></input></case>
+  <case name="cleanup catch green" kind="source" expect="clean"><input><![CDATA[
+class Tests { [Fact] public void Good() { Assert.Equal(1, actual); try { Directory.Delete(path); } catch (IOException) { } } }
+]]></input></case>
+  <case name="NotNull constructed local red" kind="source" expect="notnull-created"><input><![CDATA[
+class Tests { [Fact] public void Bad() { var value = new Thing(); Assert.NotNull(value); } }
+]]></input></case>
+  <case name="NotNull direct new red" kind="source" expect="notnull-created"><input><![CDATA[
+class Tests { [Fact] public void Bad() { Assert.NotNull(new Thing()); } }
+]]></input></case>
+  <case name="NotNull product result green" kind="source" expect="clean"><input><![CDATA[
+class Tests { [Fact] public void Good() { var value = Product.Load(); Assert.NotNull(value); } }
+]]></input></case>
+  <case name="NotNull plus semantic assertion green" kind="source" expect="clean"><input><![CDATA[
+class Tests { [Fact] public void Good() { var value = new Thing(); Assert.NotNull(value); Assert.Equal(1, value.Count); } }
+]]></input></case>
+  <case name="empty test red" kind="source" expect="empty-test"><input><![CDATA[
+class Tests { [Fact] public void Bad() { /* nothing */ } }
+]]></input></case>
+  <case name="comments strings and raw shader are not code green" kind="source" expect="clean"><input><![CDATA[
+// Assert.Skip("bad"); Assert.True(true);
+class Tests { [Fact] public void Good() {
+ string x = "Assert.Skip(\"bad\"); return;";
+ string y = @"Assert.True(true); return;";
+ string z = """Assert.Skip("bad"); return;""";
+ Assert.Equal(expected, actual);
+} }
+]]></input></case>
+  <case name="lower >= bound red" kind="diff" expect="lower-bound-or-number-lowered"><input><![CDATA[
++++ b/tests/Fixture.cs
+@@ -1 +1 @@
+-Assert.True(fps >= 60);
++Assert.True(fps >= 30);
+]]></input></case>
+  <case name="reversed lower bound red" kind="diff" expect="lower-bound-or-number-lowered"><input><![CDATA[
++++ b/tests/Fixture.cs
+@@ -1 +1 @@
+-Assert.True(60 <= fps);
++Assert.True(30 <= fps);
+]]></input></case>
+  <case name="InRange lower widened red" kind="diff" expect="lower-bound-or-number-lowered"><input><![CDATA[
++++ b/tests/Fixture.cs
+@@ -1 +1 @@
+-Assert.InRange(fps, 60, 120);
++Assert.InRange(fps, 30, 120);
+]]></input></case>
+  <case name="InRange upper widened red" kind="diff" expect="number-raised"><input><![CDATA[
++++ b/tests/Fixture.cs
+@@ -1 +1 @@
+-Assert.InRange(time, 0, 60);
++Assert.InRange(time, 0, 120);
+]]></input></case>
+  <case name="raised budget red" kind="diff" expect="number-raised"><input><![CDATA[
++++ b/tests/Fixture.cs
+@@ -1 +1 @@
+-const int Budget = 2_000;
++const int Budget = 10_000;
+]]></input></case>
+  <case name="unchanged diff green" kind="diff" expect="clean"><input><![CDATA[
++++ b/tests/Fixture.cs
+@@ -1 +1 @@
+-Assert.True(fps >= 60);
++Assert.True(fps >= 60);
+]]></input></case>
+  <case name="Assert moved between files does not excuse removal red" kind="diff" expect="assert-removed"><input><![CDATA[
++++ b/tests/A.cs
+@@ -1 +0,0 @@
+-Assert.True(actual);
++++ b/tests/B.cs
+@@ -0,0 +1 @@
++Assert.True(actual);
+]]></input></case>
+  <case name="dynamic skip addition requires test-change even with defect red" kind="diff" expect="skip-added"><input><![CDATA[
++++ b/tests/Fixture.cs
+@@ -0,0 +1 @@
++Assert.Skip("defect: tracked issue 123");
+]]></input></case>
+  <case name="removed assertion red" kind="diff" expect="assert-removed"><input><![CDATA[
++++ b/tests/Fixture.cs
+@@ -1 +0,0 @@
+-Assert.Equal(expected, actual);
+]]></input></case>
+  <case name="changed assertion string is a removal red" kind="diff" expect="assert-removed"><input><![CDATA[
++++ b/tests/Fixture.cs
+@@ -1 +1 @@
+-Assert.Equal("before", actual);
++Assert.Equal("after", actual);
+]]></input></case>
+  <case name="TRX NotExecuted bad reason red" kind="trx" expect="trx-skip"><input><![CDATA[
+<TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010"><Results><UnitTestResult testName="bad" outcome="NotExecuted"><Output><ErrorInfo><Message>O(N): linear</Message></ErrorInfo></Output></UnitTestResult></Results></TestRun>
+]]></input></case>
+  <case name="TRX NotExecuted defect green" kind="trx" expect="clean"><input><![CDATA[
+<TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010"><Results><UnitTestResult testName="good" outcome="NotExecuted"><Output><ErrorInfo><Message>defect: tracked issue 123</Message></ErrorInfo></Output></UnitTestResult></Results></TestRun>
+]]></input></case>
+  <case name="TRX stdout skip reason red" kind="trx" expect="trx-skip"><input><![CDATA[
+<TestRun><Results><UnitTestResult testName="bad" outcome="Skipped"><Output><StdOut>Set ENV=1</StdOut></Output></UnitTestResult></Results></TestRun>
+]]></input></case>
+  <case name="TRX stdout defect green" kind="trx" expect="clean"><input><![CDATA[
+<TestRun><Results><UnitTestResult testName="good" outcome="Skipped"><Output><StdOut>defect: tracked issue 123</StdOut></Output></UnitTestResult></Results></TestRun>
+]]></input></case>
+  <case name="TRX missing message red" kind="trx" expect="trx-skip"><input><![CDATA[
+<TestRun><Results><UnitTestResult testName="bad" outcome="NotExecuted" /></Results></TestRun>
+]]></input></case>
+  <case name="TRX no trim or substring loophole red" kind="trx" expect="trx-skip"><input><![CDATA[
+<TestRun><Results><UnitTestResult testName="bad" outcome="NotExecuted"><Output><ErrorInfo><Message>environment: defect: issue 123</Message></ErrorInfo></Output></UnitTestResult></Results></TestRun>
+]]></input></case>
+  <case name="TRX message cannot be rescued by stdout red" kind="trx" expect="trx-skip"><input><![CDATA[
+<TestRun><Results><UnitTestResult testName="bad" outcome="NotExecuted"><Output><ErrorInfo><Message>OS does not permit symlinks</Message></ErrorInfo><StdOut>defect: unrelated log</StdOut></Output></UnitTestResult></Results></TestRun>
+]]></input></case>
+  <case name="TRX passed green" kind="trx" expect="clean"><input><![CDATA[
+<TestRun><Results><UnitTestResult testName="good" outcome="Passed" /></Results></TestRun>
+]]></input></case>
+  <case name="TRX empty fails closed" kind="trx" expect="error"><input><![CDATA[<TestRun><Results /></TestRun>]]></input></case>
+  <case name="TRX malformed fails closed" kind="trx" expect="error"><input><![CDATA[<TestRun>]]></input></case>
+  <case name="TRX DTD prohibited" kind="trx" expect="error"><input><![CDATA[<!DOCTYPE TestRun [<!ENTITY x "bad">]><TestRun><Results /></TestRun>]]></input></case>
+  <case name="bare legacy baseline cannot silently allow red" kind="baseline" expect="error"><input><![CDATA[
+runtime-skip tests/Fixture.cs :: Bad
+]]></input></case>
+  <case name="blank baseline reason red" kind="baseline" expect="error"><input>runtime-skip tests/Fixture.cs :: Bad |&#32;</input></case>
+  <case name="wildcard baseline red" kind="baseline" expect="error"><input><![CDATA[
+runtime-skip tests/* :: * | reviewed
+]]></input></case>
+  <case name="duplicate baseline red" kind="baseline" expect="error"><input><![CDATA[
+runtime-skip tests/Fixture.cs :: Bad | reviewed
+runtime-skip tests/Fixture.cs :: Bad | different reason
+]]></input></case>
+  <case name="named baseline allows only reviewed case green" kind="allowlist" expect="clean"><input><![CDATA[
+class Tests { [Fact] public void Bad() { Assert.Skip("environment"); } }
+]]></input><baseline><![CDATA[runtime-skip tests/Fixture.cs :: Bad | explicit reviewed environment exception]]></baseline></case>
+  <case name="different name is not allowlisted red" kind="allowlist" expect="runtime-skip"><input><![CDATA[
+class Tests { [Fact] public void NewBad() { Assert.Skip("environment"); } }
+]]></input><baseline><![CDATA[runtime-skip tests/Fixture.cs :: Bad | explicit reviewed environment exception]]></baseline></case>
+  <case name="named early return exception green" kind="allowlist" expect="clean"><input><![CDATA[
+class Tests { [Fact] public void Bad() { if (flag) return; Assert.Equal(1, actual); } }
+]]></input><baseline><![CDATA[silent-return tests/Fixture.cs :: Bad | explicit reviewed export-only probe]]></baseline></case>
+  <case name="empty test-change marker red" kind="justification" expect="missing-test-change"><input>fix test&#10;test-change:&#32;&#32;&#32;&#10;another line</input></case>
+  <case name="test-change explanation green" kind="justification" expect="clean"><input><![CDATA[fix test
+test-change: adjust ratio after documented algorithm change
+]]></input></case>
+  <case name="generic assertion before return green" kind="source" expect="clean"><input><![CDATA[
+class Tests { [Fact] public void Good() { Assert.Throws<Exception>(() => Fail()); if (flag) return; } }
+]]></input></case>
+  <case name="generic assertion in empty catch red" kind="source" expect="empty-catch-assert"><input><![CDATA[
+class Tests { [Fact] public void Bad() { try { Assert.Throws<Exception>(() => Fail()); } catch { } } }
+]]></input></case>
+  <case name="NotNull is not the only check when generic Assert exists green" kind="source" expect="clean"><input><![CDATA[
+class Tests { [Fact] public void Good() { var value = new Thing(); Assert.Throws<Exception>(() => Fail()); Assert.NotNull(value); } }
+]]></input></case>
+  <case name="lower bound constant red" kind="diff" expect="lower-bound-or-number-lowered"><input><![CDATA[
++++ b/tests/Fixture.cs
+@@ -1 +1 @@
+-const int MinFps = 60;
++const int MinFps = 30;
+]]></input></case>
+  <case name="multiline InRange widened red" kind="diff" expect="lower-bound-or-number-lowered"><input><![CDATA[
++++ b/tests/Fixture.cs
+@@ -1,5 +1,5 @@
+ Assert.InRange(
+     fps,
+-    60,
++    30,
+     120);
+]]></input></case>
+  <case name="multiline InRange unchanged green" kind="diff" expect="clean"><input><![CDATA[
++++ b/tests/Fixture.cs
+@@ -1,5 +1,5 @@
+ Assert.InRange(
+     fps,
+-    60,
++    60,
+     120);
+]]></input></case>
+  <case name="parenthesized constant true red" kind="source" expect="assert-true"><input><![CDATA[
+class Tests { [Fact] public void Bad() => Assert.True((true)); }
+]]></input></case>
+  <case name="named constant true red" kind="source" expect="assert-true"><input><![CDATA[
+class Tests { [Fact] public void Bad() => Assert.True(condition: true); }
+]]></input></case>
+  <case name="helper empty catch around Assert red" kind="source" expect="empty-catch-assert"><input><![CDATA[
+class Tests { private void Helper() { try { Assert.Equal(1, actual); } catch { } }
+ [Fact] public void Bad() { Helper(); } }
+]]></input></case>
+  <case name="static skip belongs to following test green" kind="allowlist" expect="clean"><input><![CDATA[
+class Tests { [Fact] public void Previous() { Assert.Equal(1, actual); }
+ [Fact(Skip = "O(N)")] public void Next() { Assert.Equal(1, actual); } }
+]]></input><baseline><![CDATA[skip-without-defect tests/Fixture.cs :: Next | explicit reviewed exception]]></baseline></case>
+  <case name="TRX leading whitespace does not start defect red" kind="trx" expect="trx-skip"><input><![CDATA[
+<TestRun><Results><UnitTestResult testName="bad" outcome="NotExecuted"><Output><ErrorInfo><Message> defect: issue 123</Message></ErrorInfo></Output></UnitTestResult></Results></TestRun>
+]]></input></case>
+  <case name="TRX empty defect explanation red" kind="trx" expect="trx-skip"><input><![CDATA[
+<TestRun><Results><UnitTestResult testName="bad" outcome="NotExecuted"><Output><ErrorInfo><Message>defect:</Message></ErrorInfo></Output></UnitTestResult></Results></TestRun>
+]]></input></case>
+  <case name="TRX prefixed namespace green" kind="trx" expect="clean"><input><![CDATA[
+<t:TestRun xmlns:t="http://microsoft.com/schemas/VisualStudio/TeamTest/2010"><t:Results><t:UnitTestResult testName="good" outcome="NotExecuted"><t:Output><t:ErrorInfo><t:Message>defect: issue 123</t:Message></t:ErrorInfo></t:Output></t:UnitTestResult></t:Results></t:TestRun>
+]]></input></case>
+  <case name="nested quotes in interpolation are not assertion code green" kind="source" expect="clean"><input><![CDATA[
+class Tests { [Fact] public void Good() { var text = $"{Format("Assert.True(true); Assert.Skip(bad);")}"; Assert.Equal(expected, actual); } }
+]]></input></case>
+  <case name="interpolated defect prefix green" kind="source" expect="clean"><input><![CDATA[
+class Tests { [Fact] public void Good() { Assert.Skip($"defect: tracked issue {Issue}"); } }
+]]></input></case>
+  <case name="interpolated unknown prefix red" kind="source" expect="runtime-skip"><input><![CDATA[
+class Tests { [Fact] public void Bad() { Assert.Skip($"{Reason}"); } }
+]]></input></case>
+  <case name="real conjunction with parenthesized true green" kind="source" expect="clean"><input><![CDATA[
+class Tests { [Fact] public void Good() => Assert.True((true) && actual); }
+]]></input></case>
+  <case name="named args in any order constant true red" kind="source" expect="assert-true"><input><![CDATA[
+class Tests { [Fact] public void Bad() => Assert.True(userMessage: "text", condition: true); }
+]]></input></case>
+  <case name="filtered catch return red" kind="source" expect="silent-return"><input><![CDATA[
+class Tests { [Fact] public void Bad() { try { Work(); } catch (Exception) when (flag) { return; } Assert.Equal(1, actual); } }
+]]></input></case>
+  <case name="anonymous delegate return green" kind="source" expect="clean"><input><![CDATA[
+class Tests { [Fact] public void Good() { Run(delegate { if (flag) return; Work(); }); Assert.Equal(1, result); } }
+]]></input></case>
+  <case name="literal defect transformed into bad reason red" kind="source" expect="runtime-skip"><input><![CDATA[
+class Tests { [Fact] public void Bad() { Assert.Skip("defect: hidden".Substring(8)); } }
+]]></input></case>
+  <case name="conditional discarding defect prefix red" kind="source" expect="runtime-skip"><input><![CDATA[
+class Tests { [Fact] public void Bad() { Assert.Skip("defect: hidden" + flag == value ? "environment" : "OS"); } }
+]]></input></case>
+  <case name="defect prefix concatenation green" kind="source" expect="clean"><input><![CDATA[
+class Tests { [Fact] public void Good() { Assert.Skip("defect: tracked issue " + issue); } }
+]]></input></case>
+  <case name="parenthesized defect reason green" kind="source" expect="clean"><input><![CDATA[
+class Tests { [Fact] public void Good() { Assert.Skip(("defect: tracked issue")); } }
+]]></input></case>
+  <case name="parenthesized defect then transformation red" kind="source" expect="runtime-skip"><input><![CDATA[
+class Tests { [Fact] public void Bad() { Assert.Skip(("defect: hidden" + issue).Substring(8)); } }
+]]></input></case>
+</cases>

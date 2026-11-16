@@ -59,6 +59,8 @@ dotnet test $csproj -c Release -nologo --logger "trx;LogFileName=$Project.trx" -
 $trx = Join-Path $ResultsDir "$Project.trx"
 if (-not (Test-Path -LiteralPath $trx)) { Write-Host "::error::$Project did not produce a test report"; exit 1 }
 $run = Read-Trx $trx
+& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot '../ai/Test-TrxSkips.ps1') -Path $trx
+if ($LASTEXITCODE -ne 0) { Write-Host "::error::$Project has invalid runtime skips/report"; exit 1 }
 if ($run.Total -eq 0) { Write-Host "::error::$Project ran 0 tests"; exit 1 }
 
 $new = @($run.Failed | Where-Object { -not (Test-IsKnown $_) })
@@ -78,6 +80,8 @@ dotnet test $csproj -c Release -nologo --no-build --filter $filter --logger "trx
 $retryTrx = Join-Path $retryDir "$Project.trx"
 if (-not (Test-Path -LiteralPath $retryTrx)) { Write-Host "::error::$Project retry produced no report"; exit 1 }
 $retry = Read-Trx $retryTrx
+& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot '../ai/Test-TrxSkips.ps1') -Path $retryTrx
+if ($LASTEXITCODE -ne 0) { Write-Host "::error::$Project retry has invalid runtime skips/report"; exit 1 }
 if ($retry.Total -eq 0 -or $retry.Failed.Count -gt 0) {
     foreach ($n in $new) { Write-Host "::error::$Project failing test (failed twice): $n" }
     exit 1
