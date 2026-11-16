@@ -13,7 +13,7 @@ namespace Map.Presentation.Services;
 /// <summary>
 /// Disposable preparation queue, persistent content-addressed results. No file operations,
 /// decode, resampling or waits are performed by Request/TryReady on the canvas thread.
-/// One worker bounds native decode memory and avoids competing with the frame for all cores.
+/// A single builder bounds native decode memory; bounded metadata readers leave cores for the frame.
 /// </summary>
 public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposable
 {
@@ -44,8 +44,28 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
         if (missing) _quietMissing[sha] = 0;
         else _quietMissing.TryRemove(sha, out _);
     }
-    private readonly Channel<(string Sha, TaskCompletionSource<Header?> Completion, TaskCompletionSource<SKColor?> Preview)> _queue =
-        Channel.CreateUnbounded<(string, TaskCompletionSource<Header?>, TaskCompletionSource<SKColor?>)>(new() { SingleReader = true });
+    private sealed class HeaderWork(string sha, TaskCompletionSource<Header?> completion, TaskCompletionSource<SKColor?> preview)
+    {
+        public readonly string Sha = sha;
+        public readonly TaskCompletionSource<Header?> Completion = completion;
+        public readonly TaskCompletionSource<SKColor?> Preview = preview;
+        public bool Visible, Started;
+    }
+    // The channel only wakes readers; the heap orders actual work. Promoting a queued colour/header request
+    // keeps its completion and leaves at most one harmless old heap entry, rather than doing a second read.
+    private readonly Channel<bool> _queue = Channel.CreateUnbounded<bool>();
+    private readonly PriorityQueue<HeaderWork, (int Priority, long Order)> _headerQueue = new();
+    private readonly Dictionary<string, HeaderWork> _pendingHeaders = new(StringComparer.OrdinalIgnoreCase);
+    private long _headerOrder;
+    private long _lastVisibleDemand = System.Diagnostics.Stopwatch.GetTimestamp();
+    private int _viewRefining;
+    internal void SetViewRefining(bool refining)
+    {
+        var previous = Interlocked.Exchange(ref _viewRefining, refining ? 1 : 0);
+        if (previous != 0 && !refining)
+            Interlocked.Exchange(ref _lastVisibleDemand, System.Diagnostics.Stopwatch.GetTimestamp());
+    }
+    internal static readonly int HeaderReaderCount = Math.Clamp(Environment.ProcessorCount - 2, 2, 4);
     private readonly Channel<(string Sha, TaskCompletionSource<Header?> Completion)> _buildQueue =
         Channel.CreateUnbounded<(string, TaskCompletionSource<Header?>)>(new() { SingleReader = true });
     private readonly ConcurrentDictionary<string, TaskCompletionSource<SKColor?>> _previews = new(StringComparer.OrdinalIgnoreCase);
@@ -187,11 +207,20 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
         _diskBudget = diskBudgetBytes ?? _policy.Budget.TotalBytes;
         LoadKnownColors();
         _colorValidation = Task.Run(ValidateKnownColorSources);
-        _workers = Task.WhenAll(Task.Run(Work), Task.Run(BuildWork), StartMaintenance(), Task.Run(TrustWork),
+        _workers = Task.WhenAll(Task.Run(MetadataWork), Task.Run(BuildWork), StartMaintenance(), Task.Run(TrustWork),
             _colorValidation);
     }
 
-    public Task<Header?> Request(string sha)
+    public Task<Header?> Request(string sha) => RequestHeader(sha, visible: false);
+
+    // Visible exact pixels must not sit behind the rest of a cold document's palette.
+    internal Task<Header?> RequestVisible(string sha)
+    {
+        Interlocked.Exchange(ref _lastVisibleDemand, System.Diagnostics.Stopwatch.GetTimestamp());
+        return RequestHeader(sha, visible: true);
+    }
+
+    private Task<Header?> RequestHeader(string sha, bool visible)
     {
         if (_disposed || sha.Length != 64 || !sha.All(Uri.IsHexDigit)) return Task.FromResult<Header?>(null);
         lock (_requestsGate)
@@ -199,6 +228,11 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
             if (_disposed) return Task.FromResult<Header?>(null);
             if (_requests.TryGetValue(sha, out var existing))
             {
+                if (visible && _pendingHeaders.TryGetValue(sha, out var work) && !work.Visible && !work.Started)
+                {
+                    work.Visible = true;
+                    EnqueueHeader(work);
+                }
                 if (!_failedHeaders.TryGetValue(sha, out var failed) || _retryClock.GetUtcNow().ToUnixTimeMilliseconds() < failed.RetryAt) return existing.Task;
                 _requests.TryRemove(sha, out _); _previews.TryRemove(sha, out _);
             }
@@ -211,10 +245,19 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
             var preview = new TaskCompletionSource<SKColor?>(TaskCreationOptions.RunContinuationsAsynchronously);
             _previews[sha] = preview;
             Interlocked.Increment(ref _journalMetadata);
-            if (!_queue.Writer.TryWrite((sha, completion, preview)))
+            var queued = new HeaderWork(sha, completion, preview) { Visible = visible };
+            _pendingHeaders[sha] = queued;
+            if (!EnqueueHeader(queued))
             { Interlocked.Decrement(ref _journalMetadata); completion.TrySetResult(null); preview.TrySetResult(null); }
             return completion.Task;
         }
+    }
+
+    // Under _requestsGate.
+    private bool EnqueueHeader(HeaderWork work)
+    {
+        _headerQueue.Enqueue(work, (work.Visible ? 0 : 1, _headerOrder++));
+        return _queue.Writer.TryWrite(true);
     }
 
     public Header? TryReady(string sha) => _requests.TryGetValue(sha, out var task)
@@ -237,8 +280,10 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
         {
             Interlocked.Increment(ref _generation);
             _requests.Clear(); _previews.Clear(); _completedHeaders.Clear(); _failedHeaders.Clear();
-            _quietMissing.Clear(); _deliveredPreviews.Clear();
+            _quietMissing.Clear(); _deliveredPreviews.Clear(); _pendingHeaders.Clear();
+            _colorRequests.Clear(); _colorIndexInvalidated.Clear(); _libraryColors.Clear();
             _portableTrust.Clear(); _rejectedPortable.Clear();
+            _portableManifests.Clear(); _portableManifestOrder.Clear();
             Interlocked.Increment(ref _overviewColorRevision);
             foreach (var request in _mips.Values) Retire(request);
             _mips.Clear();
@@ -268,11 +313,16 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
         var recovered = false;
         var saveColors = false;
         var colorRemoved = false;
+        var colorChanged = false;
         lock (_requestsGate)
         {
             if (!_disposed && _requests.TryGetValue(sha, out var active) && ReferenceEquals(active, completion))
             {
-                if (header is not null) saveColors = RememberColor(sha, header);
+                if (header is not null)
+                {
+                    colorChanged = !_knownColors.TryGetValue(sha, out var known) || known.Color != header.Color;
+                    saveColors = RememberColor(sha, header);
+                }
                 else colorRemoved = ForgetColor(sha);
                 recovered = header is not null && _failedHeaders.ContainsKey(sha);
                 if (header is null)
@@ -292,7 +342,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
             completion.TrySetResult(header);
         }
         if (saveColors) SaveKnownColors();
-        OverviewColorChanged(colorRemoved || header is not null && !recovered);
+        if (header is null || colorChanged) OverviewColorChanged(colorRemoved || header is not null && !recovered);
     }
 
     public Task<Mip> RequestMip(Header header, int level) => RequestPixels(header, 0, level);
@@ -317,6 +367,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
                 return false;
             }
             var request = new MipRequest(CancellationTokenSource.CreateLinkedTokenSource(_stop.Token));
+            Interlocked.Exchange(ref _lastVisibleDemand, System.Diagnostics.Stopwatch.GetTimestamp());
             request.Task = Task.Run(() => ReadRequestedMip(header, key, request));
             _mips[key] = request;
             Interlocked.Increment(ref _journalPixels);
@@ -597,10 +648,25 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
         }
     }
 
+    private async Task MetadataWork()
+    {
+        try { await Task.WhenAll(Enumerable.Range(0, HeaderReaderCount).Select(_ => Task.Run(Work))).ConfigureAwait(false); }
+        finally { _buildQueue.Writer.TryComplete(); }
+    }
+
     private async Task Work()
     {
-        await foreach (var (sha, completion, previewCompletion) in _queue.Reader.ReadAllAsync().ConfigureAwait(false))
+        await foreach (var signal in _queue.Reader.ReadAllAsync().ConfigureAwait(false))
         {
+            HeaderWork work;
+            lock (_requestsGate)
+            {
+                if (!_headerQueue.TryDequeue(out work!, out _) || work.Started) continue;
+                work.Started = true;
+                if (_pendingHeaders.TryGetValue(work.Sha, out var pending) && ReferenceEquals(pending, work))
+                    _pendingHeaders.Remove(work.Sha);
+            }
+            var (sha, completion, previewCompletion) = (work.Sha, work.Completion, work.Preview);
             try
             {
             if (!IsCurrent(sha, completion)) { completion.TrySetResult(null); previewCompletion.TrySetResult(null); continue; }
@@ -625,9 +691,10 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
             catch (Exception ex) { ReportFailure("metadata " + sha, ex); }
             previewCompletion.TrySetResult(preview);
             // A slow retry of a missing source re-reads the same thumbnail colour: nothing to redraw.
-            var arrived = preview is { } shown && (!_deliveredPreviews.TryGetValue(sha, out var known) || known != shown);
+            var arrived = preview is { } shown && KnownColor(sha) != shown
+                && (!_deliveredPreviews.TryGetValue(sha, out var known) || known != shown);
             if (preview is { } delivered) _deliveredPreviews[sha] = delivered;
-            OverviewColorChanged(arrived);
+            if (arrived) OverviewColorChanged();
             if (_disposed || held is not null) CompleteHeader(sha, completion, held);
             else
             {
@@ -638,7 +705,6 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
             }
             finally { Interlocked.Decrement(ref _journalMetadata); }
         }
-        _buildQueue.Writer.TryComplete();
     }
 
     private async Task BuildWork()
@@ -719,6 +785,8 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
                 || _failedHeaders.TryGetValue(sha, out var failure) && failure.Attempts >= 4;
             Interlocked.Increment(ref _generation);
             _requests.TryRemove(sha, out _); _previews.TryRemove(sha, out _);
+            _colorRequests.TryRemove(sha, out _);
+            _colorIndexInvalidated[sha] = 0;
             if (!quiet) _failedHeaders.TryRemove(sha, out _);
             if (cancelPixels)
                 foreach (var key in _mips.Keys.Where(key => string.Equals(key.Sha, sha, StringComparison.OrdinalIgnoreCase)))
@@ -1064,11 +1132,12 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
             lock (_watchers) { foreach (var watcher in _watchers.Values) watcher.Dispose(); _watchers.Clear(); }
             _watchedFiles.Clear(); SourceChanged = null; OverviewChanged = null;
             var retiring = _retirements.ToArray();
+            var coloring = _colorTasks.ToArray();
             // Dispose is nonblocking for the UI. Async disposal/Completion lets tests and
             // profile cleanup await all file handles and native buffers before removing them.
             _shutdown = Task.Run(async () =>
             {
-                await Task.WhenAll(retiring.Append(_workers)).ConfigureAwait(false);
+                await Task.WhenAll(retiring.Concat(coloring).Append(_workers)).ConfigureAwait(false);
                 SaveKnownColors();
                 ClearPreparedSource();
                 lock (_memoryGate) { _memoryPixels.Clear(); _memoryBytes = 0; }

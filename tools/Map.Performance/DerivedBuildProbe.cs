@@ -16,6 +16,7 @@ internal static class DerivedBuildProbe
         var workspace = Path.Combine(parent, "derived-build-work-" + Guid.NewGuid().ToString("N"));
         var rows = new List<object>();
         var clock = Stopwatch.StartNew();
+        var colorsOnly = options.Profile == "derived-colors";
         Directory.CreateDirectory(workspace);
         try
         {
@@ -29,9 +30,12 @@ internal static class DerivedBuildProbe
                 var built = 0;
                 var skipped = 0;
                 var failures = new List<object>();
-                await using var store = new StampDerivedAssetStore(catalog, Path.Combine(workspace, "machine-" + index));
+                // A finite builder rechecks source stamps itself and has no view to invalidate.
+                // Watching thousands of library files (especially FSEvents) adds work without a consumer.
+                await using var store = new StampDerivedAssetStore(catalog, Path.Combine(workspace, "machine-" + index), startWatcher: _ => { });
                 foreach (var record in records)
                 {
+                    if (colorsOnly) { skipped++; continue; }
                     try
                     {
                         if (store.HasCurrentPortable(record.Sha256))
@@ -53,8 +57,11 @@ internal static class DerivedBuildProbe
                         Console.WriteLine($"derived-build: {roots[index]} failed {record.Sha256}: {error.Message}");
                     }
                 }
+                var colorEntries = !options.DryRun || colorsOnly
+                    ? await store.WritePortableColorIndexAsync(records.Select(record => record.Sha256), write: !options.DryRun).ConfigureAwait(false) : 0;
                 rows.Add(new { catalog = roots[index], images = records.Length, built, skipped, failed = failures.Count,
-                    bytes, elapsedMs = catalogClock.Elapsed.TotalMilliseconds, dryRun = options.DryRun, failures });
+                    bytes, colorEntries, colorsOnly, io = store.IoDiagnostics,
+                    elapsedMs = catalogClock.Elapsed.TotalMilliseconds, dryRun = options.DryRun, failures });
             }
         }
         finally

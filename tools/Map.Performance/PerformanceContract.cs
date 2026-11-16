@@ -70,7 +70,7 @@ internal sealed record PerformanceOptions(
         }
 
         var normalizedProfile = profile.Trim().ToLowerInvariant();
-        if (normalizedProfile is not ("drive-library" or "derived-build") && (catalogs.Count > 0 || dryRun))
+        if (normalizedProfile is not ("drive-library" or "derived-build" or "derived-colors") && (catalogs.Count > 0 || dryRun))
             throw new ArgumentException("--catalogs и --dry-run доступны только для drive-library и derived-build.");
         var objectCount = requestedObjectCount ?? (normalizedProfile == "drive-library" ? 100
             : normalizedProfile is "native-million-assets" or "mem-pressure" ? 1_000_000 : 50_000);

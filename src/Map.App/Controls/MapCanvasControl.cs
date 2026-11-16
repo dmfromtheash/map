@@ -1014,6 +1014,8 @@ public sealed partial class MapCanvasControl : Control
             {
                 var sceneStarted = System.Diagnostics.Stopwatch.GetTimestamp();
                 SceneRenderer.Render(canvas, renderDocument, sceneOptions);
+                if (sceneOptions.Stamps is Map.Presentation.Services.CatalogStampImageSource refiningImages)
+                    refiningImages.SetViewRefining(renderStats.DetailTilesPending > 0 || renderStats.UnresolvedImages > 0 || refiningImages.ImageRequestsPending);
                 if (cameraEligible && movingNow)
                 {
                     cameraFrames.NoteMovingScene(System.Diagnostics.Stopwatch.GetElapsedTime(sceneStarted).TotalMilliseconds);

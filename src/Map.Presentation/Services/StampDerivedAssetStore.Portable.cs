@@ -17,6 +17,32 @@ public sealed partial class StampDerivedAssetStore
     private sealed record PortableTrust(FileStamp[] Sources, string[] Hashes);
     private readonly Dictionary<string, FileStamp?> _rejectedPortable = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, PortableTrust> _portableTrust = new(StringComparer.OrdinalIgnoreCase);
+    private sealed record CachedPortableManifest(FileStamp File, PortableManifest Manifest, long DataStart);
+    private readonly Dictionary<string, CachedPortableManifest> _portableManifests = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Queue<string> _portableManifestOrder = new();
+
+    // Header, trust and each requested mip used to parse/hash the same JSON independently. Keep a bounded
+    // manifest snapshot tied to the opened file's own stamp; pixel blocks still pass their exact hash check.
+    private (PortableManifest Manifest, long DataStart) ReadPortableManifestCached(FileStream file, AssetRecord record)
+    {
+        var stamp = new FileStamp(file.Name, file.Length, File.GetLastWriteTimeUtc(file.SafeFileHandle).Ticks);
+        lock (_requestsGate)
+            if (_portableManifests.TryGetValue(record.Sha256, out var cached) && cached.File == stamp)
+                return (cached.Manifest, cached.DataStart);
+        CountIo(ref _portableManifestReads);
+        var result = ReadPortableManifest(file);
+        lock (_requestsGate)
+        {
+            if (!_portableManifests.ContainsKey(record.Sha256))
+            {
+                while (_portableManifests.Count >= Math.Min(1024, _metadataCapacity))
+                    _portableManifests.Remove(_portableManifestOrder.Dequeue());
+                _portableManifestOrder.Enqueue(record.Sha256);
+            }
+            _portableManifests[record.Sha256] = new(stamp, result.Manifest, result.DataStart);
+        }
+        return result;
+    }
 
     /// <summary>
     /// Portable files whose sources still need the full hash check on this machine. Until 2026-11-15 the check ran
@@ -52,16 +78,30 @@ public sealed partial class StampDerivedAssetStore
         {
             try
             {
+                // Whole originals can be much larger than the compact mips the first frames need. Leave
+                // their sequential hash reader idle until visible demand has had 250 ms to drain.
+                // One already-running verification may finish; new ones never overtake visible pixels.
+                while (!_disposed && (Volatile.Read(ref _viewRefining) != 0
+                    || Volatile.Read(ref _journalMetadata) > 0 || Volatile.Read(ref _journalPixels) > 0
+                    || System.Diagnostics.Stopwatch.GetElapsedTime(Interlocked.Read(ref _lastVisibleDemand)).TotalMilliseconds < 250))
+                    await Task.Delay(10).ConfigureAwait(false);
                 if (_disposed || _catalog.Find(sha) is not { } record) continue;
                 var path = PortablePath(record);
                 PortableManifest manifest;
                 using (var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete))
-                    (manifest, _) = ReadPortableManifest(file);
-                if (!VerifyPortableSourcesNow(record, manifest)) RejectUntrustedPortable(sha, path, _catalog.SourcePath(record));
+                    (manifest, _) = ReadPortableManifestCached(file, record);
+                // The colour-index route has not read a per-asset header yet. Validate the manifest's
+                // identity/source list here too, before indexing SourceHashes or accepting its proof.
+                if (!string.Equals(manifest.Header.Sha, sha, StringComparison.OrdinalIgnoreCase)
+                    || !PortableSourcesMatch(record, manifest) || !VerifyPortableSourcesNow(record, manifest))
+                    RejectUntrustedPortable(sha, path, _catalog.SourcePath(record));
             }
             catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or JsonException or ArgumentException)
             {
-                // The file went away or is unreadable: the next request reads its header again and decides.
+                // An index-only colour must not survive forever when its portable file went away:
+                // invalidate it too, so the next palette request validates/builds the actual source.
+                if (_catalog.Find(sha) is { } record && _catalog.SourcePath(record) is { } source)
+                    InvalidateFile(source, cancelPixels: false);
             }
             finally { lock (_requestsGate) _trustPending.Remove(sha); }
         }
@@ -113,7 +153,7 @@ public sealed partial class StampDerivedAssetStore
         try
         {
             using var file = new FileStream(header.PortablePath!, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
-            var (manifest, start) = ReadPortableManifest(file);
+            var (manifest, start) = ReadPortableManifestCached(file, record);
             if (!string.Equals(manifest.Header.Sha, sha, StringComparison.OrdinalIgnoreCase)) return false;
             foreach (var key in PortableKeys(record))
             {
@@ -173,7 +213,7 @@ public sealed partial class StampDerivedAssetStore
         return (manifest, dataStart);
     }
 
-    private Header? TryReadPortableHeader(AssetRecord record)
+    private Header? TryReadPortableHeader(AssetRecord record, bool verify = true)
     {
         try
         {
@@ -181,14 +221,14 @@ public sealed partial class StampDerivedAssetStore
             if (!File.Exists(path) || IsRejectedPortable(record.Sha256, path)) return null;
             CountIo(ref _portableHeaderReads);
             using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
-            var (manifest, _) = ReadPortableManifest(file);
+            var (manifest, _) = ReadPortableManifestCached(file, record);
             var held = manifest.Header;
             var root = _catalog.RootFor(record);
             var original = FileStamp.Read(_catalog.SourcePath(record));
             var working = FileStamp.Read(_catalog.TryDetailLevelPath(record, 1, out var step) ? step : _catalog.SourcePath(record));
             if (original is null || working is null || !string.Equals(held.Sha, record.Sha256, StringComparison.OrdinalIgnoreCase)
                 || !PortableStampMatches(held.Original, original, root) || !PortableStampMatches(held.Working, working, root)
-                || !PortableSourcesMatch(record, manifest) || !VerifyPortableSources(record, manifest)) return null;
+                || !PortableSourcesMatch(record, manifest) || verify && !VerifyPortableSources(record, manifest)) return null;
             foreach (var entry in manifest.Entries)
                 if (entry.Width != Math.Max(1, Math.Max(1, record.Width >> entry.Step) >> entry.Level)
                     || entry.Height != Math.Max(1, Math.Max(1, record.Height >> entry.Step) >> entry.Level))
@@ -302,9 +342,10 @@ public sealed partial class StampDerivedAssetStore
             if (!header.Original.Matches() || !header.Working.Matches()) throw new InvalidDataException("Portable source changed.");
             CountIo(ref _portablePixelReads);
             using var file = new FileStream(header.PortablePath!, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
-            var (manifest, start) = ReadPortableManifest(file);
+            if (_catalog.Find(key.Sha) is not { } record) throw new InvalidDataException("Portable catalog record disappeared.");
+            var (manifest, start) = ReadPortableManifestCached(file, record);
             if (!string.Equals(manifest.Header.Sha, key.Sha, StringComparison.OrdinalIgnoreCase)
-                || _catalog.Find(key.Sha) is not { } record || !PortableSourcesMatch(record, manifest)
+                || !PortableSourcesMatch(record, manifest)
                 || !VerifyPortableSources(record, manifest)) throw new InvalidDataException("Portable source identity changed.");
             var entry = manifest.Entries.FirstOrDefault(entry => entry.Step == key.Step && entry.Level == key.Level);
             if (entry is null) return null;

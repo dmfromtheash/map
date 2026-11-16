@@ -6,11 +6,13 @@ public sealed partial class StampDerivedAssetStore
 {
     public readonly record struct IoSnapshot(long PortableHeaders, long PortablePixels, long LocalMips,
         long SourcePreparations, long SourceVerifications, long ReadsOnCanvasThread,
-        double PortableDecompressMs, double SourceDecodeMs);
+        double PortableDecompressMs, double SourceDecodeMs,
+        long PortableManifestReads = 0, long PortableColorIndexReads = 0, long PortableColorIndexHits = 0);
 
     private long _portableHeaderReads, _portablePixelReads, _localMipReads, _sourcePreparations,
         _sourceVerifications, _readsOnCanvasThread, _portableDecompressTicks, _sourceDecodeTicks;
     private int _canvasThreadId;
+    private long _portableManifestReads, _portableColorIndexReads, _portableColorIndexHits;
 
     internal void ObserveCanvasThread() => Volatile.Write(ref _canvasThreadId, Environment.CurrentManagedThreadId);
 
@@ -30,5 +32,6 @@ public sealed partial class StampDerivedAssetStore
     public IoSnapshot IoDiagnostics => new(Interlocked.Read(ref _portableHeaderReads), Interlocked.Read(ref _portablePixelReads),
         Interlocked.Read(ref _localMipReads), Interlocked.Read(ref _sourcePreparations), Interlocked.Read(ref _sourceVerifications),
         Interlocked.Read(ref _readsOnCanvasThread), Interlocked.Read(ref _portableDecompressTicks) * 1000d / Stopwatch.Frequency,
-        Interlocked.Read(ref _sourceDecodeTicks) * 1000d / Stopwatch.Frequency);
+        Interlocked.Read(ref _sourceDecodeTicks) * 1000d / Stopwatch.Frequency,
+        Interlocked.Read(ref _portableManifestReads), Interlocked.Read(ref _portableColorIndexReads), Interlocked.Read(ref _portableColorIndexHits));
 }

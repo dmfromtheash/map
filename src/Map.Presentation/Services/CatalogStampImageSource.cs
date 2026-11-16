@@ -49,7 +49,6 @@ public sealed partial class CatalogStampImageSource(
             || _cacheableMissingShas.ContainsKey(sha256);
     }
     private int _overviewNotification;
-    private int _previewNotification;
     private readonly HashSet<string> _derivedNotifications = new(StringComparer.OrdinalIgnoreCase);
     private volatile Action? _derivedReady;
     public void SetFrameReady(Action ready)
@@ -108,6 +107,10 @@ public sealed partial class CatalogStampImageSource(
 
     public StampDerivedAssetStore.IoSnapshot DerivedIoDiagnostics => _derived?.IoDiagnostics ?? default;
 
+    /// <summary>Frame feedback only: background source hashes wait for the view's rasters as well as its pixels.
+    /// Empty queues alone do not mean the first million-object fit is already on screen.</summary>
+    public void SetViewRefining(bool refining) => _derived?.SetViewRefining(refining);
+
     public bool PrepareOverview(IEnumerable<string> assets, Action ready)
     {
         if (!IsCanvasThread) return PrepareOverviewCore(assets, ready);
@@ -138,43 +141,21 @@ public sealed partial class CatalogStampImageSource(
             shas = shas.Where(sha => !IsMissingCacheable(sha)).ToArray();
         }
         if (shas.Length == 0) return true;
-        var generation = _derived.Generation;
-        var tasks = shas.Select(_derived.Request).ToArray();
+        var tasks = _derived.PrepareColors(shas);
         var pending = tasks.Where(task => !task.IsCompleted).ToArray();
         if (pending.Length == 0)
         {
-            RememberOverview(tasks, generation);
             return true;
         }
-        var previews = shas.Select(_derived.Preview).Where(task => !task.IsCompleted).ToArray();
-        if (previews.Length > 0 && Interlocked.CompareExchange(ref _previewNotification, 1, 0) == 0)
-            _ = Task.WhenAll(previews).ContinueWith(_ =>
-            {
-                Interlocked.Exchange(ref _previewNotification, 0);
-                if (!_disposed) ready();
-            }, TaskScheduler.Default);
         if (Interlocked.CompareExchange(ref _overviewNotification, 1, 0) == 0)
             _ = Task.WhenAll(tasks).ContinueWith(_ =>
             {
-                RememberOverview(tasks, generation);
                 Interlocked.Exchange(ref _overviewNotification, 0);
                 if (!_disposed) ready();
             }, TaskScheduler.Default);
         return false;
     }
 
-    private void RememberOverview(IEnumerable<Task<StampDerivedAssetStore.Header?>> tasks, long generation)
-    {
-        lock (_gate)
-        {
-            if (_disposed || _derived?.Generation != generation) return;
-            // Compact colors belong to this document's assets, independent of the bounded
-            // heavy metadata/task cache. An overview with >8192 assets must still converge.
-            foreach (var task in tasks)
-                if (task.IsCompletedSuccessfully && task.Result is { } header)
-                    _overviewColors[header.Sha] = new SKColor(header.Color);
-        }
-    }
     // Large owner art keeps its master plus a ladder of halved steps; the budget holds the
     // working steps of a whole set and the masters of the few objects a close view shows.
     // Many distinct small stamps must fit as well as a few large masters. The byte budget,
@@ -423,13 +404,13 @@ public sealed partial class CatalogStampImageSource(
                 if (TakeKnownColor(sha256)) return _overviewColors[sha256];
                 TrackMissingHeader(sha256);
                 if (IsMissingCacheable(sha256)) return null;
-                _derived.Request(sha256);
+                _derived.PrepareColor(sha256);
                 if (_derived.TryReady(sha256) is { } prepared)
                     return _overviewColors[sha256] = new SKColor(prepared.Color);
             }
             // Pending is not missing: the catalog's existing thumbnail is the temporary tint.
             // Until even that is ready, leave its points transparent, never paint the red error glyph.
-            return _derived.Request(sha256).IsCompleted ? null : _derived.TryPreview(sha256) ?? SKColors.Transparent;
+            return _derived.PrepareColor(sha256).IsCompleted ? null : _derived.TryPreview(sha256) ?? SKColors.Transparent;
         }
         lock (_gate)
         {
@@ -988,7 +969,7 @@ public sealed partial class CatalogStampImageSource(
                     }
                     else
                     {
-                        var header = _derived!.Request(key.Sha);
+                        var header = _derived!.RequestVisible(key.Sha);
                         if (!header.IsCompleted) wait = header;
                         else if (header.IsCompletedSuccessfully && header.Result is { } prepared)
                         {
@@ -1531,7 +1512,7 @@ public sealed partial class CatalogStampImageSource(
     private bool QueuePixels(StampDerivedAssetStore.PixelKey key, Action ready)
     {
         _wantedMips.Add(key);
-        var header = _derived!.Request(key.Sha);
+        var header = _derived!.RequestVisible(key.Sha);
         if (!header.IsCompleted) { NotifyDerived(key.Sha, header, ready); return false; }
         if (header.IsCompletedSuccessfully && header.Result is { } prepared)
         {

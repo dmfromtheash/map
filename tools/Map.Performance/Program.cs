@@ -23,7 +23,7 @@ if (options.Profile == "mem-pressure")
 {
     report = MemoryPressureProbe.Run(options); gatePassed = true;
 }
-else if (options.Profile == "derived-build")
+else if (options.Profile is "derived-build" or "derived-colors")
 {
     report = await DerivedBuildProbe.RunAsync(options); gatePassed = true;
 }
