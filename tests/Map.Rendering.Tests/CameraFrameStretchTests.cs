@@ -33,4 +33,34 @@ public sealed class CameraFrameStretchTests
         Assert.Equal(reused, cache.TryDraw(target.Canvas, visible, page));
         Assert.Equal(reused ? 0 : 1, cache.RefusedStretched);
     }
+
+    /// <summary>
+    /// USER (HD 630, 100 000 objects, 2026-11-16): with every moving frame drawing the scene (18-24 ms) the wheel ran at
+    /// 34 FPS / 1 % low 10; unlimited stretching gave 60 FPS with heavy blur. A slow scene may stretch the kept frame up
+    /// to 4x, but every 4th such frame draws the scene again; a fast scene keeps the 1.25x limit.
+    /// </summary>
+    [Fact]
+    public void A_slow_scene_stretches_the_kept_frame_and_redraws_every_fourth_frame()
+    {
+        var (cache, page) = Captured();
+        using var target = SKSurface.Create(new SKImageInfo(400, 400));
+        bool Frame(float scale)
+        {
+            target.Canvas.ResetMatrix();
+            target.Canvas.Scale(scale);
+            return cache.TryDraw(target.Canvas, new SKRect(0, 0, 400 / scale, 400 / scale), page);
+        }
+
+        cache.NoteMovingScene(3);                 // fast machine
+        Assert.False(cache.SlowScene);
+        Assert.False(Frame(.2f));                 // 2x: drawn, as before
+
+        cache.NoteMovingScene(20);                // a slow moving scene switches at once
+        Assert.True(cache.SlowScene && cache.KeepMovingFrames);
+        var shown = Enumerable.Range(0, 8).Select(_ => Frame(.2f)).ToArray();
+        Assert.Equal([true, true, true, false, true, true, true, false], shown);
+        Assert.Equal(2, cache.SlowRefreshes);
+        Assert.False(Frame(.8f));                 // 8x stays beyond even the slow limit
+        Assert.True(Frame(.12f));                 // within 1.25x never counts towards a refresh
+    }
 }

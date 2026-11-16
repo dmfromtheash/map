@@ -80,7 +80,48 @@ public sealed class CameraFrameCache : IDisposable
     public long RefusedStretched { get; private set; }
 
     private bool Sharp(Frame frame, SKCanvas canvas) =>
+        canvas.TotalMatrix.ScaleX <= frame.Image.Width / Math.Max(1e-6, frame.World.Width) * EffectiveMagnification;
+
+    /// <summary>
+    /// A moving scene that costs more than this (ms, smoothed) is "slow": the kept frame may then be stretched up to
+    /// <see cref="SlowMaxMagnification"/>, and every <see cref="SlowRefreshEvery"/>-th moving frame draws the scene and
+    /// becomes the new kept frame. USER (Intel HD 630), 100 000 objects, 2026-11-16: no single limit held both - 1.25x
+    /// gave 34 FPS / 1 % low 10 on the wheel fit -> 100 (each moving frame drew the scene, 18-24 ms), no limit gave 60 FPS
+    /// with heavy blur. A cheap scene (the PC) keeps <see cref="MaxMagnification"/>.
+    /// </summary>
+    public double SlowSceneMilliseconds { get; set; } = 8;
+    public double SlowMaxMagnification { get; set; } = 4;
+    public int SlowRefreshEvery { get; set; } = 4;
+
+    /// <summary>Smoothed cost of a scene drawn while the camera moves (ms); 0 until measured.</summary>
+    public double MovingSceneMilliseconds { get; private set; }
+
+    /// <summary>True while moving scenes are slow (see <see cref="SlowSceneMilliseconds"/>).</summary>
+    public bool SlowScene => MovingSceneMilliseconds > SlowSceneMilliseconds;
+
+    private bool WithinNormalLimit(Frame frame, SKCanvas canvas) =>
         canvas.TotalMatrix.ScaleX <= frame.Image.Width / Math.Max(1e-6, frame.World.Width) * MaxMagnification;
+
+    /// <summary>
+    /// A frame drawn while moving may be kept only in slow mode: there the moving scene is what replaces a stretched
+    /// frame. On a fast machine only settled, complete frames are kept (as before).
+    /// </summary>
+    public bool KeepMovingFrames => SlowScene;
+
+    private double EffectiveMagnification => SlowScene ? Math.Max(MaxMagnification, SlowMaxMagnification) : MaxMagnification;
+    private int _stretchedInRow;
+
+    /// <summary>Frames refused in slow mode so that the scene is drawn and kept again (diagnostics and tests).</summary>
+    public long SlowRefreshes { get; private set; }
+
+    /// <summary>The caller reports a scene drawn while the camera moved (not a reused kept frame).</summary>
+    public void NoteMovingScene(double milliseconds)
+    {
+        if (milliseconds < 0 || double.IsNaN(milliseconds)) return;
+        // A slow frame switches at once; recovery is gradual so one cheap frame does not flip the mode back.
+        MovingSceneMilliseconds = MovingSceneMilliseconds <= 0 || milliseconds > MovingSceneMilliseconds
+            ? milliseconds : MovingSceneMilliseconds * 0.8 + milliseconds * 0.2;
+    }
 
     /// <summary>False means nothing was drawn; normal rendering must cover this view.</summary>
     public bool TryDraw(SKCanvas canvas, SKRect visible, SKRect page)
@@ -89,7 +130,11 @@ public sealed class CameraFrameCache : IDisposable
         if (target.IsEmpty) return true;
         var cover = _detail is { } detail && Contains(detail.World, target) ? detail : _wide;
         if (cover is null || !Contains(cover.World, target)) return false;
-        if (!Sharp(cover, canvas)) { RefusedStretched++; return false; }
+        if (!Sharp(cover, canvas)) { RefusedStretched++; _stretchedInRow = 0; return false; }
+        // Slow scenes: a frame stretched past the normal limit is shown only a few times in a row, then the scene is
+        // drawn once and kept again (the caller captures it), so the blur is refreshed several times a second.
+        if (SlowScene && !WithinNormalLimit(cover, canvas) && ++_stretchedInRow >= SlowRefreshEvery)
+        { _stretchedInRow = 0; SlowRefreshes++; return false; }
         canvas.Save();
         canvas.ClipRect(target);
         // Clip the broad view around the detail. Even translucent pages are composited once.
