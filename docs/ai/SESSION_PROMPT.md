@@ -106,7 +106,8 @@
 - **Ветки работы Mac** (origin `claude/mac/*`, база b424 или 58d539e — проверить по `git merge-base`): `buildfixes` (падение
   `BuildVariantChoice`, комната теряется в инспекторе `WithGeometry`, «река в море» на ровной суше — 3 коммита с тестами),
   `budgets3` (профиль машины `MachineProfile` — 16 пределов как доли RAM/ядер + `FrameBudgetController` + `AdaptiveWorkGate`,
-  поверх b424 без editbudget; тесты на ПК: Core 676/0, Assets 177/0, Rendering/Presentation — см. квитанции J), `coldstart`
+  поверх b424 без editbudget; тесты на ПК: Core 676/0, Assets 177/0; Rendering и Presentation НЕ прогнаны — остановлены при
+  закрытии, прогнать первым делом), `coldstart`
   (цвета «всей карты» рядом с библиотекой `<library>/derived/v1/overview-colors.bin`, 2–4 читателя заголовков с приоритетом
   видимых), `selectbig` (поиск строки в виртуальном списке объектов: 245→0,04 мс на 1 млн), `spikes` (длинные кадры: время
   запасной точной отрисовки вместо счёта 512, большие буферы пространственного поиска, переиспользование SKPaint/SKPath),
