@@ -141,6 +141,7 @@ public sealed partial class EditorViewModel
             Stamp = source.Stamp,
             Line = source.Line,
             Shape = source.Shape,
+            Room = source.Room,
             FillGradient = source.FillGradient,
             Text = source.Text,
             Composition = source.Composition,
