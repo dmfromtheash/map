@@ -376,6 +376,26 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
                     bitmap.SetImmutable();
                     return new Mip(null, portable.Width, portable.Height, reserved, Image: SKImage.FromBitmap(bitmap), LargeReserved: largeReserved);
                 }
+                // Resolve a rejected portable header before choosing the local mip path.
+                // Callers may retain it after repair; those requests must reuse the ladder
+                // rather than decode the source again. Repairs still share the source gate.
+                if (header.PortablePath is not null && IsRejectedPortable(header.Sha, header.PortablePath))
+                {
+                    var repaired = record is null ? null : TryReadHeader(header.Sha, record);
+                    if (repaired is null && record is not null)
+                    {
+                        lock (_requestsGate) request.Started = false;
+                        await _compactSourceReader.WaitAsync(request.Stop.Token).ConfigureAwait(false);
+                        try
+                        {
+                            lock (_requestsGate) { request.Stop.Token.ThrowIfCancellationRequested(); request.Started = true; }
+                            repaired = TryReadHeader(header.Sha, record) ?? LoadOrBuild(header.Sha);
+                        }
+                        finally { _compactSourceReader.Release(); }
+                    }
+                    if (repaired is null) return new Mip(null, 0, 0, reserved, LargeReserved: largeReserved);
+                    header = repaired;
+                }
                 // A valid portable asset may omit a large raster; prepare that raster only.
                 if (!small || header.PortablePath is not null)
                 {
@@ -385,12 +405,6 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
                     try
                     {
                         lock (_requestsGate) { request.Stop.Token.ThrowIfCancellationRequested(); request.Started = true; }
-                        if (header.PortablePath is not null && IsRejectedPortable(header.Sha, header.PortablePath))
-                        {
-                            var repaired = record is null ? null : TryReadHeader(header.Sha, record) ?? LoadOrBuild(header.Sha);
-                            if (repaired is null) return new Mip(null, 0, 0, reserved, LargeReserved: largeReserved);
-                            header = repaired;
-                        }
                         var image = PrepareRaster(header, key, request.Stop.Token);
                         return new Mip(null, image?.Width ?? 0, image?.Height ?? 0, reserved,
                             Image: image, LargeReserved: largeReserved);
