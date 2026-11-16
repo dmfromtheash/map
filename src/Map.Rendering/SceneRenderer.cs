@@ -4233,7 +4233,10 @@ public static partial class SceneRenderer
         // A magnified image never samples its mips: asking for them made the GPU build a mip chain for each large
         // image as it was uploaded - 58 stamps at 1600 % took 160-220 ms per frame (PC ladder 100 000, 2026-11-15).
         var device = canvas.TotalMatrix;
-        var magnified = objects[start].Width * Math.Sqrt(device.ScaleX * device.ScaleX + device.SkewY * device.SkewY) >= image!.Width;
+        // The CPU atlas takes a different rounding path without mip sampling, even at
+        // magnification. Preserve its evaluator so viewport and export pixels agree.
+        var magnified = options.GpuContext is not null
+            && objects[start].Width * Math.Sqrt(device.ScaleX * device.ScaleX + device.SkewY * device.SkewY) >= image!.Width;
         canvas.DrawAtlas(image!, sources, transforms, colors, SKBlendMode.Modulate,
             new SKSamplingOptions(SKFilterMode.Linear, magnified ? SKMipmapMode.None : SKMipmapMode.Linear), paint);
         if (options.Stats is { } stats)
