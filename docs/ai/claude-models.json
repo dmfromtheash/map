@@ -16,8 +16,8 @@
     },
     {
       "key": "fable",
-      "name": "Claude Fable 5.1",
-      "modelId": "claude-fable-5-1",
+      "name": "Claude Fable 5.2",
+      "modelId": "claude-fable-5-2",
       "suggestedEffort": "high",
       "guidance": [
         "Получив цель и критерии результата, самостоятельно выбери порядок исследования и реализации всего запрошенного этапа.",
