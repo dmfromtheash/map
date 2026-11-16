@@ -342,9 +342,24 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
         lock (_requestsGate)
         {
             if (_mips.IsEmpty) return;
+            var retiredAny = false;
             foreach (var pair in _mips)
-                if (!pair.Value.Started && !pair.Value.Stop.IsCancellationRequested && !wanted.Contains(pair.Key))
+            {
+                if (wanted.Contains(pair.Key)) continue;
+                // A started/finished large result can hold the entire byte budget. If the
+                // camera leaves it, retire it instead of waiting for a canvas adoption that
+                // may never happen. The retirement owns cleanup after its worker finishes.
+                if (Interlocked.Read(ref pair.Value.LargeBytes) > 0 && _mips.TryRemove(pair.Key, out var retired))
+                {
+                    Interlocked.Decrement(ref _journalPixels);
+                    Interlocked.Increment(ref _discardedMips);
+                    Retire(retired);
+                    retiredAny = true;
+                }
+                else if (!pair.Value.Started && !pair.Value.Stop.IsCancellationRequested)
                 { pair.Value.Stop.Cancel(); Interlocked.Increment(ref _discardedMips); }
+            }
+            if (retiredAny) SignalCapacity();
         }
     }
 
@@ -437,7 +452,8 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
         var token = request.Stop.Token;
         var bytes = (long)Math.Max(1, Math.Max(1, record.Width >> key.Step) >> key.Level)
             * Math.Max(1, Math.Max(1, record.Height >> key.Step) >> key.Level) * 4;
-        var budgeted = false;
+        var handedOff = false;
+        SKImage? image = null;
         var pressure = false;
         try
         {
@@ -446,9 +462,8 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
             {
                 if (Map.Core.Resources.WorkingMemoryBudget.Shared.IsUnderPressure)
                 { await _pressureLane.WaitAsync(token).ConfigureAwait(false); pressure = true; }
-                await ReserveLarge(bytes, token).ConfigureAwait(false);
-                budgeted = true;
-                lock (_requestsGate) { token.ThrowIfCancellationRequested(); request.Started = true; request.LargeBytes = bytes; }
+                await ReserveLarge(bytes, request).ConfigureAwait(false);
+                lock (_requestsGate) { token.ThrowIfCancellationRequested(); request.Started = true; }
                 lock (_largeGate) _largePreparingPeak = Math.Max(_largePreparingPeak, ++_largePreparing);
                 try
                 {
@@ -457,16 +472,21 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
                         using var bitmap = new SKBitmap(new SKImageInfo(portable.Width, portable.Height, SKColorType.Rgba8888, SKAlphaType.Premul));
                         System.Runtime.InteropServices.Marshal.Copy(portable.Pixels, 0, bitmap.GetPixels(), portable.Pixels.Length);
                         bitmap.SetImmutable();
-                        return new Mip(null, portable.Width, portable.Height, false, Image: SKImage.FromBitmap(bitmap), LargeReserved: true);
+                        image = SKImage.FromBitmap(bitmap);
                     }
-                    if (header.PortablePath is not null && IsRejectedPortable(header.Sha, header.PortablePath))
+                    else
                     {
-                        var repaired = TryReadHeader(header.Sha, record) ?? LoadOrBuild(header.Sha);
-                        if (repaired is null) return new Mip(null, 0, 0, false, LargeReserved: true);
-                        header = repaired;
+                        if (header.PortablePath is not null && IsRejectedPortable(header.Sha, header.PortablePath))
+                        {
+                            var repaired = TryReadHeader(header.Sha, record) ?? LoadOrBuild(header.Sha);
+                            if (repaired is null) return new Mip(null, 0, 0, false);
+                            header = repaired;
+                        }
+                        image = PrepareRaster(header, key, token);
                     }
-                    var image = PrepareRaster(header, key, token);
-                    return new Mip(null, image?.Width ?? 0, image?.Height ?? 0, false, Image: image, LargeReserved: true);
+                    var result = new Mip(null, image?.Width ?? 0, image?.Height ?? 0, false, Image: image, LargeReserved: image is not null);
+                    handedOff = image is not null;
+                    return result;
                 }
                 finally { lock (_largeGate) _largePreparing--; }
             }
@@ -478,22 +498,31 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
         }
         catch (OperationCanceledException)
         {
-            if (budgeted) { lock (_requestsGate) request.LargeBytes = 0; ReleaseLarge(bytes); }
             return new Mip(null, 0, 0, false, Cancelled: true);
         }
         catch (Exception ex)
-        { ReportFailure("pixels " + header.Sha, ex); return new Mip(null, 0, 0, false, LargeReserved: budgeted); }
+        { ReportFailure("pixels " + header.Sha, ex); return new Mip(null, 0, 0, false); }
+        finally
+        {
+            if (!handedOff) { image?.Dispose(); ReleaseLarge(request); }
+        }
     }
 
-    private async Task ReserveLarge(long bytes, CancellationToken token)
+    private async Task ReserveLarge(long bytes, MipRequest request)
     {
+        var token = request.Stop.Token;
         while (true)
         {
             Task freed;
             lock (_largeGate)
             {
+                token.ThrowIfCancellationRequested();
                 if (_largeWaitingBytes == 0 || _largeWaitingBytes + bytes <= LargeWaitingByteBudget)
-                { _largeWaitingBytes += bytes; return; }
+                {
+                    _largeWaitingBytes += bytes;
+                    Interlocked.Exchange(ref request.LargeBytes, bytes);
+                    return;
+                }
                 freed = _largeFreed.Task;
             }
             await freed.WaitAsync(token).ConfigureAwait(false);
@@ -506,19 +535,17 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
         TaskCompletionSource freed;
         lock (_largeGate)
         {
-            _largeWaitingBytes = Math.Max(0, _largeWaitingBytes - bytes);
+            _largeWaitingBytes -= bytes;
             freed = _largeFreed;
             _largeFreed = new(TaskCreationOptions.RunContinuationsAsynchronously);
         }
         freed.TrySetResult();
     }
 
-    // Under _requestsGate or on a retired request: gives a finished large raster's bytes back once.
+    // Worker failure/cancellation, canvas adoption and retirement share exactly one release.
     private void ReleaseLarge(MipRequest request)
     {
-        var bytes = request.LargeBytes;
-        request.LargeBytes = 0;
-        ReleaseLarge(bytes);
+        ReleaseLarge(Interlocked.Exchange(ref request.LargeBytes, 0));
     }
 
     public bool TryTakeMip(string sha, int level, out Mip? mip)
