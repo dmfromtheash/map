@@ -845,10 +845,24 @@ public static class ObjectTreeRows
         IReadOnlyCollection<ObjectId> selectedIds) : IReadOnlyList<ObjectTreeRow>, System.Collections.IList
     {
         private readonly HashSet<ObjectId> _selected = [.. selectedIds];
+        // Avalonia reconciles selected items through IList.IndexOf when a source changes.
+        // Rows are made on demand, so remember the position with the row, weakly: only live
+        // (usually realized) rows cost memory, never another directory of a million objects.
+        // A hint is always verified against the current source, including record equality.
+        private sealed record RowPosition(int Index);
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<ObjectTreeRow, RowPosition> Positions = new();
 
         public int Count => entries.Count;
 
-        public ObjectTreeRow this[int index] => Create(entries[index]);
+        public ObjectTreeRow this[int index]
+        {
+            get
+            {
+                var row = Create(entries[index]);
+                Positions.Add(row, new(index));
+                return row;
+            }
+        }
 
         object? System.Collections.IList.this[int index]
         {
@@ -868,7 +882,7 @@ public static class ObjectTreeRows
         {
             for (var index = 0; index < entries.Count; index++)
             {
-                yield return Create(entries[index]);
+                yield return this[index];
             }
         }
 
@@ -904,9 +918,23 @@ public static class ObjectTreeRows
                 return -1;
             }
 
+            // Kind headers belong to the small prefix, never to these virtual entries.
+            if (wanted.Kind is ObjectTreeRowKind.AssetKind or ObjectTreeRowKind.AssetKindBreadcrumb
+                or ObjectTreeRowKind.Water or ObjectTreeRowKind.Road or ObjectTreeRowKind.Land) return -1;
+
+            if (Positions.TryGetValue(wanted, out var hint) && hint.Index < Count)
+            {
+                var candidate = Create(entries[hint.Index]);
+                if (candidate == wanted) return hint.Index;
+                // The identity is unique in this list. A selection/property change can make
+                // the old record unequal, but no other row could equal it. Edits that moved
+                // the identity elsewhere still take the compatibility search below.
+                if (wanted.Object is { } item && candidate.Object?.Id == item.Id) return -1;
+            }
+
             for (var index = 0; index < Count; index++)
             {
-                if (this[index] == wanted)
+                if (Create(entries[index]) == wanted)
                 {
                     return index;
                 }

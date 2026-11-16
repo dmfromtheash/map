@@ -17,8 +17,8 @@ namespace Map.Presentation.Tests;
 public sealed class SelectionStepCostTests
 {
     [Theory]
-    [InlineData(10_000)]
-    [InlineData(200_000)]
+    [InlineData(100_000)]
+    [InlineData(1_000_000)]
     public Task Native_select_step_with_owner_stamps(int count) => EditorUiThread.Run(() =>
     {
         using var services = (IDisposable)typeof(AvaloniaLocator).GetMethod("EnterScope", BindingFlags.Public | BindingFlags.Static)!.Invoke(null, null)!;
@@ -181,6 +181,51 @@ public sealed class SelectionStepCostTests
         Assert.Equal(uniqueKinds ? objects[^1] : objects[0], rows[^1].Object);
         Assert.InRange(allocated, 0, 32_768);
     }
+
+    [Fact]
+    public Task Selecting_a_deep_row_in_a_million_rows_has_a_small_size_ratio() => EditorUiThread.Run(() =>
+    {
+        Probe(16); // JIT the same path before either measured size.
+        var small = Probe(100_000);
+        var large = Probe(1_000_000);
+        Console.WriteLine(FormattableString.Invariant($"ROW-LOOKUP ratio={large.Ms / Math.Max(.001, small.Ms):F3} bytes100k={small.Bytes} bytes1m={large.Bytes}"));
+        // This is a CPU guard, not a 60 FPS claim: 16 ms leaves a complete frame's budget
+        // for one list lookup on this Mac. The allocation bound detects materializing rows
+        // even on a much faster machine; the generous ratio allows scheduler/GC noise.
+        Assert.InRange(large.Bytes, 0, 65_536);
+        Assert.InRange(large.Ms, 0, 16);
+        Assert.True(large.Ms <= Math.Max(1, small.Ms) * 3);
+
+        static (double Ms, long Bytes) Probe(int count)
+        {
+            var style = new StampStyle(new string('a', 64));
+            var objects = Enumerable.Range(0, count).Select(i => new SceneObject(ObjectId.New(), SceneObjectKind.Stamp,
+                "mountain " + i, 0, 0, 64, 48, 0, "#FFFFFFFF", "#00000000", 0, true, false) { Stamp = style }).ToArray();
+            var document = new MapDocument(DocumentId.New(), "selection rows", DateTimeOffset.UnixEpoch,
+                new(131072, 131072, "px", "#FFFFFFFF"),
+                [new BaseColorLayer(LayerId.New(), "base", true, false, 1, "#FFFFFFFF"),
+                 new ObjectLayer(LayerId.New(), "objects", true, false, 1, objects)]);
+            ObjectTreeRows.PrepareLayerIndexes(document);
+            var rows = ObjectTreeRows.Build(document, "", ObjectTypeFilter.Stamps, null, [], openAssetKey: style.AssetSha256);
+            var wanted = rows[^1];
+            var list = (System.Collections.IList)rows;
+            var selector = new ListBox { ItemsSource = rows };
+            var allocated = GC.GetAllocatedBytesForCurrentThread();
+            var start = Stopwatch.GetTimestamp();
+            selector.SelectedItem = wanted;
+            var selectMs = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+            Assert.Equal(count, selector.SelectedIndex);
+            Assert.Equal(count, list.IndexOf(wanted));
+            var ms = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+            var bytes = GC.GetAllocatedBytesForCurrentThread() - allocated;
+            Console.WriteLine(FormattableString.Invariant($"ROW-LOOKUP count={count} selectMs={selectMs:F4} ms={ms:F4} bytes={bytes}"));
+            // A selection change changes row equality (Selected), but never row position.
+            var selected = ObjectTreeRows.Build(document, "", ObjectTypeFilter.Stamps, null, [objects[0].Id], openAssetKey: style.AssetSha256);
+            Assert.Equal(-1, ((System.Collections.IList)selected).IndexOf(wanted));
+            Assert.Equal(count, ((System.Collections.IList)selected).IndexOf(selected[^1]));
+            return (ms, bytes);
+        }
+    });
 
     private static T Field<T>(Map.App.Views.EditorView view, string name) => (T)typeof(Map.App.Views.EditorView)
         .GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(view)!;
