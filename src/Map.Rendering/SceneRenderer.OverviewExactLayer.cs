@@ -21,7 +21,6 @@ public static partial class SceneRenderer
 
     /// <summary>Below this many exact objects the direct draw is cheaper than a layer.</summary>
     private const int ExactLayerMinimumObjects = 128;
-    private const int OverviewExactDirectBudget = 512;
     private const long ExactLayerMaximumPixels = 20L * 1024 * 1024;
     /// <summary>A stand-in layer from resident images (cold library) is redrawn at most this often while images arrive.</summary>
     private const double ExactLayerPartialIntervalMilliseconds = 250;
@@ -455,14 +454,19 @@ public static partial class SceneRenderer
     /// are copied into the layer 1:1. A strip's translated matrix rounds a few filtered samples differently: at most two
     /// channel steps in 0.03 % of the bytes, never a missing or moved object (ColdLibraryWholeMapTests).
     /// </summary>
-    internal static int ExactLayerStripWorkers = Math.Clamp(Environment.ProcessorCount / 2, 1, 4);
+    // These are coordinate-system partitions, not worker limits: changing their origin changes
+    // Skia's floating-point sampling. More workers draw contributor subsets in the SAME partition
+    // surface, clip and matrix; only the copy selects sub-band rows.
+    internal static int ExactLayerStripPartitions = Math.Clamp(Environment.ProcessorCount / 2, 1, 4);
+    internal static int ExactLayerStripConcurrencyOverride; // deterministic concurrency/pixel tests only
     private const int ExactLayerStripMinimumObjects = 2_000;
 
     private static int ExactLayerStrips(ExactLayerJob job) =>
-        job.Objects.Length < ExactLayerStripMinimumObjects || job.Key.Extent.Height < 256 ? 1 : ExactLayerStripWorkers;
+        job.Objects.Length < ExactLayerStripMinimumObjects || job.Key.Extent.Height < 256 ? 1 : ExactLayerStripPartitions;
 
     /// <summary>Layers rastered in strips (tests).</summary>
     internal static long ExactLayerStripRasters;
+    internal static long ExactLayerSubBandRasters;
 
     private static bool RasterExactStrips(ExactLayerJob job, SKCanvas target, int strips)
     {
@@ -471,39 +475,65 @@ public static partial class SceneRenderer
         var height = job.Key.Extent.Height;
         var layerMatrix = LayerMatrix(job.Key);
         var step = (height + strips - 1) / strips;
-        var images = new SKImage?[strips];
-        var unresolved = new int[strips];
+        var workers = Math.Clamp(ExactLayerStripConcurrencyOverride > 0 ? ExactLayerStripConcurrencyOverride
+            : MachineProfileMonitor.Shared.Limits.StripWorkers, 1, 32);
+        var subdivisions = (workers + strips - 1) / strips;
+        var bands = new List<(int Origin, int Height, int Top, int Bottom)>();
+        for (var strip = 0; strip < strips; strip++)
+        {
+            var origin = strip * step;
+            var bandHeight = Math.Min(height, origin + step) - origin;
+            var bandStep = (bandHeight + subdivisions - 1) / subdivisions;
+            for (var top = 0; top < bandHeight; top += bandStep)
+                bands.Add((origin, bandHeight, top, Math.Min(bandHeight, top + bandStep)));
+        }
+        var images = new SKImage?[bands.Count];
+        var unresolved = new int[bands.Count];
+        Interlocked.Add(ref ExactLayerSubBandRasters, bands.Count);
         try
         {
-            Parallel.For(0, strips, new ParallelOptions { MaxDegreeOfParallelism = strips }, strip =>
+            Parallel.For(0, bands.Count, new ParallelOptions { MaxDegreeOfParallelism = workers }, index =>
             {
-                var top = strip * step;
-                var bottom = Math.Min(height, top + step);
-                if (bottom <= top) return;
-                using var surface = SKSurface.Create(new SKImageInfo(width, bottom - top));
+                var band = bands[index];
+                using var surface = SKSurface.Create(new SKImageInfo(width, band.Height));
                 if (surface is null) return;
                 var canvas = surface.Canvas;
+                // Only copied rows need initialization. Restore the full legacy device clip
+                // before any image draw, avoiding a full-partition clear for every worker.
+                canvas.Save();
+                canvas.ClipRect(new SKRect(0, band.Top, width, band.Bottom), antialias: false);
                 canvas.Clear(SKColors.Transparent);
-                var matrix = SKMatrix.CreateTranslation(0, -top).PreConcat(layerMatrix);
+                canvas.Restore();
+                // Keep the legacy device clip as well as its matrix. Clipping a rotated image
+                // earlier changes Skia's shader start/rounding. Draw contributing objects whole,
+                // then copy just the band's rows: no extra clip enters their sampling pipeline.
+                var matrix = SKMatrix.CreateTranslation(0, -band.Origin).PreConcat(layerMatrix);
                 canvas.SetMatrix(matrix);
                 var stats = new RenderStats();
                 var options = job.Options.ForBackgroundTile(job.Images, stats);
                 // Antialiased edges reach a pixel past an object's bounds.
-                var band = new SKRect(-2, -2, width + 2, bottom - top + 2);
+                var reachBand = new SKRect(-2, band.Top - 2, width + 2, band.Bottom + 2);
                 foreach (var sceneObject in job.Objects)
                 {
                     if (Volatile.Read(ref job.Cancelled)) return;
                     var reach = matrix.MapRect(ToRect(SceneGeometry.BoundsOf(sceneObject)));
-                    if (!reach.IntersectsWith(band)) continue;
+                    if (!reach.IntersectsWith(reachBand)) continue;
                     DrawObject(canvas, sceneObject, job.Foreground, options, prepareGpuEffect: false);
                 }
                 canvas.Flush();
-                images[strip] = surface.Snapshot();
-                unresolved[strip] = stats.UnresolvedImages;
+                images[index] = surface.Snapshot();
+                unresolved[index] = stats.UnresolvedImages;
             });
             if (Volatile.Read(ref job.Cancelled) || images.Any(image => image is null)) return false;
             target.ResetMatrix();
-            for (var strip = 0; strip < strips; strip++) target.DrawImage(images[strip]!, 0, strip * step);
+            for (var index = 0; index < bands.Count; index++)
+            {
+                var band = bands[index];
+                target.Save();
+                target.ClipRect(new SKRect(0, band.Origin + band.Top, width, band.Origin + band.Bottom), antialias: false);
+                target.DrawImage(images[index]!, 0, band.Origin);
+                target.Restore();
+            }
             job.Options.Stats!.UnresolvedImages += unresolved.Sum();
             return true;
         }

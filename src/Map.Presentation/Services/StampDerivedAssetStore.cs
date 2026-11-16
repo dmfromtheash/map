@@ -107,19 +107,20 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
     private const int CompactMipSide = 256;
     private readonly SemaphoreSlim _mipSlots = new(64);
     // Small mips were read strictly one at a time: a zoom into 10 000 stamps queued 1 851 requests and assets
-    // arrived seconds late (PC ladder, 2026-11-15). Independent compressed mips overlap on 2-4 lanes without growing
+    // arrived seconds late (PC ladder, 2026-11-15). Independent compressed mips use the machine's lanes without growing
     // the 64-result handoff (Mac mipprio: 2600 -> 1762 ms to a sharp view, 59 -> 37 frames).
-    internal static readonly int SmallReaderCount = Math.Clamp(Environment.ProcessorCount - 2, 2, 4);
-    private readonly SemaphoreSlim _mipReader = new(SmallReaderCount);
+    internal static int SmallReaderCount => Map.Rendering.MachineProfileMonitor.Shared.Limits.SmallReaders;
+    private readonly Map.Rendering.AdaptiveWorkGate _mipReader;
     // A compact result can still require a full source decode (missing ladder/portable entry or repair).
     // Keep that native working memory at its former single-source bound.
     private readonly SemaphoreSlim _compactSourceReader = new(1);
     // Large rasters: several lanes prepare them at once (a lane is free again as soon as its raster is ready,
     // not when the canvas takes it), and finished ones waiting for the canvas share one byte budget. One raster
     // always passes, so a master larger than the budget cannot wait for ever. Small results keep their slots.
-    internal static readonly int LargeLaneCount = Math.Clamp(Environment.ProcessorCount - 2, 1, 4);
-    internal const long LargeWaitingByteBudget = 128L * 1024 * 1024;
-    private readonly SemaphoreSlim _largeLanes = new(LargeLaneCount);
+    internal static int LargeLaneCount => Map.Rendering.MachineProfileMonitor.Shared.Limits.LargeLanes;
+    internal static long LargeWaitingByteBudget => Map.Rendering.MachineProfileMonitor.Shared.Limits.LargeWaitingBytes;
+    private readonly Map.Rendering.AdaptiveWorkGate _largeLanes;
+    private readonly Map.Rendering.MachineProfileMonitor _machine;
     // Under memory pressure only one large raster is prepared at a time.
     private readonly SemaphoreSlim _pressureLane = new(1);
     private readonly object _largeGate = new();
@@ -168,13 +169,17 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
     public StampDerivedAssetStore(AssetCatalog catalog, string root, long? diskBudgetBytes = null,
         int metadataCapacity = 65536, int pixelCapacity = 4096, long preparedSourceByteCapacity = 64L * 1024 * 1024,
         TimeProvider? retryClock = null, Action<FileSystemWatcher>? startWatcher = null,
-        DerivedCacheMaintenancePolicy? maintenance = null, bool nativeMipImages = false)
+        DerivedCacheMaintenancePolicy? maintenance = null, bool nativeMipImages = false,
+        Map.Rendering.MachineProfileMonitor? machine = null)
     {
         if (diskBudgetBytes is { } explicitBudget) ArgumentOutOfRangeException.ThrowIfNegativeOrZero(explicitBudget);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(metadataCapacity);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(pixelCapacity);
         ArgumentOutOfRangeException.ThrowIfNegative(preparedSourceByteCapacity);
         _catalog = catalog;
+        _machine = machine ?? Map.Rendering.MachineProfileMonitor.Shared;
+        _mipReader = new(() => _machine.Limits.SmallReaders);
+        _largeLanes = new(() => _machine.Limits.LargeLanes);
         _retryClock = retryClock ?? TimeProvider.System;
         _startWatcher = startWatcher ?? (watcher => watcher.EnableRaisingEvents = true);
         _root = Path.GetFullPath(root);
@@ -185,6 +190,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
         _policy = maintenance ?? DerivedCacheMaintenancePolicy.Default;
         _janitor = CreateJanitor(diskBudgetBytes);
         _diskBudget = diskBudgetBytes ?? _policy.Budget.TotalBytes;
+        _machine.PressureDetected += OnMemoryPressure;
         LoadKnownColors();
         _colorValidation = Task.Run(ValidateKnownColorSources);
         _workers = Task.WhenAll(Task.Run(Work), Task.Run(BuildWork), StartMaintenance(), Task.Run(TrustWork),
@@ -474,7 +480,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
             await _largeLanes.WaitAsync(token).ConfigureAwait(false);
             try
             {
-                if (Map.Core.Resources.WorkingMemoryBudget.Shared.IsUnderPressure)
+                if (_machine.Profile.LowMemory || Map.Core.Resources.WorkingMemoryBudget.Shared.IsUnderPressure)
                 { await _pressureLane.WaitAsync(token).ConfigureAwait(false); pressure = true; }
                 await ReserveLarge(bytes, request).ConfigureAwait(false);
                 lock (_requestsGate) { token.ThrowIfCancellationRequested(); request.Started = true; }
@@ -531,7 +537,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
             lock (_largeGate)
             {
                 token.ThrowIfCancellationRequested();
-                if (_largeWaitingBytes == 0 || _largeWaitingBytes + bytes <= LargeWaitingByteBudget)
+                if (_largeWaitingBytes == 0 || _largeWaitingBytes + bytes <= _machine.Limits.LargeWaitingBytes)
                 {
                     _largeWaitingBytes += bytes;
                     Interlocked.Exchange(ref request.LargeBytes, bytes);
@@ -962,7 +968,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
         var bytes = (long)source.Width * source.Height * 4;
         lock (_preparedGate)
         {
-            if (!_disposed && bytes <= _preparedSourceByteCapacity)
+            if (!_disposed && !_machine.Profile.LowMemory && bytes <= _preparedSourceByteCapacity)
             {
                 _preparedSource?.Dispose();
                 (_preparedSource, _preparedKey, _preparedOriginal, _preparedWorking) = (source, sourceKey, original, working);
@@ -1059,6 +1065,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
         {
             if (_disposed) return;
             _disposed = true; _stop.Cancel(); _queue.Writer.TryComplete(); _trustQueue.Writer.TryComplete();
+            _machine.PressureDetected -= OnMemoryPressure;
             StopMaintenance();
             Forget();
             lock (_watchers) { foreach (var watcher in _watchers.Values) watcher.Dispose(); _watchers.Clear(); }

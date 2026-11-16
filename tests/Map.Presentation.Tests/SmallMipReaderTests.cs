@@ -57,7 +57,8 @@ public sealed class SmallMipReaderTests
         await using var store = new StampDerivedAssetStore(fixture.Catalog, fixture.Derived, startWatcher: _ => { });
         var header = await store.Request(records[0].Sha256).WaitAsync(TimeSpan.FromSeconds(30));
         Assert.NotNull(header);
-        var reader = (SemaphoreSlim)typeof(StampDerivedAssetStore).GetField("_mipReader",
+        // test-change: the production reader now adjusts concurrency when machine memory changes.
+        var reader = (AdaptiveWorkGate)typeof(StampDerivedAssetStore).GetField("_mipReader",
             BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(store)!;
         await reader.WaitAsync();
         try

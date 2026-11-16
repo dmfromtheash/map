@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Reflection;
 using Map.Assets;
 using Map.Presentation.Services;
+using Map.Rendering;
 using SkiaSharp;
 
 namespace Map.Presentation.Tests;
@@ -10,6 +11,15 @@ public sealed class StampDerivedAssetStoreLargeAccountingTests : IAsyncLifetime
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "map-large-accounting", Guid.NewGuid().ToString("N"));
     private AssetCatalog _catalog = null!;
+    // test-change: keep the former 128 MiB boundary and this host's legacy lane count,
+    // preserving the same parallel decode/cancellation coverage with the adaptive gate.
+    private readonly MachineProfileMonitor _machine = new(() => new(Environment.ProcessorCount,
+        8 * MachineProfile.GiB, 6 * MachineProfile.GiB), key => key switch
+        {
+            "MAP_BUDGET_LARGE_WAITING_BYTES" => (128 * MachineProfile.MiB).ToString(),
+            "MAP_BUDGET_LARGE_LANES" => Math.Clamp(Environment.ProcessorCount - 2, 1, 4).ToString(),
+            _ => null
+        });
 
     public Task InitializeAsync()
     {
@@ -30,8 +40,8 @@ public sealed class StampDerivedAssetStoreLargeAccountingTests : IAsyncLifetime
         Assert.All(oldResults, mip => Assert.NotNull(mip.Image));
         var heldBytes = records.Take(8).Sum(Bytes);
         Assert.Equal(heldBytes, store.LargeStatistics.WaitingBytes);
-        Assert.InRange(heldBytes, 1, StampDerivedAssetStore.LargeWaitingByteBudget);
-        Assert.True(heldBytes + Bytes(records[8]) > StampDerivedAssetStore.LargeWaitingByteBudget);
+        Assert.InRange(heldBytes, 1, _machine.Limits.LargeWaitingBytes);
+        Assert.True(heldBytes + Bytes(records[8]) > _machine.Limits.LargeWaitingBytes);
 
         // The old camera's results are finished, but no canvas ever takes them. The next
         // master cannot fit until the obsolete results return their real byte reservations.
@@ -173,10 +183,15 @@ public sealed class StampDerivedAssetStoreLargeAccountingTests : IAsyncLifetime
         await using var store = CreateStore();
         var header = (await Headers(store, records))[0];
         // Level 0 uses a large lane; level 3 is compact and needs the source gate.
-        foreach (var (field, level, count) in new[] { ("_largeLanes", 0, StampDerivedAssetStore.LargeLaneCount), ("_compactSourceReader", 3, 1) })
+        // test-change: large lanes now use AdaptiveWorkGate; exercise the same exhausted
+        // admission/cancellation/reuse sequence for both gates, retaining every assertion.
+        var large = Field<AdaptiveWorkGate>(store, "_largeLanes");
+        var compact = Field<SemaphoreSlim>(store, "_compactSourceReader");
+        foreach (var (wait, release, level, count) in new (Func<Task>, Action, int, int)[]
+            { (() => large.WaitAsync(), large.Release, 0, _machine.Limits.LargeLanes),
+              (() => compact.WaitAsync(), () => compact.Release(), 3, 1) })
         {
-            var gate = Field<SemaphoreSlim>(store, field);
-            for (var i = 0; i < count; i++) await gate.WaitAsync();
+            for (var i = 0; i < count; i++) await wait();
             try
             {
                 var pending = store.RequestPixels(header, 0, level);
@@ -186,7 +201,7 @@ public sealed class StampDerivedAssetStoreLargeAccountingTests : IAsyncLifetime
                 Assert.Equal(0, store.LargeStatistics.WaitingBytes);
                 Assert.True(store.TryTakePixels(new(header.Sha, 0, level), out _));
             }
-            finally { gate.Release(count); }
+            finally { for (var i = 0; i < count; i++) release(); }
             var next = await store.RequestPixels(header, 0, level).WaitAsync(TimeSpan.FromSeconds(5));
             Assert.NotNull(next.Image);
             Assert.True(store.TryTakePixels(new(header.Sha, 0, level), out var taken));
@@ -241,8 +256,8 @@ public sealed class StampDerivedAssetStoreLargeAccountingTests : IAsyncLifetime
         await Task.WhenAll(headers.Take(8).Select(h => store.RequestPixels(h, 0, 0))).WaitAsync(TimeSpan.FromSeconds(30));
         var held = records.Take(8).Sum(Bytes);
         var waiting = store.RequestPixels(headers[8], 0, 0);
-        var lanes = Field<SemaphoreSlim>(store, "_largeLanes");
-        Assert.True(SpinWait.SpinUntil(() => lanes.CurrentCount < StampDerivedAssetStore.LargeLaneCount, TimeSpan.FromSeconds(5)));
+        var lanes = Field<AdaptiveWorkGate>(store, "_largeLanes");
+        Assert.True(SpinWait.SpinUntil(() => lanes.CurrentCount < _machine.Limits.LargeLanes, TimeSpan.FromSeconds(5)));
         Assert.False(waiting.IsCompleted);
         Assert.Equal(held, store.LargeStatistics.WaitingBytes);
         store.CancelUnwantedPixels(wanted);
@@ -308,9 +323,9 @@ public sealed class StampDerivedAssetStoreLargeAccountingTests : IAsyncLifetime
     private static T Field<T>(StampDerivedAssetStore store, string name) =>
         (T)typeof(StampDerivedAssetStore).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(store)!;
 
-    private static void AssertLanes(StampDerivedAssetStore store)
+    private void AssertLanes(StampDerivedAssetStore store)
     {
-        Assert.Equal(StampDerivedAssetStore.LargeLaneCount, Field<SemaphoreSlim>(store, "_largeLanes").CurrentCount);
+        Assert.Equal(_machine.Limits.LargeLanes, Field<AdaptiveWorkGate>(store, "_largeLanes").CurrentCount);
         Assert.Equal(1, Field<SemaphoreSlim>(store, "_pressureLane").CurrentCount);
         Assert.Equal(1, Field<SemaphoreSlim>(store, "_compactSourceReader").CurrentCount);
     }
@@ -327,7 +342,7 @@ public sealed class StampDerivedAssetStoreLargeAccountingTests : IAsyncLifetime
     }
 
     private StampDerivedAssetStore CreateStore() => new(_catalog, Path.Combine(_root, "derived"),
-        preparedSourceByteCapacity: 0, startWatcher: _ => { });
+        preparedSourceByteCapacity: 0, startWatcher: _ => { }, machine: _machine);
 
     private static StampDerivedAssetStore.PixelKey Key(StampDerivedAssetStore.Header header) => new(header.Sha.ToLowerInvariant(), 0, 0);
     private static long Bytes(AssetRecord record) => (long)record.Width * record.Height * 4;
@@ -360,6 +375,7 @@ public sealed class StampDerivedAssetStoreLargeAccountingTests : IAsyncLifetime
     public async Task DisposeAsync()
     {
         await _catalog.DisposeAsync();
+        _machine.Dispose();
         Directory.Delete(_root, recursive: true);
     }
 }

@@ -64,7 +64,7 @@ public sealed partial class CatalogStampImageSource
                 var bytes = _cache.RetentionBytes(image) + _samples.RetentionBytes(image);
                 // A dense view must not pin unbounded masters beyond the existing cache budget. Oversized
                 // answers remain drawable in this frame; a busy next frame may use its ordinary fallback.
-                if (bytes > cacheBytes / 8 - _currentFramePinBytes) return answer;
+                if (bytes > FramePinByteBudget - _currentFramePinBytes) return answer;
                 _cache.Pin(image); _samples.Pin(image);
                 answer = answer with { PinBytes = bytes };
                 _currentFramePinBytes += bytes;

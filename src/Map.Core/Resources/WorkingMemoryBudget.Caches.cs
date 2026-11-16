@@ -13,17 +13,25 @@ public readonly record struct CacheMemoryStatistics(string Name, CacheRebuildCos
 public sealed class CacheMemoryAccount : IDisposable
 {
     private readonly WorkingMemoryBudget _owner;
-    private long _bytes, _peak, _limit, _trims, _trimmedBytes, _trimmedItems;
+    private long _bytes, _peak, _limit, _trims, _trimmedBytes, _trimmedItems, _requested;
     private int _disposed;
 
     internal CacheMemoryAccount(WorkingMemoryBudget owner, string name, CacheRebuildCost cost, long requestedBytes)
     {
-        _owner = owner; Name = name; Cost = cost; RequestedBytes = requestedBytes; _limit = requestedBytes;
+        _owner = owner; Name = name; Cost = cost; _requested = requestedBytes; _limit = requestedBytes;
     }
 
     public string Name { get; }
     public CacheRebuildCost Cost { get; }
-    public long RequestedBytes { get; }
+    public long RequestedBytes => Interlocked.Read(ref _requested);
+    /// <summary>Updates a machine-dependent request after pressure or recovery. Changes only
+    /// accounting; each cache applies the new share on its own thread. Unchanged requests do no work.</summary>
+    public void Resize(long requestedBytes)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(requestedBytes);
+        ObjectDisposedException.ThrowIf(IsDisposed, this);
+        if (RequestedBytes != requestedBytes) _owner.ResizeCacheRequest(this, requestedBytes);
+    }
     /// <summary>This cache's share of the one budget derived from physical RAM (normally all it asked for).</summary>
     public long LimitBytes => Interlocked.Read(ref _limit);
     /// <summary>
@@ -52,6 +60,7 @@ public sealed class CacheMemoryAccount : IDisposable
     }
 
     internal void SetLimit(long bytes) => Interlocked.Exchange(ref _limit, Math.Max(1, bytes));
+    internal void SetRequested(long bytes) => Interlocked.Exchange(ref _requested, bytes);
 
     public CacheMemoryStatistics Statistics => new(Name, Cost, Bytes, Interlocked.Read(ref _peak), LimitBytes,
         TargetBytes, Interlocked.Read(ref _trims), Interlocked.Read(ref _trimmedBytes), Interlocked.Read(ref _trimmedItems));
@@ -205,7 +214,18 @@ public sealed partial class WorkingMemoryBudget
         return account;
     }
 
-    internal void Unregister() { lock (_cacheGate) Rebalance(); }
+    internal void Unregister() => RebalanceCacheRequests();
+    internal void RebalanceCacheRequests() { lock (_cacheGate) Rebalance(); }
+    internal void ResizeCacheRequest(CacheMemoryAccount account, long bytes)
+    {
+        lock (_cacheGate)
+        {
+            ObjectDisposedException.ThrowIf(account.IsDisposed, account);
+            if (account.RequestedBytes == bytes) return;
+            account.SetRequested(bytes);
+            Rebalance();
+        }
+    }
 
     /// <summary>
     /// Shares the budget by cache name: two render threads holding the same kind of cache do not halve each other

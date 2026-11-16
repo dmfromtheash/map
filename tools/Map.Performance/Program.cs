@@ -31,6 +31,10 @@ else if (options.Profile == "stamp-cache-probe")
 {
     report = StampCacheProbe.Run(options); gatePassed = true;
 }
+else if (options.Profile == "budget-zoom")
+{
+    report = await BudgetZoomProbe.RunAsync(options.ObjectCount, options.MeasuredIterations); gatePassed = true;
+}
 else if (options.Profile == "hex-world-1024")
 {
     report = HexWorld1024Probe.Run(); gatePassed = true;

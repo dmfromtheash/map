@@ -21,7 +21,8 @@ public readonly record struct PerformanceFrame(
     int DetailTilesPending = 0, int UnresolvedImages = 0, int MissingAssets = 0,
     PerformanceQueues Queues = default, bool QueueSnapshotUnavailable = false,
     int TerrainRefinementsPending = 0, int HexChunksPending = 0,
-    long OverviewAdoptedPixels = 0, long OverviewAdoptionBudgetPixels = 0, int OverviewStartsDuringGesture = 0);
+    long OverviewAdoptedPixels = 0, long OverviewAdoptionBudgetPixels = 0, int OverviewStartsDuringGesture = 0,
+    Map.Rendering.FrameWorkBudget? ResourceBudget = null, double FrameTargetMilliseconds = 0);
 
 /// <summary>
 /// One render-thread producer, one background consumer. RecordFrame never locks, allocates or does IO.
@@ -248,6 +249,8 @@ public sealed class PerformanceJournal : IDisposable
             cacheHits = _hits, cacheMisses = _misses, cacheInvalidations = _invalidations,
             cacheHitRate = _hits + _misses == 0 ? (double?)null : _hits / (double)(_hits + _misses),
             memory = MemorySnapshot(),
+            machineProfile = Map.Rendering.MachineProfileMonitor.Shared.Profile,
+            machineLimits = Map.Rendering.MachineProfileMonitor.Shared.Limits,
             gestures = new { pan = _pan, zoom = _zoom, idle = _idle, edit = _edit },
             maxQueues = _queues, maxDetailTilesPending = _detail, maxUnresolvedImages = _unresolved,
             maxMissingAssets = _missing, maxTerrainRefinementsPending = _refinements, maxHexChunksPending = _hex,

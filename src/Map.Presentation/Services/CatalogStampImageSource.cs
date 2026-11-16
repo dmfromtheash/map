@@ -10,13 +10,39 @@ namespace Map.Presentation.Services;
 /// render thread; style preparation, the pictures of «Вид» and the panels take images through a <see cref="Lease"/>.
 /// </summary>
 public sealed partial class CatalogStampImageSource(
-    AssetCatalog catalog, Func<MapDocument> document, Func<string?> projectPath, int imageCapacity = 4096,
-    long cacheBytes = 512L * 1024 * 1024, bool retainSamples = true, string? derivedRoot = null,
+    AssetCatalog catalog, Func<MapDocument> document, Func<string?> projectPath, int? imageCapacity = null,
+    long? cacheBytes = null, bool retainSamples = true, string? derivedRoot = null,
     TimeProvider? retryClock = null, Action<FileSystemWatcher>? startWatcher = null,
-    DerivedCacheMaintenancePolicy? derivedMaintenance = null) : IStampImageSource, IDisposable, IAsyncDisposable
+    DerivedCacheMaintenancePolicy? derivedMaintenance = null, MachineProfileMonitor? machine = null,
+    TimeProvider? frameClock = null, Map.Core.Resources.WorkingMemoryBudget? memoryBudget = null)
+    : IStampImageSource, IDisposable, IAsyncDisposable
 {
+    private MachineProfileMonitor Machine => machine ?? MachineProfileMonitor.Shared;
+    public MachineLimits ResourceLimits => Machine.Limits;
+    public MachineProfile ResourceProfile => Machine.Profile;
+    internal (long Sources, long Samples) CacheByteLimits => (_cache.ByteCapacity, _samples.ByteCapacity);
+    internal (long Sources, long Samples) EffectiveCacheByteLimits => (_cache.EffectiveByteCapacity, _samples.EffectiveByteCapacity);
+    private long CatalogByteBudget => cacheBytes ?? ResourceLimits.CatalogBytes;
+    private long SourceByteBudget => retainSamples || derivedRoot is not null
+        ? cacheBytes is { } bytes ? bytes * 3 / 4 : ResourceLimits.SourceBytes : CatalogByteBudget;
+    private long SampleByteBudget => cacheBytes is { } bytes ? Math.Max(1, bytes / 4) : ResourceLimits.SampleBytes;
+    private long FramePinByteBudget => cacheBytes is { } bytes ? Math.Max(1, bytes / 8) : ResourceLimits.FramePinBytes;
+    private readonly TimeProvider _frameClock = frameClock ?? TimeProvider.System;
+    public FrameBudgetController FrameBudgets { get; } = new(frameClock);
+    private readonly double? _configuredRefreshHz = ReadRefreshOverride();
+    private double _displayRefreshHz;
+    public double? DisplayRefreshHz
+    {
+        get { var hz = _configuredRefreshHz ?? Volatile.Read(ref _displayRefreshHz); return hz > 0 ? hz : null; }
+        set => Volatile.Write(ref _displayRefreshHz, value is { } hz && double.IsFinite(hz) && hz is >= 24 and <= 1000 ? hz : 0);
+    }
+    private static double? ReadRefreshOverride() => double.TryParse(Environment.GetEnvironmentVariable("MAP_DISPLAY_REFRESH_HZ"),
+        System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var hz)
+        && double.IsFinite(hz) && hz is >= 24 and <= 1000 ? hz : null;
+    public int DirectDrawBudget => FrameBudgets.Budget(ResourceLimits).DirectDraws;
+    private long _frameStarted;
     private readonly StampDerivedAssetStore? _derived = derivedRoot is null ? null : new(catalog, derivedRoot,
-        retryClock: retryClock, startWatcher: startWatcher, maintenance: derivedMaintenance, nativeMipImages: true);
+        retryClock: retryClock, startWatcher: startWatcher, maintenance: derivedMaintenance, nativeMipImages: true, machine: machine);
 
     /// <summary>True when this source keeps the machine cache of preparations (and runs its janitor).</summary>
     public bool HasDerivedCache => _derived is not null;
@@ -179,20 +205,25 @@ public sealed partial class CatalogStampImageSource(
     // working steps of a whole set and the masters of the few objects a close view shows.
     // Many distinct small stamps must fit as well as a few large masters. The byte budget,
     // not a 64-image thumbnail limit, bounds their memory. Ladder steps count as entries too.
-    private readonly AssetImageCache _cache = Tracked(new(imageCapacity, retainSamples || derivedRoot is not null ? cacheBytes * 3 / 4 : cacheBytes),
-        "asset-images", Map.Core.Resources.CacheRebuildCost.Moderate);
-    private static AssetImageCache Tracked(AssetImageCache cache, string name, Map.Core.Resources.CacheRebuildCost cost)
+    private readonly AssetImageCache _cache = Tracked(new(imageCapacity ?? (machine ?? MachineProfileMonitor.Shared).Limits.ImageCapacity,
+        retainSamples || derivedRoot is not null
+            ? cacheBytes is { } sourceBytes ? sourceBytes * 3 / 4 : (machine ?? MachineProfileMonitor.Shared).Limits.SourceBytes
+            : cacheBytes ?? (machine ?? MachineProfileMonitor.Shared).Limits.CatalogBytes),
+        "asset-images", Map.Core.Resources.CacheRebuildCost.Moderate, memoryBudget);
+    private static AssetImageCache Tracked(AssetImageCache cache, string name, Map.Core.Resources.CacheRebuildCost cost,
+        Map.Core.Resources.WorkingMemoryBudget? budget)
     {
-        cache.TrackMemory(Map.Core.Resources.WorkingMemoryBudget.Shared, name, cost);
+        cache.TrackMemory(budget ?? Map.Core.Resources.WorkingMemoryBudget.Shared, name, cost);
         return cache;
     }
-    // The total remains 512 MiB. Copies of the exact sampled pixels survive source churn;
+    // Copies of the exact sampled pixels survive source churn within the machine's byte share;
     // neither the resampling algorithm nor the chosen detail level changes.
     // One SHA can need several exact mips in the current view plus the fallback view.
     // A 4096-entry ceiling evicted tiny pixels below the byte limit before a 1804-asset
-    // preflight could become resident. Keep the 128 MiB budget, allow all sixteen levels.
-    private readonly AssetImageCache _samples = Tracked(new(Math.Max(imageCapacity, 4096) * 16, Math.Max(1, cacheBytes / 4)),
-        "asset-samples", Map.Core.Resources.CacheRebuildCost.Cheap);
+    // preflight could become resident. Keep the machine's byte bound, allow all sixteen levels.
+    private readonly AssetImageCache _samples = Tracked(new(Math.Max(imageCapacity ?? (machine ?? MachineProfileMonitor.Shared).Limits.ImageCapacity, 4096) * 16,
+        cacheBytes is { } sampleBytes ? Math.Max(1, sampleBytes / 4) : (machine ?? MachineProfileMonitor.Shared).Limits.SampleBytes),
+        "asset-samples", Map.Core.Resources.CacheRebuildCost.Cheap, memoryBudget);
     private readonly Dictionary<string, (int Width, int Height)> _sampleDimensions = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, (int Width, int Height)> _workingDimensions = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, SKColor> _overviewColors = new(StringComparer.OrdinalIgnoreCase);
@@ -660,7 +691,7 @@ public sealed partial class CatalogStampImageSource(
             var level = SampleLevel(size, width, height);
             // A memory-pressure fallback may return the original. Do not retain it under a mip key.
             if (image.Width != Math.Max(1, size.Width >> level) || image.Height != Math.Max(1, size.Height >> level)
-                || (long)image.Width * image.Height * 4 > cacheBytes / 4) return image;
+                || (long)image.Width * image.Height * 4 > SampleByteBudget) return image;
             using var pixels = SKBitmap.FromImage(image);
             return _samples.AdoptPixels(key + "#" + level, SKImage.FromBitmap(pixels)) ?? image;
         }
@@ -685,15 +716,19 @@ public sealed partial class CatalogStampImageSource(
     }
 
     /// <summary>Prepared mip bytes a settled frame may take in (future texture uploads); zero or less — no limit.</summary>
-    public long AdoptedMipBytesPerFrame { get; set; } = ExperimentBytes("MAP_MIP_ADOPT_MB", 8L * 1024 * 1024);
+    public long AdoptedMipBytesPerFrame { get => _adoptBytes ?? FrameBudgets.Budget(ResourceLimits).AdoptBytes; set => _adoptBytes = value; }
+    private long? _adoptBytes = ExperimentBytes("MAP_MIP_ADOPT_MB");
     /// <summary>The same while the camera moves (set by the canvas from its last frame).</summary>
-    public long GestureAdoptedMipBytesPerFrame { get; set; } = ExperimentBytes("MAP_MIP_GESTURE_ADOPT_MB", 2L * 1024 * 1024);
+    public long GestureAdoptedMipBytesPerFrame { get => _gestureAdoptBytes ?? FrameBudgets.Budget(ResourceLimits).GestureAdoptBytes; set => _gestureAdoptBytes = value; }
+    private long? _gestureAdoptBytes = ExperimentBytes("MAP_MIP_GESTURE_ADOPT_MB");
 
     /// <summary>
     /// Experiment switch (2026-11-16, blur -> sharp): a megabyte override from the environment, otherwise the default.
     /// </summary>
-    public static long ExperimentBytes(string name, long fallback) =>
-        long.TryParse(Environment.GetEnvironmentVariable(name), out var mb) && mb is >= 0 and <= 65536 ? mb * 1024 * 1024 : fallback;
+    public static long ExperimentBytes(string name, long fallback) => ExperimentBytes(name) ?? fallback;
+
+    private static long? ExperimentBytes(string name) =>
+        long.TryParse(Environment.GetEnvironmentVariable(name), out var mb) && mb is >= 0 and <= 65536 ? mb * 1024 * 1024 : null;
     /// <summary>Whether the canvas's last frame moved the camera.</summary>
     public bool FrameMoving { get; set; }
     private long _byteLimitedFrames;
@@ -703,6 +738,7 @@ public sealed partial class CatalogStampImageSource(
     /// <summary>The canvas frame on the render thread: evictions by other threads wait until it ends.</summary>
     public IDisposable? BeginFrame()
     {
+        _frameStarted = _frameClock.GetTimestamp();
         _frameContended = false;
         _frameBeganUnderGate = false;
         _frameAnswersRotated = false;
@@ -726,6 +762,7 @@ public sealed partial class CatalogStampImageSource(
                 return new FrameScope(this);
             }
             _frameBeganUnderGate = true;
+            ApplyMachineLimits();
             RotateFrameAnswers();
             _derived?.ObserveCanvasThread();
             _validatedThisFrame.Clear();
@@ -809,10 +846,20 @@ public sealed partial class CatalogStampImageSource(
         _samples.DeferDisposal = false;
         _cache.DisposeRetired();
         _samples.DisposeRetired();
+        ApplyMachineLimits();
+        _samples.TrimToLimits();
+        _cache.TrimToLimits();
         // Only while Windows is short of memory: images nobody drew for two seconds, on the frame's own thread
         // after it, within 2 ms together. Sampled steps (cheap to remake) go before decoded sources.
         _samples.TrimForMemoryPressure(1);
         _cache.TrimForMemoryPressure(1);
+    }
+
+    private void ApplyMachineLimits()
+    {
+        var capacity = imageCapacity ?? ResourceLimits.ImageCapacity;
+        _cache.SetLimits(capacity, SourceByteBudget);
+        _samples.SetLimits(Math.Max(capacity, 4096) * 16, SampleByteBudget);
     }
 
     private void InvalidateDerived(string sha)
@@ -1088,6 +1135,8 @@ public sealed partial class CatalogStampImageSource(
             if (_ended) return;
             _ended = true;
             source.EndFrame();
+            // Include owner-thread disposal/trim work in the next frame's headroom decision.
+            source.FrameBudgets.RecordFrame(source._frameClock.GetElapsedTime(source._frameStarted), source.DisplayRefreshHz);
         }
     }
 
@@ -1206,7 +1255,7 @@ public sealed partial class CatalogStampImageSource(
     }
 
     /// <summary>The sampled-image shelf: a frame asks for at most this many bytes of tile images at once.</summary>
-    public long PreparationBytes => Math.Max(1, cacheBytes / 4);
+    public long PreparationBytes => cacheBytes is { } bytes ? Math.Max(1, bytes / 4) : ResourceLimits.PreparationBytes;
 
     /// <summary>
     /// A dense tile's stamps reduced once to their distinct pixel keys. A refining frame then checks a few

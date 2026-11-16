@@ -54,6 +54,8 @@ public interface IStampImageSource
     /// wait for the ones before them, so a view larger than the shelf never evicts what it is about to draw.
     /// </summary>
     long PreparationBytes => long.MaxValue;
+    /// <summary>Optional direct draws allowed by this frame's measured headroom.</summary>
+    int DirectDrawBudget => FrameBudgetController.MinimumBudget.DirectDraws;
 
     /// <summary>
     /// A view of this source for work off the render thread (style preparation, previews) or on the UI thread. Every
@@ -6701,8 +6703,9 @@ public static partial class SceneRenderer
         var exactCount = layered ? exactCandidates + extras.Count : exact.Count;
         // Also every moving frame: the wheel between fit and 100 % (fast path, no layer) drew ~9 660 exact stamps
         // one by one at 31-55 ms per frame (PC ladder 10 000 objects, 2026-11-15). The settled frame completes them.
+        var directDrawBudget = options.Stamps?.DirectDrawBudget ?? MachineProfileMonitor.Shared.Limits.DirectDraws;
         if (!layered && (exactLayerPending || options.CameraMoving || fallbackScale is not null)
-            && !options.IsExport && options.RequestRefinedFrame is not null && exact.Count > OverviewExactDirectBudget)
+            && !options.IsExport && options.RequestRefinedFrame is not null && exact.Count > directDrawBudget)
         {
             // Until the first layer lands, refine a bounded centre-first subset. Keep the
             // synchronous reference/export path and unsupported layers fully exact.
@@ -6715,7 +6718,7 @@ public static partial class SceneRenderer
                 var dx = item.X + item.Width / 2 - viewCentreX;
                 var dy = item.Y + item.Height / 2 - viewCentreY;
                 nearest.Enqueue(item, (dx * dx + dy * dy, item.Id.Value));
-                if (nearest.Count > OverviewExactDirectBudget) nearest.Dequeue();
+                if (nearest.Count > directDrawBudget) nearest.Dequeue();
             }
             exact.Clear();
             while (nearest.TryDequeue(out var near, out _)) exact[near.Id] = near;
@@ -6781,7 +6784,7 @@ public static partial class SceneRenderer
         public readonly Dictionary<(int, int), (OverviewVariant Variant, ObjectOverviewCacheResult Cached)> Drawn = [];
         public readonly List<SceneObject> Extras = [];
         public readonly PriorityQueue<SceneObject, (double Distance, Guid Id)> Nearest = new(
-            OverviewExactDirectBudget + 1, Comparer<(double Distance, Guid Id)>.Create(static (a, b) => b.CompareTo(a)));
+            513, Comparer<(double Distance, Guid Id)>.Create(static (a, b) => b.CompareTo(a)));
         public static OverviewFrameScratch Rent()
         {
             var result = _overviewFrameScratch ?? new();
