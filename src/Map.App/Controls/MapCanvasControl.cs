@@ -1010,17 +1010,7 @@ public sealed partial class MapCanvasControl : Control
                 // With camera frames the decorations go over the scene after its capture.
                 DeferEditorOverlay = cameraEligible,
             };
-            if (!reusedCamera)
-            {
-                var sceneStarted = System.Diagnostics.Stopwatch.GetTimestamp();
-                SceneRenderer.Render(canvas, renderDocument, sceneOptions);
-                if (cameraEligible && movingNow)
-                {
-                    cameraFrames.NoteMovingScene(System.Diagnostics.Stopwatch.GetElapsedTime(sceneStarted).TotalMilliseconds);
-                    // Slow machine: the moving scene becomes the kept frame the next frames stretch (see CameraFrameCache).
-                    if (cameraFrames.KeepMovingFrames && !fastPreview) cameraFrames.Capture(lease.SkSurface!, canvas, page);
-                }
-            }
+            if (!reusedCamera) SceneRenderer.Render(canvas, renderDocument, sceneOptions);
             if (!reusedCamera && cameraEligible && !movingNow && !fastTerrain && !fastPreview
                 && renderStats.UnresolvedImages == 0 && renderStats.DetailTilesPending == 0
                 && renderStats.TerrainRefinementsPending == 0 && renderStats.HexChunksPending == 0
