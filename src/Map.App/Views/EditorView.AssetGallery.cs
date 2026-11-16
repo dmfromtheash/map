@@ -61,7 +61,7 @@ public sealed partial class EditorView
     private readonly List<Action> _quickFilterSyncs = [];
     public Window? AssetCatalogWindowForSmoke => _assetCatalogWindow;
     public int GalleryRealizedCards => _realizedGalleryTiles.Count;
-    private sealed record CompactVariant(AssetVariant Variant, int Index);
+    private sealed record CompactVariant(AssetVariant Variant, int Index, string? SetName = null, int? Count = null);
     private IReadOnlyList<StampFamilyVariant>? _compactVariants;
 
     // ------------------------------------------------------------------ window layout
@@ -963,7 +963,7 @@ public sealed partial class EditorView
         ItemTemplate = new FuncDataTemplate<CompactVariant[]>((row, _) =>
         {
             var panel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
-            foreach (var cell in row ?? []) panel.Children.Add(BuildVariantChoice(cell.Variant, cell.Index, "StampVariant_", 44, stampFamily: true));
+            foreach (var cell in row ?? []) panel.Children.Add(BuildVariantChoice(cell, "StampVariant_", 44));
             return panel;
         }, supportsRecycling: false),
     };

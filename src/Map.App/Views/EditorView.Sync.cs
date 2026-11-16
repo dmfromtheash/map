@@ -2306,19 +2306,20 @@ public sealed partial class EditorView
         _variantStrip.ItemTemplate = new FuncDataTemplate<CompactVariant[]>((row, _) =>
         {
             var panel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 3 };
-            foreach (var cell in row ?? []) panel.Children.Add(BuildVariantChoice(cell.Variant, cell.Index, "Variant_", 40));
+            foreach (var cell in row ?? []) panel.Children.Add(BuildVariantChoice(cell, "Variant_", 40));
             return panel;
         }, supportsRecycling: false);
         _variantStrip.ItemsSource = variants.Select((v, i) => new CompactVariant(v, i)).Chunk(6).ToArray();
     }
 
     private ToggleButton BuildVariantChoice(
-        AssetVariant variant,
-        int position,
+        CompactVariant cell,
         string namePrefix,
-        double previewSize,
-        bool stampFamily = false)
+        double previewSize)
     {
+        var variant = cell.Variant;
+        var position = cell.Index;
+        var stampFamily = cell.SetName is not null;
         var picture = new Image { Stretch = Stretch.Uniform };
         _thumbnails.Assign(picture, _editor.LibraryThumbnailPathForVariant(variant.Id));
         var isCover = !stampFamily && variant.Id == _editor.SelectedSet?.CoverVariantId;
@@ -2369,8 +2370,8 @@ public sealed partial class EditorView
         var button = new ToggleButton { Content = face }
             .Named(namePrefix + variant.Id).Classed("segment");
         var selected = variant.Id == _editor.CurrentVariant?.Id;
-        var count = stampFamily ? _editor.StampFamilyVariants.Count : _editor.SelectedSetVariants.Count;
-        var label = stampFamily ? _editor.StampFamilyVariants[position].SetName : variant.Label;
+        var count = cell.Count ?? _editor.SelectedSetVariants.Count;
+        var label = cell.SetName ?? variant.Label;
         var name = $"{label} · вариант {position + 1} из {count}"
             + (isCover ? ", обложка" : "")
             + (selected ? ", текущий" : "")
@@ -2380,7 +2381,12 @@ public sealed partial class EditorView
         Ui.SetSelected(button, selected);
         button.Click += (_, _) =>
         {
-            if (stampFamily) _editor.SelectStampFamilyVariantAt(position);
+            if (stampFamily)
+            {
+                // An old realized button must never select a different family's item at this index.
+                var choice = _editor.StampFamilyVariants.FirstOrDefault(c => c.Variant.Id == variant.Id);
+                if (choice is not null) _editor.ChooseGalleryVariant(choice.SetId, variant.Id);
+            }
             else _editor.SelectVariantAt(position);
             SyncAssetList();
             SyncStatus();

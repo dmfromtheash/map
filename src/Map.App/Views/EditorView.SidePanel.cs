@@ -2265,7 +2265,8 @@ public sealed partial class EditorView
         if (!ReferenceEquals(_compactVariants, variants))
         {
             _compactVariants = variants;
-            _stampVariantStrip.ItemsSource = variants.Select((v, i) => new CompactVariant(v.Variant, i)).Chunk(3).ToArray();
+            // Deferred row templates must use the same family snapshot as their variants.
+            _stampVariantStrip.ItemsSource = variants.Select((v, i) => new CompactVariant(v.Variant, i, v.SetName, variants.Count)).Chunk(3).ToArray();
         }
         foreach (var button in _stampVariantStrip.GetVisualDescendants().OfType<ToggleButton>())
             Ui.SetSelected(button, button.Name == "StampVariant_" + _editor.CurrentVariant?.Id);
