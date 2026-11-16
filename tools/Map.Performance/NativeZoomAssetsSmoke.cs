@@ -905,6 +905,9 @@ public sealed partial class ZoomAssetsApplication : Application
             if (calm >= 3) break;
             await Task.Delay(10);
         }
+        _report.Environment["gpu-cache-mib"] = (Map.App.Controls.MapCanvasControl.GpuResourceCacheBytes >> 20).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        _report.Environment["gpu-adapter-budget-mib"] = Map.App.Controls.GpuMemoryBudget.LastAdapterBudget is { } budget
+            ? (budget >> 20).ToString(System.Globalization.CultureInfo.InvariantCulture) : "unknown";
         target.SharpCompleted = calm >= 3;
         target.SharpMaxQueue = maxQueue;
         target.SharpDelayMs = (Stopwatch.GetTimestamp() - target.RefinementStartQpc) * 1000.0 / Stopwatch.Frequency;
