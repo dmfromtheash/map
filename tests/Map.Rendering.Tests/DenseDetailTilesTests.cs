@@ -384,6 +384,17 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
         public long PlanPrepares { get; set; }
         public double LastBeginFrameMilliseconds { get; private set; }
         private readonly HashSet<Key> _everAdopted = [];
+        // Reserve the model's request bookkeeping before timing, equally for before and after.
+        // Real source plans reserve their shared wanted-key set on the preparation worker.
+        internal void ReserveNavigationCapacity(int pixelKeys)
+        {
+            _requested.EnsureCapacity(pixelKeys);
+            _everAdopted.EnsureCapacity(pixelKeys);
+            _wanted.EnsureCapacity(pixelKeys);
+            _previousWanted.EnsureCapacity(pixelKeys);
+            _inFlight.EnsureCapacity(InFlightCapacity);
+            _late.EnsureCapacity(pixelKeys);
+        }
         public long Evictions { get; private set; }
         public long Adopted { get; private set; }
         public double PreflightMilliseconds { get; private set; }
@@ -604,10 +615,18 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
             private Key[]? _array;
             private long _readyAt = -1, _checkedAt = -1;
             private Key[]? _missing;
+            private Key[]? _missingBuffer;
+            private int _missingCount;
             public long Bytes { get; private set; }
             public long SourceRevision => 0;
             public IStampImageLease? Pin() => source.Background ? source.Pin(_keys) : null;
             public IStampImageLease? PinResident() => source.Background ? source.Pin(_keys, resident: true) : null;
+            public void Seal()
+            {
+                _array = [.. _keys];
+                _missingBuffer = new Key[_array.Length];
+                _missingCount = 0; _checkedAt = -1;
+            }
             public void Add(IEnumerable<(string Sha256, double Width, double Height)> stamps)
             {
                 var started = Stopwatch.GetTimestamp();
@@ -618,6 +637,7 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
                     if (_keys.Add(key)) { var (w, h) = source.Size(key); Bytes += (long)w * h * 4; }
                 }
                 _array = null; _missing = null; _checkedAt = -1;
+                _missingBuffer = null; _missingCount = 0;
                 source.PreflightMilliseconds += Stopwatch.GetElapsedTime(started).TotalMilliseconds;
             }
             public bool Prepare(Action ready)
@@ -626,8 +646,13 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
                 if (_readyAt == source.Evictions) return true;
                 var started = Stopwatch.GetTimestamp();
                 // As the real source: without an eviction only the keys missing last time can change.
-                var keys = _checkedAt == source.Evictions && _missing is { } missing ? missing : _array ??= [.. _keys];
-                var still = new List<Key>();
+                var all = _array ??= [.. _keys];
+                ReadOnlySpan<Key> keys = _checkedAt == source.Evictions
+                    ? _missingBuffer is { } previous ? previous.AsSpan(0, _missingCount)
+                        : _missing is { } missing ? missing : all
+                    : all;
+                var still = _missingBuffer is null ? new List<Key>() : null;
+                var missingCount = 0;
                 var asked = 0;
                 foreach (var key in keys)
                 {
@@ -636,11 +661,14 @@ public sealed class DenseDetailTilesTests(ITestOutputHelper output)
                     source._wanted.Add(key);
                     // As the real source: at most 512 new requests per check.
                     if (asked++ < 512) source.Request(key);
-                    still.Add(key);
+                    if (_missingBuffer is { } buffer) buffer[missingCount] = key;
+                    else still!.Add(key);
+                    missingCount++;
                 }
-                _missing = [.. still];
+                if (still is not null) _missing = [.. still];
+                _missingCount = missingCount;
                 _checkedAt = source.Evictions;
-                var resident = still.Count == 0;
+                var resident = missingCount == 0;
                 if (resident) _readyAt = source.Evictions;
                 source.PreflightMilliseconds += Stopwatch.GetElapsedTime(started).TotalMilliseconds;
                 return resident;

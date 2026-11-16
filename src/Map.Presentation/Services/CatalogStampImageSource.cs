@@ -1218,10 +1218,22 @@ public sealed partial class CatalogStampImageSource(
         internal (StampDerivedAssetStore.PixelKey Key, string Name)[]? Names;
         internal long ReadyAt = -1, CheckedAt = -1;
         internal (StampDerivedAssetStore.PixelKey Key, string Name)[]? Missing;
+        internal (StampDerivedAssetStore.PixelKey Key, string Name)[]? MissingBuffer;
+        internal int MissingCount;
         public long Bytes { get; internal set; }
         public long SourceRevision => revision;
         internal readonly Dictionary<string, AssetRecord> Records = new(StringComparer.OrdinalIgnoreCase);
         public void Add(IEnumerable<(string Sha256, double Width, double Height)> stamps) => source.AddToPlan(this, stamps);
+        public void Seal()
+        {
+            lock (source._gate)
+            {
+                Names ??= [.. Keys.Select(key => (key, source.PixelName(key)))];
+                MissingBuffer = new (StampDerivedAssetStore.PixelKey, string)[Names.Length];
+                MissingCount = 0; CheckedAt = -1;
+                source._wantedMips.EnsureCapacity(Keys.Count * 2);
+            }
+        }
         public bool Prepare(Action ready) => source.PreparePlan(this, ready);
         public IStampImageLease? Pin() => source.PinPlan(this);
         public IStampImageLease? PinResident() => source.PinPlan(this, resident: true);
@@ -1357,6 +1369,7 @@ public sealed partial class CatalogStampImageSource(
                         * Math.Max(1, Math.Max(1, record.Height >> pixel.Step) >> pixel.Level) * 4;
             }
             plan.Names = null; plan.Missing = null; plan.CheckedAt = -1;
+            plan.MissingBuffer = null; plan.MissingCount = 0;
         }
     }
 
@@ -1381,9 +1394,13 @@ public sealed partial class CatalogStampImageSource(
             var epoch = _cache.Evictions + _samples.Evictions;
             if (plan.ReadyAt == epoch && plan.SourceRevision == SourceRevision) return true;
             // Nothing left the shelf since the last check: only the keys that were missing then can have changed.
-            var keys = plan.CheckedAt == epoch && plan.Missing is { } missing ? missing
-                : plan.Names ??= [.. plan.Keys.Select(key => (key, PixelName(key)))];
-            var stillMissing = new List<(StampDerivedAssetStore.PixelKey Key, string Name)>();
+            var all = plan.Names ??= [.. plan.Keys.Select(key => (key, PixelName(key)))];
+            ReadOnlySpan<(StampDerivedAssetStore.PixelKey Key, string Name)> keys = plan.CheckedAt == epoch
+                ? plan.MissingBuffer is { } previous ? previous.AsSpan(0, plan.MissingCount)
+                    : plan.Missing is { } missing ? missing : all
+                : all;
+            var stillMissing = plan.MissingBuffer is null ? new List<(StampDerivedAssetStore.PixelKey Key, string Name)>() : null;
+            var missingCount = 0;
             // At most 512 new requests per check: a cold tile asks for thousands, spread over a few frames.
             var asked = 0;
             foreach (var (pixel, name) in keys)
@@ -1391,14 +1408,22 @@ public sealed partial class CatalogStampImageSource(
                 if (ReadyPixels(name) is not null) continue;
                 // Still wanted, so a request already in flight is not cancelled at the end of the frame.
                 _wantedMips.Add(pixel);
-                if (asked >= 512) { stillMissing.Add((pixel, name)); continue; }
+                if (asked >= 512) { KeepMissing((pixel, name)); continue; }
                 asked++;
-                if (!_decodeFailed.Contains(name) && !QueuePixels(pixel, ready)) stillMissing.Add((pixel, name));
+                if (!_decodeFailed.Contains(name) && !QueuePixels(pixel, ready)) KeepMissing((pixel, name));
             }
-            plan.Missing = [.. stillMissing];
+            if (stillMissing is not null) plan.Missing = [.. stillMissing];
+            plan.MissingCount = missingCount;
             plan.CheckedAt = _cache.Evictions + _samples.Evictions;
-            if (stillMissing.Count == 0) plan.ReadyAt = plan.CheckedAt;
-            return stillMissing.Count == 0;
+            if (missingCount == 0) plan.ReadyAt = plan.CheckedAt;
+            return missingCount == 0;
+
+            void KeepMissing((StampDerivedAssetStore.PixelKey Key, string Name) entry)
+            {
+                if (plan.MissingBuffer is { } buffer) buffer[missingCount] = entry;
+                else stillMissing!.Add(entry);
+                missingCount++;
+            }
         }
         finally { if (derivedTaken) _derived!.ExitFrameGate(); if (taken) Monitor.Exit(_gate); }
     }

@@ -389,6 +389,15 @@ public static partial class SceneRenderer
             }
             var planMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
             var planBytes = GC.GetAllocatedBytesForCurrentThread() - allocated;
+            // The first wheel step into detail must not start a full-map spatial build or count
+            // every stamp for tile eligibility. Prepare both with the overview, before it is
+            // handed to the frame; deltas keep their incremental index/revision paths.
+            if (state.Layer.Objects.Count >= BackgroundSpatialIndexObjects)
+            {
+                WaitWhileGesture(token);
+                _ = ObjectSpatialIndex.For(state.Layer);
+                _ = RevisionsFor(state.Layer);
+            }
             allocated = GC.GetAllocatedBytesForCurrentThread();
             var revision = state.Source?.OverviewColorRevision;
             var sourceRevision = state.Source?.SourceRevision ?? 0;
@@ -457,6 +466,10 @@ public static partial class SceneRenderer
             var variantBytes = GC.GetAllocatedBytesForCurrentThread() - allocated;
             if (work.Prefetch)
             {
+                // A gesture can start while an indivisible neighbour variant is being built.
+                // Publish it after that gesture (or discard it if its view was cancelled).
+                WaitWhileGesture(token);
+                token.ThrowIfCancellationRequested();
                 lock (_gate) { _variantMilliseconds += variantMs; _prefetched++; _prefetchBytes += variantBytes; }
                 return;
             }

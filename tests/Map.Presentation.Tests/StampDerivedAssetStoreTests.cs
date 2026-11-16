@@ -562,8 +562,10 @@ public sealed class StampDerivedAssetStoreTests : IDisposable
         finally { store.Dispose(); await store.Completion; }
     }
 
-    [Fact]
-    public async Task A_preparation_plan_checks_distinct_keys_and_gives_the_same_pixels()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_preparation_plan_checks_distinct_keys_and_gives_the_same_pixels(bool sealedPlan)
     {
         await using var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));
         var records = Enumerable.Range(1, 6).Select(n => ImportOwner(catalog, n)).ToArray();
@@ -579,6 +581,7 @@ public sealed class StampDerivedAssetStoreTests : IDisposable
         var plan = source.CreatePreparationPlan()!;
         plan.Add(stamps.Take(3000).Select(s => (s.Sha256, s.Size, s.Size)));
         plan.Add(stamps.Skip(3000).Select(s => (s.Sha256, s.Size, s.Size)));
+        if (sealedPlan) await Task.Run(plan.Seal);
         Assert.Equal(source.SourceRevision, plan.SourceRevision);
         Assert.InRange(plan.Bytes, 1, source.PreparationBytes);
         var ready = false;

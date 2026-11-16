@@ -60,6 +60,30 @@ public sealed class ObjectOverviewCache : IDisposable
     private readonly double _overviewBuildBudgetMilliseconds;
     private double _overviewBuildMilliseconds;
     private int _overviewBuilds;
+    private double? _viewScale;
+    internal bool CameraZooming { get; private set; }
+    private bool _warmZoomDetail;
+    private readonly HashSet<LayerId> _zoomDetailReady = [];
+    internal bool NeedsZoomDetail(LayerId layer) => _warmZoomDetail && !_zoomDetailReady.Contains(layer);
+    internal void CompleteZoomDetail(LayerId layer) => _zoomDetailReady.Add(layer);
+
+    // All object layers share the camera. A scale change starts a local detail warmup;
+    // a pan at a fixed scale retains the ordinary detail policy.
+    internal void NoteCameraScale(double scale, bool moving)
+    {
+        EnsureOwnerThread();
+        if (!moving) CameraZooming = false;
+        if (moving && _viewScale is { } previous && previous != scale)
+        {
+            CameraZooming = true;
+            // At readable scales prepare the local view, including sparse views whose first
+            // direct draw would otherwise create every image's sampling data in one frame.
+            _warmZoomDetail = scale is >= .125 and <= 1;
+            _zoomDetailReady.Clear();
+        }
+        if (scale is < .125 or > 1) _warmZoomDetail = false;
+        _viewScale = scale;
+    }
 
     private readonly Map.Core.Resources.CacheMemoryAccount? _account;
     private long _pressureRetryFrame;
@@ -540,6 +564,10 @@ public sealed class ObjectOverviewCache : IDisposable
         _overviewZooms.Clear();
         _refiningViews.Clear();
         Bytes = 0;
+        _viewScale = null;
+        CameraZooming = false;
+        _warmZoomDetail = false;
+        _zoomDetailReady.Clear();
         _ownerThread = null;
         _account?.Dispose();
     }
