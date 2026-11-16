@@ -11,12 +11,13 @@ public sealed partial class StyleMockupDump
     /// program PNGs against a previous dump, byte-for-byte after decoding to unpremultiplied RGBA.
     /// Local assets are required; normal CI does not render or store these images.
     /// </summary>
-    [Fact]
+    [OptInFact("manual painter-preset PNG/timing sheet needs the local owner-art library", "MAP_R09_PAINTER", "MAP_LIGHT_ASSETS")]
     public void Dump_four_painter_presets_and_measure_when_asked()
     {
         var output = Environment.GetEnvironmentVariable("MAP_R09_PAINTER");
         var assets = Environment.GetEnvironmentVariable("MAP_LIGHT_ASSETS");
-        if (string.IsNullOrEmpty(output) || string.IsNullOrEmpty(assets)) return;
+        ArgumentException.ThrowIfNullOrWhiteSpace(output);
+        ArgumentException.ThrowIfNullOrWhiteSpace(assets);
         Directory.CreateDirectory(output);
         var images = Directory.GetFiles(assets,"*.png").Take(3).ToDictionary(f => Path.GetFileNameWithoutExtension(f)!, f =>
         {

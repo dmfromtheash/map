@@ -10,11 +10,11 @@ namespace Map.Rendering.Tests;
 /// </summary>
 public sealed class StyleVariantsReviewTests
 {
-    [Fact]
+    [OptInFact("manual style-variant PNG sheet, no automated visual baseline", "MAP_STYLE_VARIANTS")]
     public void Variants_for_review()
     {
         var folder = Environment.GetEnvironmentVariable("MAP_STYLE_VARIANTS");
-        if (string.IsNullOrWhiteSpace(folder)) return;
+        ArgumentException.ThrowIfNullOrWhiteSpace(folder);
         Directory.CreateDirectory(folder);
         var document = Showcase();
         Save(Render(document), folder, "base.png");

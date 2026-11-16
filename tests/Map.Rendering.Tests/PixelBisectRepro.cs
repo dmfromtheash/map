@@ -21,10 +21,10 @@ public sealed class PixelBisectRepro
     private static string? Out => Environment.GetEnvironmentVariable("MAP_PIXREPRO_OUT");
     private static string Label => Environment.GetEnvironmentVariable("MAP_PIXREPRO_LABEL") ?? "run";
 
-    [Fact]
+    [OptInFact("500k-stamp pixel-bisect dump; comparison is a separate manual step", "MAP_PIXREPRO_OUT")]
     public void Render_scenarios()
     {
-        if (Out is not { } outDir) return;
+        var outDir = Out ?? throw new InvalidOperationException("MAP_PIXREPRO_OUT is required.");
         Directory.CreateDirectory(outDir);
         var log = new List<string>();
         using var source = new SyntheticSource(Assets);

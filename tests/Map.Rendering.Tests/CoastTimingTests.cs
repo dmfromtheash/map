@@ -16,7 +16,6 @@ public sealed class CoastTimingTests
     public void Distance_field_coast_is_not_slower_than_the_filter_passes_at_editor_size()
     {
         var output = Environment.GetEnvironmentVariable("MAP_ROUGH_COAST_PNG");
-        if (string.IsNullOrWhiteSpace(output)) return; // measured on request only
 
         var land = LandLayer.CreateEmpty(LayerId.New(), "Земля") with
         {
@@ -48,6 +47,11 @@ public sealed class CoastTimingTests
                 SceneRenderer.Render(surface.Canvas, document, new RenderOptions { IsExport = true, CoastFilters = !field });
                 surface.Canvas.Flush();
                 best = Math.Min(best, Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+                // A no-op renderer would otherwise win both timings and silently pass.
+                using var image = surface.Snapshot();
+                using var bitmap = SKBitmap.FromImage(image);
+                Assert.Equal(SKColor.Parse("#FF9FB7C4"), bitmap.GetPixel(20, 20));
+                Assert.NotEqual(bitmap.GetPixel(20, 20), bitmap.GetPixel(900, 600));
             }
             return best;
         }
@@ -55,9 +59,13 @@ public sealed class CoastTimingTests
         var withFilters = Measure(false);
         var withField = Measure(true);
 
-        Directory.CreateDirectory(output);
-        File.WriteAllText(Path.Combine(output, "timing.txt"),
-            $"2560x1440 styled coast, best of 3: filters {withFilters:0} ms, distance field {withField:0} ms{Environment.NewLine}");
+        var report = $"2560x1440 styled coast, best of 3: filters {withFilters:0} ms, distance field {withField:0} ms{Environment.NewLine}";
+        Console.WriteLine(report);
+        if (!string.IsNullOrWhiteSpace(output))
+        {
+            Directory.CreateDirectory(output);
+            File.WriteAllText(Path.Combine(output, "timing.txt"), report);
+        }
         Assert.True(withField < withFilters * 3, $"field {withField:0} ms vs filters {withFilters:0} ms");
     }
 }

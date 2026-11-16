@@ -77,11 +77,11 @@ public sealed class NaturalRiverBankTests
     }
 
     /// <summary>MAP_RIVER_VARIANTS=&lt;folder&gt;: the chosen look at 1:1 and close up.</summary>
-    [Fact]
+    [OptInFact("manual natural-river PNG sheet, no automated visual baseline", "MAP_RIVER_VARIANTS")]
     public void Frames_for_review()
     {
         var folder = Environment.GetEnvironmentVariable("MAP_RIVER_VARIANTS");
-        if (string.IsNullOrWhiteSpace(folder)) return;
+        ArgumentException.ThrowIfNullOrWhiteSpace(folder);
         Directory.CreateDirectory(folder);
         var river = River(RiverStyle.Natural());
         using (var one = Render(river, 900, 480, 1)) Save(one, folder, "natural-1x.png");

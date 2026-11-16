@@ -11,11 +11,11 @@ namespace Map.Persistence.Tests;
 /// </summary>
 public sealed class PaintedShowcaseMap
 {
-    [Fact]
+    [OptInFact("manual painted showcase map for visual review", "MAP_SHOWCASE_MAP")]
     public void Write_the_showcase_map()
     {
         var path = Environment.GetEnvironmentVariable("MAP_SHOWCASE_MAP");
-        if (string.IsNullOrWhiteSpace(path)) return;
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
         const int width = 1600, height = 1000;
         var tiles = TileMap.Empty(1);
         for (var ty = 0; ty * TileMap.TileSize < height; ty++)

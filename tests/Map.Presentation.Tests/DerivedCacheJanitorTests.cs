@@ -488,7 +488,7 @@ public sealed class DerivedCacheSymlinkFactAttribute : FactAttribute
             File.CreateSymbolicLink(fileLink, target);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
-        { Skip = "OS does not permit directory/file symlinks: " + ex.Message; }
+        { Skip = "defect: symlink cache-safety checks need OS directory/file symlink permission: " + ex.Message; }
         finally
         {
             if (Directory.Exists(link)) Directory.Delete(link);

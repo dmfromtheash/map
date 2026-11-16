@@ -1,5 +1,7 @@
 # Exact finding key | review reason (DEC-116). No wildcard entries.
-# Existing keys only: historical method attribution is deliberately not repaired into new exceptions.
+# Reviewed opt-in branches first; historical method attribution below is retained unchanged.
+silent-return tests/Map.Persistence.Tests/LoadMemoryProbe.cs :: Measure | Opt-in diagnostic, not a CI memory guard: OptInFact skips unless MAP_DOC_MEM_PROBE/PHASE/FILE are supplied. The remaining return ends the requested save phase after Save; opening/heap sampling requires a separate fresh process.
+silent-return tests/Map.Persistence.Tests/SaveCostProbeTests.cs :: Save_and_autosave_cost | Opt-in diagnostic, not a CI save-time guard: OptInFact skips unless MAP_SAVE_PROBE_COUNT is supplied. Remaining returns finish autosave-only measurement or the recorded resource-limit path; neither bypasses an enabled correctness assertion.
 silent-return tests/Map.Persistence.Tests/LightingPersistenceTests.cs :: Write_the_live_check_map_when_asked | DEC-116 legacy baseline; pre-existing exception retained, not approval of a new skip.
 silent-return tests/Map.Presentation.Tests/CreateDemoTests.cs :: Each_demo_grows_frame_by_frame_into_the_real_thing | DEC-116 legacy baseline; pre-existing exception retained, not approval of a new skip.
 silent-return tests/Map.Presentation.Tests/PixelBisectCatalogRepro.cs :: Compare_catalog_to_base | DEC-116 legacy baseline; pre-existing exception retained, not approval of a new skip.

@@ -26,6 +26,7 @@
 
   <ItemGroup>
     <Compile Include="..\Shared\FixedWorkingMemory.cs" Link="Shared\FixedWorkingMemory.cs" />
+    <Compile Include="..\Shared\OptInFactAttribute.cs" Link="Shared\OptInFactAttribute.cs" />
     <Compile Include="..\Shared\ColorCacheFixture.cs" Link="Shared\ColorCacheFixture.cs" />
   </ItemGroup>
 

@@ -35,11 +35,11 @@ public sealed class PaintedDecorationRenderingTests
     }
 
     /// <summary>Frames for the comparison sheet with the owner's mountains (MAP_DECOR_FRAMES = output folder).</summary>
-    [Fact]
+    [OptInFact("manual decoration PNG sheet, no automated visual baseline", "MAP_DECOR_FRAMES")]
     public void Frames_for_review()
     {
         var folder = Environment.GetEnvironmentVariable("MAP_DECOR_FRAMES");
-        if (string.IsNullOrWhiteSpace(folder)) return;
+        ArgumentException.ThrowIfNullOrWhiteSpace(folder);
         Directory.CreateDirectory(folder);
         var items = new List<(DecorationStyle, SKRectI)>
         {

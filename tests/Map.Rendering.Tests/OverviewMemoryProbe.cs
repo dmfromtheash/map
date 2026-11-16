@@ -14,11 +14,11 @@ public sealed class OverviewMemoryProbe
         return GC.GetTotalMemory(true);
     }
 
-    [Fact]
+    [OptInFact("100k/1M overview-plan memory report (no CI memory budget)", "MAP_DOC_MEM_PROBE")]
     public void Measure()
     {
         var output = Environment.GetEnvironmentVariable("MAP_DOC_MEM_PROBE");
-        if (string.IsNullOrWhiteSpace(output)) return;
+        ArgumentException.ThrowIfNullOrWhiteSpace(output);
         var planType = typeof(SceneRenderer).GetNestedType("ObjectOverviewPlan", BindingFlags.NonPublic)!;
         var ctor = planType.GetConstructor([typeof(ObjectLayer)])!;
         var report = new StringBuilder();

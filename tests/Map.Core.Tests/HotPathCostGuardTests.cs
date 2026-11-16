@@ -37,13 +37,13 @@ public sealed class HotPathCostGuardTests : IClassFixture<HotPathCostGuardTests.
     [InlineData("derived-index-delta")]
     public void Bounded_hot_path(string key) => Compare(key, 200_000, true);
 
-    [Fact(Skip = "O(N): " + LabelsLinear)]
+    [Fact(Skip = "defect: O(N): " + LabelsLinear)]
     public void Label_clearance_bounds() => Compare("label-bounds", 200_000, true);
 
-    [Fact(Skip = "O(N): " + RulesLinear)]
+    [Fact(Skip = "defect: O(N): " + RulesLinear)]
     public void Placement_rules_with_many_features() => Compare("placement-features", 200_000, true);
 
-    [Fact(Skip = "O(N): " + PreviewLinear)]
+    [Fact(Skip = "defect: O(N): " + PreviewLinear)]
     public void Document_preview_replacement() => Compare("preview-replace", 200_000, true);
 
     [EnvironmentFact("MAP_RENDER_GUARDS_AUDIT")]
@@ -245,6 +245,6 @@ public sealed class HotPathCostGuardTests : IClassFixture<HotPathCostGuardTests.
     public sealed class EnvironmentFactAttribute : FactAttribute
     {
         public EnvironmentFactAttribute(string variable)
-        { if (Environment.GetEnvironmentVariable(variable) != "1") Skip = "Set " + variable + "=1"; }
+        { if (Environment.GetEnvironmentVariable(variable) != "1") Skip = "defect: large-map audit/1M cost guard needs an opt-in host; set " + variable + "=1"; }
     }
 }
