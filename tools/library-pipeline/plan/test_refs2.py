@@ -249,7 +249,7 @@ class Refs2Tests(unittest.TestCase):
         self.assertEqual(feeder.REFS, root)
 
     def test_small_runner_defaults_and_dry_run(self):
-        self.assertEqual(str(small_runner.parser().parse_args([]).refs_root), r'C:\Users\Leshe\Pictures\refs')
+        self.assertEqual(str(small_runner.parser().parse_args([]).refs_root), r'H:\MapSources\refs')
         with patch.object(small_runner.pipeline, 'select_rels', return_value=[]), \
                 patch.object(small_runner.pipeline, 'WriterLock', side_effect=AssertionError('lock in dry-run')):
             self.assertEqual(small_runner.main(['--refs-root', str(self.src), '--list', str(self.inv),

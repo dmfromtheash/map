@@ -1,6 +1,6 @@
 # library-pipeline — конвейер тестовой библиотеки референсов (DEC-103/104)
 
-Код, которым референсы владельца (`C:\Users\Leshe\Pictures\refs`) превращаются в библиотеку на внешнем диске
+Код, которым референсы владельца (`H:\MapSources\refs` и `refs2`; до 2026-11-16 — `C:\Users\Leshe\Pictures`) превращаются в библиотеку на внешнем диске
 (`H:\MapLibrary`, Samsung T7): апскейл на двух узлах (ПК и Mac), план наборов и правки агентов, живой проход
 каждой сотни в Map, наблюдение за узлами, запуск агентов Sol/Astra. Сборщик карточек — в самом проекте:
 `tools/Map.Performance --profile drive-library` (`DriveLibraryBatch.cs`).
@@ -95,14 +95,14 @@
 `plan.py` и `make_lists.py` принимают необязательные `--refs2-inventory <inventory.json>` и
 `--refs2-files <files.json>`. Для плана добавить по одному `--refs2-classification <json>` для
 `names/refs2_shop.json` и `names/refs2_tex.json`; известные имена берутся из классификации refs.
-По умолчанию `--refs2-prefix refs2`, `--refs2-root C:\Users\Leshe\Pictures`.
+По умолчанию `--refs2-prefix refs2`, `--refs2-root H:\MapSources`.
 `--check-refs2-sources` сверяет SHA оригиналов, `--refs2-pixel-duplicates <json>` задаёт отдельный
 проверенный список перекодированных копий. Совпадение пути само по себе не исключает файл.
 
 Наборы refs2 добавляются после всех правок refs в `shop-surfaces`, `shop-effects`, `textures-2`;
 старые ключи, каталоги, правки и списки `all.txt`/`trial.txt` сохраняются. Новый список — `lists/refs2.txt`.
 Магазин — штампы ×4, включая `overlay`; текстуры импортируются из оригиналов. Все rel имеют `refs2\`.
-`upscale/small_pc_runner.py --refs-root <Pictures> --list <lists/refs2.txt>` обрабатывает малые превью сразу
+`upscale/small_pc_runner.py --refs-root <H:\MapSources> --list <lists/refs2.txt>` обрабатывает малые превью сразу
 рецептом `cycle_rgb`; `run_upscale2.py` и обновлённый `mac_worker.py` выбирают его для refs2 автоматически.
 Обычный рецепт refs не меняется. Метка в manifest — `recipe: cycle_rgb`; проверка `verify` прежняя.
 `mac_feeder.py` также принимает `--refs-root` и `--list`; у обоих runner/feeder есть `--dry-run`

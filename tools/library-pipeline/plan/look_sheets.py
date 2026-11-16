@@ -6,7 +6,7 @@ S = sys.argv[1]
 LIB = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # deployed: H:\MapLibrary\pipeline\look_sheets.py
 if not os.path.exists(os.path.join(LIB, 'map-library.json')):  # repository copy: tools/library-pipeline/plan
     LIB = os.environ.get('MAP_LIBRARY_ROOT', r'H:\MapLibrary')
-REFS = r'C:\Users\Leshe\Pictures\refs'
+REFS = r'H:\MapSources\refs'  # moved from C:\Users\Leshe\Pictures (owner, 2026-11-16)
 OUT = os.path.join(LIB, 'look', 'sheets'); os.makedirs(OUT, exist_ok=True)
 inv = json.load(open(os.path.join(LIB, 'plan', 'inventory.json'), encoding='utf-8'))
 files_by_group = {}

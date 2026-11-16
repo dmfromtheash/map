@@ -2,7 +2,7 @@
 import json, os, sys, numpy as np
 from PIL import Image
 from concurrent.futures import ProcessPoolExecutor
-REFS=r'C:\Users\Leshe\Pictures\refs'; UP=r'H:\MapLibrary\upscaled'
+REFS=r'H:\MapSources\refs'; UP=r'H:\MapLibrary\upscaled'
 def one(r):
     try:
         s=Image.open(os.path.join(REFS,r['rel'])); s.load(); s=s.convert('RGBA')
