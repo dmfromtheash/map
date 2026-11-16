@@ -12,6 +12,36 @@ namespace Map.Rendering.Tests;
 public sealed class LayerImageCacheTests
 {
     [Fact]
+    public void A_pan_image_at_another_origin_declines_edit_repair_and_the_exact_fallback_matches_pixels()
+    {
+        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        while (root is not null && !File.Exists(Path.Combine(root.FullName, "Map.slnx"))) root = root.Parent;
+        using var image = SKImage.FromEncodedData(Path.Combine(root!.FullName, "tests", "fixtures", "assets", "owner-mountain-01.png"))!;
+        using var surface = SKSurface.Create(new SKImageInfo(160, 100))!;
+        using var cache = new LayerImageCache();
+        var layer = LayerId.New();
+        surface.Canvas.Scale(.83f);
+        void Draw(SKCanvas canvas, SKRect _) => canvas.DrawImage(image, new SKRect(12, 8, 84, 72));
+        Assert.True(cache.TryDrawPanned(surface.Canvas, layer, ["before"], null, 40, Draw, () => true));
+        surface.Canvas.SetMatrix(SKMatrix.CreateTranslation(8, .37f).PreConcat(SKMatrix.CreateScale(.83f, .83f)));
+        Assert.False(cache.TryDrawPanned(surface.Canvas, layer, ["after"], null, 40, Draw, () => true,
+            reuseOnly: true, previous: "before", damage: new SKRect(12, 8, 84, 72)));
+        Assert.Equal(0, cache.Patched);
+        surface.Canvas.Clear(SKColors.White);
+        Assert.True(cache.TryDraw(surface.Canvas, layer, ["after"], null, c => Draw(c, default), () => true));
+        var actual = Pixels();
+        using var fresh = new LayerImageCache();
+        surface.Canvas.Clear(SKColors.White);
+        Assert.True(fresh.TryDraw(surface.Canvas, layer, ["after"], null, c => Draw(c, default), () => true));
+        Assert.Equal(Pixels(), actual);
+
+        byte[] Pixels()
+        {
+            using var snapshot = surface.Snapshot(); using var bitmap = SKBitmap.FromImage(snapshot); return bitmap.Bytes;
+        }
+    }
+
+    [Fact]
     public void Kept_layers_match_the_direct_frame_and_follow_edits()
     {
         using var sprite = SKSurface.Create(new SKImageInfo(32, 32))!;

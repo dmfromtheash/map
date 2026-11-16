@@ -23,7 +23,21 @@ public enum FrameMotion { Still, Panned, Changed }
 
 public sealed class LayerImageCache : IDisposable
 {
-    private sealed record Entry(object[] Key, SKImage Image, SKRectI Device);
+    private sealed record Entry(object[] Key, SKImage Image, SKRectI Device, SKSurface Surface) : IDisposable
+    {
+        public void Dispose() { Image.Dispose(); Surface.Dispose(); }
+    }
+
+    // A build owns both native resources until the cache adopts them. Failed draws, failed
+    // snapshots and keep callbacks must release the retained surface as well as its image.
+    private sealed class RasterWork(SKSurface surface) : IDisposable
+    {
+        private SKSurface? _surface = surface;
+        private SKImage? _image;
+        public SKImage? Snapshot() => _image = _surface!.Snapshot();
+        public void Transfer() { _surface = null; _image = null; }
+        public void Dispose() { _image?.Dispose(); _surface?.Dispose(); }
+    }
 
     private readonly object _gate = new();
     private readonly Dictionary<(LayerId Layer, int Slot), Entry> _entries = [];
@@ -38,9 +52,20 @@ public sealed class LayerImageCache : IDisposable
 
     public long Hits { get; private set; }
     public long Misses { get; private set; }
-    /// <summary>Builds that copied the previous image of the layer and drew only the added objects.</summary>
+    /// <summary>Updates that drew only the added objects into the previous layer surface.</summary>
     public long Appended { get; private set; }
+    /// <summary>Local edit rasters and the device pixels actually cleared and redrawn.</summary>
+    public long Patched { get; private set; }
+    public long PatchedPixels { get; private set; }
+    public long FullRasterPixels { get; private set; }
     public int Count { get { lock (_gate) return _entries.Count; } }
+
+    internal ObjectLayer? RevisionFor(LayerId layer, bool pan = false)
+    {
+        lock (_gate)
+            return pan ? _pan.GetValueOrDefault(layer)?.Key[0] as ObjectLayer
+                : _entries.GetValueOrDefault((layer, 0))?.Key[0] as ObjectLayer;
+    }
 
     /// <summary>
     /// Draws the kept image of <paramref name="layer"/> for this frame, building it with
@@ -51,16 +76,24 @@ public sealed class LayerImageCache : IDisposable
     /// <para>
     /// When the held image was built from <paramref name="previous"/> in place of the first part
     /// (everything else equal), <paramref name="append"/> draws only what the new revision adds
-    /// over a copy of it: a placed stamp costs that stamp, not the whole layer again.
+    /// into its surface: a placed stamp costs that stamp, not the whole layer again.
     /// </para>
     /// <para>
     /// <paramref name="slot"/> keeps a second image per layer: slot 1 holds only the objects of a
     /// layer whose mask is being edited, so the mask stroke recomposites them instead of redrawing them.
     /// </para>
+    /// <para>With <paramref name="damageAreas"/> (or one <paramref name="damage"/> rectangle),
+    /// <paramref name="redraw"/> repairs only disjoint dirty areas in world coordinates. The
+    /// caller must include every old and new painted bound and guarantee unchanged pixels
+    /// elsewhere. <paramref name="exclude"/> hides device pixels only in the final copy,
+    /// without modifying the cached raster; live object previews draw into those holes.</para>
     /// </summary>
     public bool TryDraw(SKCanvas canvas, LayerId layer, object[] parts, GRContext? context,
-        Action<SKCanvas> draw, Func<bool> keep, object? previous = null, Action<SKCanvas>? append = null, int slot = 0)
+        Action<SKCanvas> draw, Func<bool> keep, object? previous = null, Action<SKCanvas>? append = null, int slot = 0,
+        SKRect? damage = null, Action<SKCanvas, SKRect>? redraw = null, SKRegion? exclude = null,
+        IReadOnlyList<SKRect>? damageAreas = null)
     {
+        var areas = damageAreas ?? (damage is { } single ? [single] : null);
         var entryKey = (layer, slot);
         var device = canvas.DeviceClipBounds;
         if (device.Width <= 0 || device.Height <= 0 || device.Width > 8192 || device.Height > 8192) return false;
@@ -70,7 +103,7 @@ public sealed class LayerImageCache : IDisposable
             matrix.Persp0, matrix.Persp1, matrix.Persp2, device, handle];
 
         SKImage? image = null;
-        SKImage? basis = null;
+        Entry? basis = null;
         lock (_gate)
         {
             if (_context != handle) { ClearLocked(); _context = handle; }
@@ -81,10 +114,11 @@ public sealed class LayerImageCache : IDisposable
                     Hits++;
                     image = found.Image;
                 }
-                else if (previous is not null && append is not null && Equals(found.Key[0], previous)
+                else if (previous is not null && (append is not null || areas is not null && redraw is not null) && Equals(found.Key[0], previous)
                     && found.Key.AsSpan(1).SequenceEqual(key.AsSpan(1)))
                 {
-                    basis = found.Image;
+                    basis = found;
+                    _entries.Remove(entryKey); // transfer ownership before a pressure clear can dispose it
                 }
             }
         }
@@ -92,47 +126,86 @@ public sealed class LayerImageCache : IDisposable
         if (image is null)
         {
             var info = new SKImageInfo(device.Width, device.Height, SKColorType.RgbaF16, SKAlphaType.Premul);
-            using var surface = (context is not null ? SKSurface.Create(context, false, info) : null) ?? SKSurface.Create(info);
+            var surface = basis?.Surface ?? (context is not null ? SKSurface.Create(context, false, info) : null) ?? SKSurface.Create(info);
             if (surface is null) return false;
-            surface.Canvas.Clear(SKColors.Transparent);
+            using var work = new RasterWork(surface);
             if (basis is not null)
             {
-                using (var copy = new SKPaint { BlendMode = SKBlendMode.Src }) surface.Canvas.DrawImage(basis, 0, 0, copy);
-                Appended++;
+                // Release the snapshot before writing its surface: Skia can then update just the
+                // dirty pixels without a copy-on-write copy of the entire viewport.
+                basis.Image.Dispose();
             }
+            else { surface.Canvas.Clear(SKColors.Transparent); FullRasterPixels += (long)device.Width * device.Height; }
             surface.Canvas.SetMatrix(SKMatrix.CreateTranslation(-device.Left, -device.Top).PreConcat(matrix));
-            if (basis is not null) append!(surface.Canvas);
+            if (basis is not null && areas is not null && redraw is not null)
+                Redraw(surface.Canvas, matrix, device, areas, redraw);
+            else if (basis is not null) { append!(surface.Canvas); Appended++; }
             else draw(surface.Canvas);
             surface.Canvas.Flush();
-            image = surface.Snapshot();
+            image = work.Snapshot();
             if (image is null) return false;
             lock (_gate)
             {
                 Misses++;
-                if (_context == handle && keep())
+                var complete = keep();
+                if (_context == handle && (complete || basis is not null && areas is not null && redraw is not null))
                 {
-                    if (_entries.Remove(entryKey, out var replaced)) replaced.Image.Dispose();
-                    _entries[entryKey] = new Entry(key, image, device);
+                    if (_entries.Remove(entryKey, out var replaced)) replaced.Dispose();
+                    // An incomplete repair keeps its old revision key. The next refinement
+                    // clears and redraws the same patch; unchanged pixels stay resident.
+                    _entries[entryKey] = new Entry(complete ? key : basis!.Key, image, device, surface);
+                    work.Transfer();
                 }
                 else
                 {
-                    Blit(canvas, image, device);
-                    image.Dispose();
+                    Blit(canvas, image, device, exclude);
                     return true;
                 }
             }
         }
 
-        Blit(canvas, image, device);
+        Blit(canvas, image, device, exclude);
         return true;
     }
 
-    private static void Blit(SKCanvas canvas, SKImage image, SKRectI device)
+    private static void Blit(SKCanvas canvas, SKImage image, SKRectI device, SKRegion? exclude = null)
     {
         canvas.Save();
         canvas.ResetMatrix();
+        if (exclude is not null) canvas.ClipRegion(exclude, SKClipOperation.Difference);
         canvas.DrawImage(image, device.Left, device.Top);
         canvas.Restore();
+    }
+
+    private void Redraw(SKCanvas target, SKMatrix matrix, SKRectI covered, IReadOnlyList<SKRect> damage, Action<SKCanvas, SKRect> draw)
+    {
+        // Integer clip edges, including the antialias/filter fringe, leave the old pixels
+        // outside the patch untouched. The draw uses the original matrix, never a resample.
+        Patched++;
+        using var region = new SKRegion();
+        foreach (var area in damage)
+        {
+            var bounds = matrix.MapRect(area);
+            var patch = new SKRectI(Math.Max(covered.Left, (int)Math.Floor(bounds.Left) - 2),
+                Math.Max(covered.Top, (int)Math.Floor(bounds.Top) - 2),
+                Math.Min(covered.Right, (int)Math.Ceiling(bounds.Right) + 2),
+                Math.Min(covered.Bottom, (int)Math.Ceiling(bounds.Bottom) + 2));
+            if (patch.Width > 0 && patch.Height > 0) region.Op(patch, SKRegionOperation.Union);
+        }
+        matrix.TryInvert(out var inverse);
+        using var rectangles = region.CreateRectIterator();
+        while (rectangles.Next(out var patch))
+        {
+            PatchedPixels += (long)patch.Width * patch.Height;
+            target.Save();
+            target.ResetMatrix();
+            target.ClipRect(new SKRect(patch.Left - covered.Left, patch.Top - covered.Top,
+                patch.Right - covered.Left, patch.Bottom - covered.Top));
+            target.Clear(SKColors.Transparent);
+            target.SetMatrix(SKMatrix.CreateTranslation(-covered.Left, -covered.Top).PreConcat(matrix));
+            draw(target, inverse.MapRect(patch));
+            target.Restore();
+        }
     }
 
     private SKMatrix _lastMatrix;
@@ -191,7 +264,10 @@ public sealed class LayerImageCache : IDisposable
     }
 
     /// <summary>The kept pan image of a layer: device pixels of a wider area than the view, at one scale.</summary>
-    private sealed record PanEntry(object[] Key, SKImage Image, SKMatrix Matrix, SKRectI Covered);
+    private sealed record PanEntry(object[] Key, SKImage Image, SKMatrix Matrix, SKRectI Covered, SKSurface Surface) : IDisposable
+    {
+        public void Dispose() { Image.Dispose(); Surface.Dispose(); }
+    }
 
     private readonly Dictionary<LayerId, PanEntry> _pan = [];
 
@@ -210,8 +286,10 @@ public sealed class LayerImageCache : IDisposable
     /// instead of building an exact one and dropping it, which made every other pan frame redraw.
     /// </para>
     public bool TryDrawPanned(SKCanvas canvas, LayerId layer, object[] parts, GRContext? context, int margin,
-        Action<SKCanvas, SKRect> draw, Func<bool> keep, bool reuseOnly = false, bool allowScale = false)
+        Action<SKCanvas, SKRect> draw, Func<bool> keep, bool reuseOnly = false, bool allowScale = false,
+        object? previous = null, SKRect? damage = null, SKRegion? exclude = null, IReadOnlyList<SKRect>? damageAreas = null)
     {
+        var areas = damageAreas ?? (damage is { } single ? [single] : null);
         var device = canvas.DeviceClipBounds;
         var matrix = canvas.TotalMatrix;
         if (device.Width <= 0 || device.Height <= 0 || device.Width + 2 * margin > 8192 || device.Height + 2 * margin > 8192) return false;
@@ -220,12 +298,16 @@ public sealed class LayerImageCache : IDisposable
         var handle = context?.Handle ?? IntPtr.Zero;
         object[] key = [.. parts, handle];
         PanEntry? entry = null;
+        var patchEntry = false;
         // From the kept image's device space to this frame's: a shift, and during a zoom a scale.
         var relative = SKMatrix.Identity;
         lock (_gate)
         {
             if (_context != handle) { ClearLocked(); _context = handle; }
-            if (_pan.TryGetValue(layer, out var found) && found.Key.AsSpan().SequenceEqual(key)
+            if (_pan.TryGetValue(layer, out var found)
+                && (found.Key.AsSpan().SequenceEqual(key)
+                    || previous is not null && areas is not null && Equals(found.Key[0], previous)
+                        && found.Key.AsSpan(1).SequenceEqual(key.AsSpan(1)))
                 && found.Matrix.TryInvert(out var back))
             {
                 relative = matrix.PreConcat(back);
@@ -241,6 +323,7 @@ public sealed class LayerImageCache : IDisposable
                         && view.Right <= found.Covered.Right + .01f && view.Bottom <= found.Covered.Bottom + .01f)
                     {
                         entry = found; Hits++;
+                        patchEntry = !found.Key.AsSpan().SequenceEqual(key);
                     }
                 }
             }
@@ -251,6 +334,39 @@ public sealed class LayerImageCache : IDisposable
             && Math.Abs(relative.TransY - MathF.Round(relative.TransY)) < 1e-3f;
         if (exact) relative = SKMatrix.CreateTranslation(MathF.Round(relative.TransX), MathF.Round(relative.TransY));
         if (reuseOnly && (entry is null || !exact)) return false;
+        // A pan raster made at another origin can differ by one channel unit from a fresh
+        // raster at a fractional scale (Skia's image sampling rounds in device space). Repair
+        // only at the original matrix; otherwise retain the established exact-rebuild path.
+        if (entry is not null && (patchEntry || exclude is not null) && entry.Matrix != matrix) return false;
+        // A scaled pan image is a temporary picture. Only patch at its own scale; the settled
+        // frame must still rebuild at the exact scale after a wheel gesture.
+        if (patchEntry && Math.Abs(relative.ScaleX - 1) >= 1e-5) return false;
+        if (patchEntry && entry is not null)
+        {
+            lock (_gate)
+            {
+                if (!_pan.TryGetValue(layer, out var held) || !ReferenceEquals(held, entry)) return false;
+                _pan.Remove(layer);
+            }
+            entry.Image.Dispose();
+            using var work = new RasterWork(entry.Surface);
+            Redraw(entry.Surface.Canvas, entry.Matrix, entry.Covered, areas!, draw);
+            entry.Surface.Canvas.Flush();
+            var patched = work.Snapshot();
+            if (patched is null) return false;
+            var complete = keep();
+            if (_context != handle)
+            {
+                canvas.Save();
+                if (exclude is not null) canvas.ClipRegion(exclude, SKClipOperation.Difference);
+                canvas.SetMatrix(relative);
+                canvas.DrawImage(patched, entry.Covered.Left, entry.Covered.Top); canvas.Restore();
+                return true;
+            }
+            entry = entry with { Key = complete ? key : entry.Key, Image = patched };
+            lock (_gate) _pan[layer] = entry;
+            work.Transfer();
+        }
         // A zoom past the stand-in's limits: building a new image over the view and its margins, then flushing it,
         // cost 7.5 s of draws and 3.6 s of GPU flush in the slow wheel frames at 10 000 objects (PC trace,
         // 2026-11-15). A pan image pays off only for pans; while the scale keeps changing the layer is drawn directly.
@@ -259,33 +375,36 @@ public sealed class LayerImageCache : IDisposable
         {
             var covered = new SKRectI(device.Left - margin, device.Top - margin, device.Right + margin, device.Bottom + margin);
             var info = new SKImageInfo(covered.Width, covered.Height, SKColorType.Rgba8888, SKAlphaType.Premul);
-            using var surface = (context is not null ? SKSurface.Create(context, false, info) : null) ?? SKSurface.Create(info);
+            var surface = (context is not null ? SKSurface.Create(context, false, info) : null) ?? SKSurface.Create(info);
             if (surface is null) return false;
+            using var work = new RasterWork(surface);
+            FullRasterPixels += (long)covered.Width * covered.Height;
             surface.Canvas.Clear(SKColors.Transparent);
             surface.Canvas.SetMatrix(SKMatrix.CreateTranslation(-covered.Left, -covered.Top).PreConcat(matrix));
             draw(surface.Canvas, inverse.MapRect(new SKRect(covered.Left, covered.Top, covered.Right, covered.Bottom)));
             surface.Canvas.Flush();
-            var image = surface.Snapshot();
+            var image = work.Snapshot();
             if (image is null) return false;
             lock (_gate)
             {
                 Misses++;
                 if (_context == handle && keep())
                 {
-                    if (_pan.Remove(layer, out var replaced)) replaced.Image.Dispose();
-                    entry = new PanEntry(key, image, matrix, covered);
+                    if (_pan.Remove(layer, out var replaced)) replaced.Dispose();
+                    entry = new PanEntry(key, image, matrix, covered, surface);
                     _pan[layer] = entry;
+                    work.Transfer();
                 }
             }
             if (entry is null)
             {
-                Blit(canvas, image, covered);
-                image.Dispose();
+                Blit(canvas, image, covered, exclude);
                 return true;
             }
             relative = SKMatrix.Identity; exact = true;
         }
         canvas.Save();
+        if (exclude is not null) canvas.ClipRegion(exclude, SKClipOperation.Difference);
         canvas.SetMatrix(relative);
         canvas.DrawImage(entry.Image, new SKRect(entry.Covered.Left, entry.Covered.Top, entry.Covered.Right, entry.Covered.Bottom),
             new SKSamplingOptions(exact ? SKFilterMode.Nearest : SKFilterMode.Linear, SKMipmapMode.None));
@@ -298,7 +417,7 @@ public sealed class LayerImageCache : IDisposable
     {
         lock (_gate)
         {
-            foreach (var entry in _entries.Values) entry.Image.Dispose();
+            foreach (var entry in _entries.Values) entry.Dispose();
             _entries.Clear();
         }
     }
@@ -308,7 +427,7 @@ public sealed class LayerImageCache : IDisposable
     {
         lock (_gate)
         {
-            foreach (var entry in _pan.Values) entry.Image.Dispose();
+            foreach (var entry in _pan.Values) entry.Dispose();
             _pan.Clear();
         }
     }
@@ -320,9 +439,9 @@ public sealed class LayerImageCache : IDisposable
 
     private void ClearLocked()
     {
-        foreach (var entry in _entries.Values) entry.Image.Dispose();
+        foreach (var entry in _entries.Values) entry.Dispose();
         _entries.Clear();
-        foreach (var entry in _pan.Values) entry.Image.Dispose();
+        foreach (var entry in _pan.Values) entry.Dispose();
         _pan.Clear();
         _lastPanScale.Clear();
     }

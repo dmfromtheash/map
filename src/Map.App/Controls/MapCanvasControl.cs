@@ -552,21 +552,28 @@ public sealed partial class MapCanvasControl : Control
 
     private void OnSceneChanged(object? sender, EventArgs e)
     {
-        PrepareOverview();
+        PrepareOverview(forEdit: true);
         QueueVisualInvalidation();
     }
 
-    private void PrepareOverview()
+    private void PrepareOverview(bool forEdit = false)
     {
         if (_editor is { } editor)
+        {
+            // Exact edit frames use spatial/detail caches. Restarting an overview plan here
+            // cancels work and takes its gate on every placement/drag although this frame
+            // cannot draw it. Open still prewarms; a later overview frame requests the latest
+            // immutable revision through OverviewPreparation.Request as usual.
+            if (forEdit && editor.Session.Viewport.Scale >= .25) return;
             _overviewPreparation.UpdateDocument(editor.RenderDocument, editor.StampImages, QueueRefinedFrame);
+        }
     }
 
     private void OnSceneInvalidated(object? sender, EditorSceneInvalidatedEventArgs e)
     {
         if (e.Has(EditorChangeReason.CanvasInvalidation))
         {
-            PrepareOverview();
+            PrepareOverview(forEdit: true);
             QueueVisualInvalidation();
         }
     }
