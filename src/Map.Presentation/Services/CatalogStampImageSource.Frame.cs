@@ -28,6 +28,14 @@ public sealed partial class CatalogStampImageSource
     // a busy worker can therefore evict/replace an entry without freeing the frame's resident fallback.
     private FrameAnswer ReadFrame(FrameKey key)
     {
+        if (!MeasureTimings) return ReadFrameCore(key);
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        try { return ReadFrameCore(key); }
+        finally { _frameLookupTicks += System.Diagnostics.Stopwatch.GetTimestamp() - started; }
+    }
+
+    private FrameAnswer ReadFrameCore(FrameKey key)
+    {
         if (!Monitor.TryEnter(_gate))
             return BusyFrameAnswer(key);
         var derivedTaken = false;

@@ -505,6 +505,8 @@ public sealed partial class CatalogStampImageSource(
         {
             if (!_planning)
             {
+                if (MeasureTimings && IsCanvasThread && !_cache.Contains(key) && (embedded is not null || path is not null))
+                    _frameDecodeCalls++;
                 if (embedded is null && path is not null && !_cache.Contains(key)) TouchFile("cache/load");
                 return embedded is not null ? _cache.GetEncoded(key, embedded, mediaType, extension)
                     : sha256 is not null ? _cache.GetVerified(key, path, sha256, mediaType, extension)
@@ -703,13 +705,17 @@ public sealed partial class CatalogStampImageSource(
     /// <summary>The canvas frame on the render thread: evictions by other threads wait until it ends.</summary>
     public IDisposable? BeginFrame()
     {
+        if (MeasureTimings) ResetFrameTimings();
         _frameContended = false;
         _frameBeganUnderGate = false;
         _frameAnswersRotated = false;
         _requestedFrameWork.Clear();
         if (CaptureMipSelections) Interlocked.Increment(ref _diagnosticFrame);
         Volatile.Write(ref _frameThread, Environment.CurrentManagedThreadId);
-        if (!Monitor.TryEnter(_gate, FrameGateWaitMilliseconds))
+        var gateStarted = MeasureTimings ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
+        var gateTaken = Monitor.TryEnter(_gate, FrameGateWaitMilliseconds);
+        if (gateStarted != 0) _frameGateTicks += System.Diagnostics.Stopwatch.GetTimestamp() - gateStarted;
+        if (!gateTaken)
         {
             Interlocked.Increment(ref _frameGateMisses);
             _frameContended = true;
@@ -1239,6 +1245,14 @@ public sealed partial class CatalogStampImageSource(
     /// </summary>
     private IStampImageLease? PinPlan(PreparationPlan plan, bool resident = false)
     {
+        if (!MeasureTimings || !IsCanvasThread) return PinPlanCore(plan, resident);
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        try { return PinPlanCore(plan, resident); }
+        finally { _framePinTicks += System.Diagnostics.Stopwatch.GetTimestamp() - started; }
+    }
+
+    private IStampImageLease? PinPlanCore(PreparationPlan plan, bool resident)
+    {
         (StampDerivedAssetStore.PixelKey Key, string Name)[] names;
         AssetRecord[] records;
         lock (_gate)
@@ -1544,6 +1558,18 @@ public sealed partial class CatalogStampImageSource(
     }
 
     private void AdoptDerivedMip(StampDerivedAssetStore.PixelKey pixel, StampDerivedAssetStore.Mip? mip)
+    {
+        if (!MeasureTimings || !IsCanvasThread) { AdoptDerivedMipCore(pixel, mip); return; }
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        try { AdoptDerivedMipCore(pixel, mip); }
+        finally
+        {
+            _frameAdoptTicks += System.Diagnostics.Stopwatch.GetTimestamp() - started;
+            _frameAdoptBytes += (long)(mip?.Width ?? 0) * (mip?.Height ?? 0) * 4;
+        }
+    }
+
+    private void AdoptDerivedMipCore(StampDerivedAssetStore.PixelKey pixel, StampDerivedAssetStore.Mip? mip)
     {
         var key = PixelName(pixel);
         if (catalog.Find(pixel.Sha) is { } record)

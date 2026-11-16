@@ -189,6 +189,10 @@ public sealed class RenderStats
     public int OverviewExactPatched { get; set; }
     /// <summary>Time of the overview's exact objects on this thread: the layer copy or the direct draws with their preflight.</summary>
     public double OverviewExactMilliseconds { get; set; }
+    public double OverviewExactCollectMilliseconds { get; set; }
+    public double OverviewExactPrepareMilliseconds { get; set; }
+    public double OverviewExactDrawMilliseconds { get; set; }
+    public double OverviewChunkMilliseconds { get; set; }
     public int OverviewObjects { get; set; }
     public int OverviewChunks { get; set; }
     public int OverviewVariantBuilds { get; set; }
@@ -283,6 +287,10 @@ public sealed class RenderStats
         OverviewExactLayerStarted = 0;
         OverviewExactPatched = 0;
         OverviewExactMilliseconds = 0;
+        OverviewExactCollectMilliseconds = 0;
+        OverviewExactPrepareMilliseconds = 0;
+        OverviewExactDrawMilliseconds = 0;
+        OverviewChunkMilliseconds = 0;
         OverviewObjects = 0;
         OverviewChunks = 0;
         OverviewVariantBuilds = 0;
@@ -6583,6 +6591,8 @@ public static partial class SceneRenderer
         // Far zoom keeps spatial density cheap, but anything the user is manipulating remains an
         // exact object over the aggregate representation. The immutable base picture stays hot.
         var exactStarted = Stopwatch.GetTimestamp();
+        if (options.Stats is { } chunkTiming)
+            chunkTiming.OverviewChunkMilliseconds += Stopwatch.GetElapsedTime(paletteStarted, exactStarted).TotalMilliseconds;
         var extras = scratch.Extras;
         if (options.SelectedObjectId is { } selected
             && DocumentRevisionIndex.For(document).TryFind(selected, out var primary)
@@ -6654,6 +6664,7 @@ public static partial class SceneRenderer
                     if (SceneGeometry.BoundsOf(replacement).Intersects(view)) exact[replacement.Id] = replacement;
             options.RequestRefinedFrame!.Invoke();
         }
+        var collectFinished = Stopwatch.GetTimestamp();
         if (!layered && options.RequestRefinedFrame is { } refine && options.Stamps is { } exactSource)
         {
             var matrix = canvas.TotalMatrix;
@@ -6667,6 +6678,7 @@ public static partial class SceneRenderer
         }
         var hiddenLabels = LabelPriority.ForFrame(document, options.ViewScale, options.IsExport ? null : options.RequestRefinedFrame);
         if (hiddenLabels.IsPending && options.Stats is { } labelStats) labelStats.DetailTilesPending++;
+        var prepareFinished = Stopwatch.GetTimestamp();
         foreach (var sceneObject in layered ? (IEnumerable<SceneObject>)exact.Values : exact.Values.OrderBy(item => item.Sublayer))
         {
             if (GivesWay(sceneObject, hiddenLabels, options)) continue;
@@ -6681,6 +6693,9 @@ public static partial class SceneRenderer
         if (options.Stats is { } stats)
         {
             stats.OverviewExactMilliseconds += Stopwatch.GetElapsedTime(exactStarted).TotalMilliseconds;
+            stats.OverviewExactCollectMilliseconds += Stopwatch.GetElapsedTime(exactStarted, collectFinished).TotalMilliseconds;
+            stats.OverviewExactPrepareMilliseconds += Stopwatch.GetElapsedTime(collectFinished, prepareFinished).TotalMilliseconds;
+            stats.OverviewExactDrawMilliseconds += Stopwatch.GetElapsedTime(prepareFinished).TotalMilliseconds;
             stats.ObjectCandidates += overviewObjects + exactCount;
             stats.ObjectsDrawn += overviewObjects + exactCount;
             stats.OverviewObjects += overviewObjects;
