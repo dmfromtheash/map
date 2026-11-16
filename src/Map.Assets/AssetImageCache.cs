@@ -30,8 +30,9 @@ public sealed class AssetImageCache : IDisposable
     // while in use waits in _retired. Eviction itself may also be asked to wait (DeferDisposal) — see below.
     private readonly Dictionary<SKImage, int> _pins = new(ReferenceEqualityComparer.Instance);
     private readonly List<Entry> _retired = [];
-    private readonly int _capacity;
-    private readonly long _decodedByteCapacity;
+    private int _capacity;
+    private long _decodedByteCapacity;
+    private Map.Rendering.MachineProfileMonitor? _defaultMachine;
     private readonly Func<byte[], SKImage?> _decode;
     private readonly LinkedList<string> _recency = new();
 
@@ -47,11 +48,19 @@ public sealed class AssetImageCache : IDisposable
     {
         ArgumentNullException.ThrowIfNull(budget);
         if (_account is not null) throw new InvalidOperationException("The cache already reports to a budget.");
-        _account = budget.RegisterCache(name, cost, _decodedByteCapacity);
+        _account = budget.RegisterCache(name, cost, ByteCapacity);
     }
 
     /// <summary>The own byte limit, or this cache's share of the working-memory budget when that is smaller.</summary>
-    private long ByteLimit => _account is null ? _decodedByteCapacity : Math.Min(_decodedByteCapacity, _account.LimitBytes);
+    private long ByteLimit
+    {
+        get
+        {
+            var own = ByteCapacity;
+            _account?.Resize(own);
+            return _account is null ? own : Math.Min(own, _account.LimitBytes);
+        }
+    }
 
     /// <summary>
     /// Called by the owner between frames, under whatever guards this cache. While Windows is short of memory it
@@ -98,9 +107,10 @@ public sealed class AssetImageCache : IDisposable
 
     public AssetImageCache(
         int capacity = 64,
-        long decodedByteCapacity = AssetImagePolicy.DefaultCacheDecodedBytes)
-        : this(capacity, decodedByteCapacity, Decode)
+        long? decodedByteCapacity = null, Map.Rendering.MachineProfileMonitor? machine = null)
+        : this(capacity, decodedByteCapacity ?? (machine ?? Map.Rendering.MachineProfileMonitor.Shared).Limits.AssetCacheBytes, Decode)
     {
+        _defaultMachine = decodedByteCapacity is null ? machine ?? Map.Rendering.MachineProfileMonitor.Shared : null;
     }
 
     internal AssetImageCache(
@@ -115,6 +125,35 @@ public sealed class AssetImageCache : IDisposable
     }
 
     public int Count => _entries.Count;
+    public long ByteCapacity => _defaultMachine?.Limits.AssetCacheBytes ?? _decodedByteCapacity;
+    public long EffectiveByteCapacity => ByteLimit;
+
+    /// <summary>Owner-thread only. Admission follows the new bound immediately; eviction is sliced
+    /// between frames and skips pinned entries. No native image is freed on a memory notification.</summary>
+    public void SetLimits(int capacity, long bytes)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(capacity);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(bytes);
+        _capacity = capacity;
+        _defaultMachine = null;
+        _decodedByteCapacity = bytes;
+        _account?.Resize(bytes);
+    }
+
+    public void TrimToLimits(double sliceMilliseconds = 1)
+    {
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        var limit = ByteLimit;
+        // One LRU pass: repeatedly searching from its head would revisit every pinned entry
+        // for each eviction just when pressure has made the cache smaller.
+        for (var node = _recency.First; node is not null && (_entries.Count > _capacity || ResidentBytes > limit);)
+        {
+            var next = node.Next;
+            if (!IsPinned(_entries[node.Value])) { Remove(node.Value); Evictions++; }
+            if (System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds >= sliceMilliseconds) break;
+            node = next;
+        }
+    }
     public long DecodedBytes { get; private set; }
     /// <summary>
     /// Conservative native-cache weight. Encoded-backed Skia images may retain their encoded
@@ -291,7 +330,7 @@ public sealed class AssetImageCache : IDisposable
         }
 
         var incomingResidentBytes = checked(metadata.DecodedBytes + metadata.EncodedBytes);
-        if (incomingResidentBytes > _decodedByteCapacity)
+        if (incomingResidentBytes > ByteCapacity)
         {
             return null;
         }
@@ -333,7 +372,7 @@ public sealed class AssetImageCache : IDisposable
             return existing.Image;
         }
         var bytes = checked((long)image.Width * image.Height * 4);
-        if (bytes > _decodedByteCapacity) { image.Dispose(); return null; }
+        if (bytes > ByteCapacity) { image.Dispose(); return null; }
         TrimForIncoming(bytes);
         _entries[key] = new Entry { Image = image, DecodedBytes = bytes, ResidentBytes = bytes };
         Touch(key, _entries[key]);
@@ -362,7 +401,7 @@ public sealed class AssetImageCache : IDisposable
         }
         catch (InvalidDataException) { image.Dispose(); return null; }
         var incomingResidentBytes = checked(metadata.DecodedBytes + metadata.EncodedBytes);
-        if (incomingResidentBytes > _decodedByteCapacity) { image.Dispose(); return null; }
+        if (incomingResidentBytes > ByteCapacity) { image.Dispose(); return null; }
         TrimForIncoming(incomingResidentBytes);
         Misses++;
         _entries[key] = new Entry

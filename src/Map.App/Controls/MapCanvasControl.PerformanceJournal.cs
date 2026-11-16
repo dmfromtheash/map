@@ -50,6 +50,9 @@ public sealed partial class MapCanvasControl
             _renderStats.ObjectCacheMisses + LastFrameStyledLandMisses, _renderStats.ObjectCacheInvalidations,
             _renderStats.DetailTilesPending, _renderStats.UnresolvedImages, _renderStats.MissingAssets,
             _journalQueues, unavailable, _renderStats.TerrainRefinementsPending, _renderStats.HexChunksPending,
-            _renderStats.OverviewAdoptedPixels, _renderStats.OverviewAdoptionBudgetPixels, startedDelta));
+            _renderStats.OverviewAdoptedPixels, _renderStats.OverviewAdoptionBudgetPixels, startedDelta,
+            _editor?.StampImages is CatalogStampImageSource budgetImages ? new Map.Rendering.FrameWorkBudget(
+                budgetImages.AdoptedMipBytesPerFrame, budgetImages.GestureAdoptedMipBytesPerFrame, budgetImages.DirectDrawBudget) : null,
+            _editor?.StampImages is CatalogStampImageSource targetImages ? targetImages.FrameBudgets.TargetMilliseconds : 0));
     }
 }
