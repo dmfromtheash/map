@@ -685,9 +685,15 @@ public sealed partial class CatalogStampImageSource(
     }
 
     /// <summary>Prepared mip bytes a settled frame may take in (future texture uploads); zero or less — no limit.</summary>
-    public long AdoptedMipBytesPerFrame { get; set; } = 8L * 1024 * 1024;
+    public long AdoptedMipBytesPerFrame { get; set; } = ExperimentBytes("MAP_MIP_ADOPT_MB", 8L * 1024 * 1024);
     /// <summary>The same while the camera moves (set by the canvas from its last frame).</summary>
-    public long GestureAdoptedMipBytesPerFrame { get; set; } = 2L * 1024 * 1024;
+    public long GestureAdoptedMipBytesPerFrame { get; set; } = ExperimentBytes("MAP_MIP_GESTURE_ADOPT_MB", 2L * 1024 * 1024);
+
+    /// <summary>
+    /// Experiment switch (2026-11-16, blur -> sharp): a megabyte override from the environment, otherwise the default.
+    /// </summary>
+    public static long ExperimentBytes(string name, long fallback) =>
+        long.TryParse(Environment.GetEnvironmentVariable(name), out var mb) && mb is >= 0 and <= 65536 ? mb * 1024 * 1024 : fallback;
     /// <summary>Whether the canvas's last frame moved the camera.</summary>
     public bool FrameMoving { get; set; }
     private long _byteLimitedFrames;

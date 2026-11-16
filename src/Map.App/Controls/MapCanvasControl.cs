@@ -201,7 +201,10 @@ public sealed partial class MapCanvasControl : Control
     /// frame there (49 ms per frame measured, 0.1 ms with room); 256 MiB is a small share of any
     /// GPU this program runs on.
     /// </summary>
-    private const long GpuResourceCacheBytes = 256L * 1024 * 1024;
+    private static readonly long GpuResourceCacheBytes =
+        // Experiment (2026-11-16): MAP_GPU_CACHE_MB sets the cache to test whether eviction causes the slow blur -> sharp.
+        (long.TryParse(Environment.GetEnvironmentVariable("MAP_GPU_CACHE_MB"), out var mb) && mb is >= 64 and <= 16384 ? mb : 256L)
+        * 1024 * 1024;
 
     /// <summary>
     /// How long after the last wheel notch or pan step the camera counts as moving. While it
