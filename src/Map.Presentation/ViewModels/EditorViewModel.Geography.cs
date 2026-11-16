@@ -72,7 +72,7 @@ public sealed partial class EditorViewModel
     public bool RiverToSea(VectorPoint from)
     {
         if (ActiveObjectLayer() is not { } layer) { StatusDetail = "Нет доступного слоя объектов для реки."; return false; }
-        if (Geography.RouteRiver(Session.Document, from) is not { Count: >= 3 } points)
+        if (Geography.RouteRiver(Session.Document, from) is not { Count: >= 2 } points)
         { StatusDetail = "Отсюда река не находит моря поблизости: щёлкните на суше ближе к берегу."; return false; }
         var level = new TerrainProbe(Session.Document).At(from.X, from.Y).Land?.Level ?? 0;
         var channel = RiverEditor.NewChannel(points, 4);
