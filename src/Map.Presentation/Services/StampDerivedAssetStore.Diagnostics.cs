@@ -14,6 +14,11 @@ public sealed partial class StampDerivedAssetStore
 
     internal void ObserveCanvasThread() => Volatile.Write(ref _canvasThreadId, Environment.CurrentManagedThreadId);
 
+    // The source acquires this opportunistically before running a canvas operation. Store calls can then
+    // re-enter their ordinary gate without parking the frame behind metadata/pixel workers.
+    internal bool TryEnterFrameGate() => Monitor.TryEnter(_requestsGate);
+    internal void ExitFrameGate() => Monitor.Exit(_requestsGate);
+
     private void CountIo(ref long counter)
     {
         Interlocked.Increment(ref counter);

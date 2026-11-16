@@ -67,17 +67,37 @@ public sealed class DetailLadderTests : IDisposable
         var document = new MapDocument(DocumentId.New(), "Ladder", DateTimeOffset.UnixEpoch,
             new CanvasDefinition(1024, 1024, "px", "#FFFFFFFF"),
             [new BaseColorLayer(LayerId.New(), "Base", true, false, 1, "#FFFFFFFF")], []);
-        using var images = new CatalogStampImageSource(catalog, () => document, () => null);
+        using var arrived = new SemaphoreSlim(0);
+        await using var images = new CatalogStampImageSource(catalog, () => document, () => null);
         IStampImageSource renderer = images;
+        var frameThread = 0;
+        var frameDisk = 0;
+        images.FileAccess = _ => { if (Environment.CurrentManagedThreadId == Volatile.Read(ref frameThread)) Interlocked.Increment(ref frameDisk); };
 
         foreach (var (width, height, expected) in new[] { (1000.0, 780.0, 1024), (3000.0, 2340.0, 4096) })
         {
-            var arrived = new SemaphoreSlim(0);
-            Assert.False(renderer.PrepareForPixelSizes([(record.Sha256, width, height)], () => arrived.Release()));
-            Assert.True(await arrived.WaitAsync(TimeSpan.FromSeconds(30)));
-            Assert.True(renderer.PrepareForPixelSizes([(record.Sha256, width, height)], () => { }));
-            Assert.Equal(expected, images.TryGetImageForPixelSize(record.Sha256, width, height)!.Width);
+            frameThread = Environment.CurrentManagedThreadId;
+            using (images.BeginFrame())
+                Assert.False(renderer.PrepareForPixelSizes([(record.Sha256, width, height)], () => arrived.Release()));
+            frameThread = 0;
+            // Source invalidations also request a redraw. A notification asks us to recheck readiness;
+            // it need not be the completion of every requested pixel in this view.
+            var ready = false;
+            var deadline = System.Diagnostics.Stopwatch.StartNew();
+            while (!ready && deadline.Elapsed < TimeSpan.FromSeconds(30))
+            {
+                Assert.True(await arrived.WaitAsync(TimeSpan.FromSeconds(30)));
+                frameThread = Environment.CurrentManagedThreadId;
+                using (images.BeginFrame())
+                {
+                    ready = renderer.PrepareForPixelSizes([(record.Sha256, width, height)], () => arrived.Release());
+                    if (ready) Assert.Equal(expected, images.TryGetImageForPixelSize(record.Sha256, width, height)!.Width);
+                }
+                frameThread = 0;
+            }
+            Assert.True(ready);
         }
+        Assert.Equal(0, frameDisk);
     }
 
     [Fact]
